@@ -121,7 +121,7 @@ import {
   NewTaskDialog,
   ReleaseLeaseDialog,
   DeliverySettingsDialog,
-  RepoSettingsPage,
+  SettingsPage,
   StageAgentRow,
   type CorrectableStep,
   type RepoChoice,
@@ -131,7 +131,6 @@ import { JiraIssue } from "./DeliveryIssue";
 import { QaProblems } from "./DeliveryQaProblems";
 import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
 import { CoordinatorDock } from "./DeliveryCoordinator";
-import { GuidesPage } from "./DeliveryGuides";
 import { coordinatorStalls, type CoordinatorStall } from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
@@ -1525,8 +1524,10 @@ function EnvironmentStatus({ repo, distro }: { repo: string; distro: string | nu
 function DeliveryRepoView({ repo }: { repo: string }) {
   const shared = useDelivery();
   const { overview, now, repos, listView, setListView, selected, select, reveal, run } = shared;
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [guidesOpen, setGuidesOpen] = useState(false);
+  // Settings in place of the tasks, opened on a section or at the top.
+  const [settingsAt, setSettingsAt] = useState<string | null>(null);
+  const settingsOpen = settingsAt !== null;
+  const guidesOpen = settingsAt === "guides";
   const key = repoKey(repo);
   const choice = repos.find((candidate) => repoKey(candidate.path) === key) ?? {
     path: repo,
@@ -1897,10 +1898,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           type="button"
           aria-pressed={guidesOpen}
           title={`Guías de ${choice.label}: reglas que salen de sus revisores`}
-          onClick={() => {
-            setGuidesOpen(!guidesOpen);
-            setSettingsOpen(false);
-          }}
+          onClick={() => setSettingsAt(guidesOpen ? null : "guides")}
         >
           Guías
         </button>
@@ -1908,27 +1906,25 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           type="button"
           className="delivery-icon-button"
           aria-label={`Ajustes de ${choice.label}`}
-          aria-pressed={settingsOpen}
+          aria-pressed={settingsOpen && !guidesOpen}
           title={`Ajustes de ${choice.label}`}
-          onClick={() => {
-            setSettingsOpen(!settingsOpen);
-            setGuidesOpen(false);
-          }}
+          onClick={() => setSettingsAt(settingsOpen && !guidesOpen ? null : "")}
         >
           <Icon name="gear" />
         </button>
       </div>
 
       {settingsOpen ? (
-        <RepoSettingsPage
+        <SettingsPage
+          key={settingsAt}
+          repos={repos}
           repo={choice}
-          onBack={() => setSettingsOpen(false)}
+          section={settingsAt || undefined}
+          onBack={() => setSettingsAt(null)}
           capacity={overview?.settings.capacity ?? 0}
           endpoint={overview?.coordinator ?? null}
           onCapacity={(value) => void run(() => updateDeliverySettings(value))}
         />
-      ) : guidesOpen ? (
-        <GuidesPage repo={choice} onBack={() => setGuidesOpen(false)} />
       ) : (
         <div className="delivery-panel__body">
           <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">

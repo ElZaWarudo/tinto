@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DeliveryGuideRule, DeliveryGuideView } from "../../delivery/types";
-import { GuidesPage } from "./DeliveryGuides";
+import { GuidesSection } from "./DeliveryGuides";
 
 const client = vi.hoisted(() => ({
   getDeliveryGuide: vi.fn(),
@@ -55,11 +55,11 @@ beforeEach(() => {
 /** Delivery's change event, as a coordinator's proposal fires it. */
 let changed = () => {};
 
-describe("GuidesPage", () => {
+describe("GuidesSection", () => {
   it("makes reviewers guides and keeps the rest of the repo's settings", async () => {
     const user = userEvent.setup();
     client.getDeliveryGuide.mockResolvedValue(view());
-    render(<GuidesPage repo={repo} onBack={() => {}} />);
+    render(<GuidesSection repo={repo} />);
     expect(await screen.findByRole("combobox", { name: "Papel de ana" })).toHaveValue("visual");
     await user.selectOptions(
       await screen.findByRole("combobox", { name: "Papel de luis" }),
@@ -96,7 +96,7 @@ describe("GuidesPage", () => {
     client.decideDeliveryGuide.mockResolvedValue(
       view({ rules: [rule("V-1", "Espaciado de 4px", { seen: 3 })] }),
     );
-    render(<GuidesPage repo={repo} onBack={() => {}} />);
+    render(<GuidesSection repo={repo} />);
     expect(await screen.findByText("Sin sombras")).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Reglas propuestas" })).toBeNull();
     // The coordinator proposes while the page is open.

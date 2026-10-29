@@ -1,4 +1,4 @@
-// A repo's guides, as a page in place of its tasks: the reviewers whose
+// A repo's guides, as a section of its settings: the reviewers whose
 // comments become rules for its agents, the comments Tinto collected from
 // them, the rules approved so far and the next version a coordinator
 // proposed. Nothing changes until the user approves it here.
@@ -53,7 +53,8 @@ const roleOf = (person: DeliveryGuidePerson | undefined): Role =>
 const kindsOf = (role: Role): DeliveryGuideKind[] =>
   role === "both" ? ["visual", "technical"] : role ? [role] : [];
 
-export function GuidesPage({ repo, onBack }: { repo: RepoChoice; onBack: () => void }) {
+/** A repo's guides, as a section of its settings: saved apart from the rest. */
+export function GuidesSection({ repo }: { repo: RepoChoice }) {
   const [view, setView] = useState<DeliveryGuideView | null>(null);
   const [candidates, setCandidates] = useState<string[] | null>(null);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
@@ -110,135 +111,126 @@ export function GuidesPage({ repo, onBack }: { repo: RepoChoice; onBack: () => v
   };
 
   return (
-    <div className="delivery-settings">
-      <div className="delivery-settings__page">
-        <button type="button" className="delivery-settings__back" onClick={onBack}>
-          ← Volver a las tareas
-        </button>
-        <section className="delivery-settings__section" aria-label={`Guías de ${repo.label}`}>
-          <h2>Guías de {repo.label}</h2>
-          <p className="delivery-settings__intro">
-            Lo que escriben en los PRs quienes elijas como guía (comentarios en líneas, resúmenes de
-            sus revisiones y la conversación del PR) se convierte en reglas breves. Tinto lo lee
-            solo cada media hora mientras sigue los PRs y, si hay comentarios nuevos, pide al
-            coordinador del lote que proponga las reglas; tú las apruebas aquí.
-          </p>
+    <section className="delivery-settings__section" aria-label={`Guías de ${repo.label}`}>
+      <h3 data-section="guides">Guías</h3>
+      <p className="delivery-settings__intro">
+        Lo que escriben en los PRs quienes elijas como guía (comentarios en líneas, resúmenes de sus
+        revisiones y la conversación del PR) se convierte en reglas breves. Tinto lo lee solo cada
+        media hora mientras sigue los PRs y, si hay comentarios nuevos, pide al coordinador del lote
+        que proponga las reglas; tú las apruebas aquí.
+      </p>
 
-          <h3>Quién guía</h3>
-          {candidatesError && (
-            <p className="delivery-field__hint">
-              No se pudo leer quién puede revisar en GitHub: {candidatesError}
-            </p>
-          )}
-          {candidates === null && !candidatesError && (
-            <p className="delivery-muted">Leyendo quién puede revisar en GitHub…</p>
-          )}
-          {logins.length > 0 && roles && (
-            <ul className="delivery-guide-people">
-              {logins.map((login) => (
-                <li key={login}>
-                  <span>{login}</span>
-                  <select
-                    aria-label={`Papel de ${login}`}
-                    value={roles[login] ?? ""}
-                    onChange={(event) =>
-                      setRoles({ ...roles, [login]: event.target.value as Role })
-                    }
-                  >
-                    {ROLES.map((role) => (
-                      <option key={role.value} value={role.value}>
-                        {role.label}
-                      </option>
-                    ))}
-                  </select>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="delivery-actions">
-            <ActionButton disabled={!roles} onAction={saveGuides}>
-              Guardar guías
-            </ActionButton>
-          </div>
-
-          <h3>Comentarios</h3>
-          {view && (
-            <p className="delivery-muted">
-              {view.comments === 0
-                ? "Todavía no hay comentarios de las guías."
-                : `${view.comments} comentarios de las guías, ${view.pending} sin destilar.`}
-              {view.collected_at_ms
-                ? ` Leídos por última vez ${new Date(view.collected_at_ms).toLocaleString()}.`
-                : ""}
-            </p>
-          )}
-          <ActionGroup>
-            <ActionButton
-              disabled={!view || view.people.length === 0}
-              title="Lee ahora lo último que escribieron las guías en los PRs, sin esperar a la próxima lectura"
-              onAction={async () => {
-                const found = await collectDeliveryGuideComments(repo.path, repo.distro);
-                setView(found);
-                setStatus(`${found.pending} comentarios sin destilar.`);
-              }}
-            >
-              Leer de GitHub
-            </ActionButton>
-            <ActionButton
-              disabled={!view || view.pending === 0}
-              title="El coordinador del lote los lee y propone las reglas"
-              onAction={async () => {
-                const told = await requestDeliveryGuide(repo.path);
-                setStatus(
-                  told === 1
-                    ? "Se lo pedimos al coordinador del lote."
-                    : `Se lo pedimos a los coordinadores de ${told} lotes.`,
-                );
-              }}
-            >
-              Destilar con el coordinador
-            </ActionButton>
-          </ActionGroup>
-          <span className="delivery-field__hint" role="status">
-            {status}
-          </span>
-
-          {view?.proposal && (
-            <ProposalReview
-              current={view.rules}
-              proposed={view.proposal.rules}
-              note={view.proposal.note}
-              by={view.proposal.requested_by}
-              onDecide={async (approve) => {
-                setView(await decideDeliveryGuide(repo.path, approve));
-                setStatus(approve ? "Reglas aprobadas." : "Propuesta rechazada.");
-              }}
-            />
-          )}
-
-          {KINDS.map(({ kind, label }) => {
-            const rules = (view?.rules ?? []).filter((rule) => rule.kind === kind);
-            return (
-              <div key={kind} className="delivery-guide-kind">
-                <h3>Guía {label.toLowerCase()}</h3>
-                {rules.length === 0 ? (
-                  <p className="delivery-muted">Sin reglas todavía.</p>
-                ) : (
-                  <ol
-                    className="delivery-guide-rules"
-                    aria-label={`Reglas de la guía ${label.toLowerCase()}`}
-                  >
-                    {rules.map((rule) => (
-                      <RuleItem key={rule.id} rule={rule} />
-                    ))}
-                  </ol>
-                )}
-              </div>
-            );
-          })}
-        </section>
+      <h4>Quién guía</h4>
+      {candidatesError && (
+        <p className="delivery-field__hint">
+          No se pudo leer quién puede revisar en GitHub: {candidatesError}
+        </p>
+      )}
+      {candidates === null && !candidatesError && (
+        <p className="delivery-muted">Leyendo quién puede revisar en GitHub…</p>
+      )}
+      {logins.length > 0 && roles && (
+        <ul className="delivery-guide-people">
+          {logins.map((login) => (
+            <li key={login}>
+              <span>{login}</span>
+              <select
+                aria-label={`Papel de ${login}`}
+                value={roles[login] ?? ""}
+                onChange={(event) => setRoles({ ...roles, [login]: event.target.value as Role })}
+              >
+                {ROLES.map((role) => (
+                  <option key={role.value} value={role.value}>
+                    {role.label}
+                  </option>
+                ))}
+              </select>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="delivery-actions">
+        <ActionButton disabled={!roles} onAction={saveGuides}>
+          Guardar guías
+        </ActionButton>
       </div>
-    </div>
+
+      <h4>Comentarios</h4>
+      {view && (
+        <p className="delivery-muted">
+          {view.comments === 0
+            ? "Todavía no hay comentarios de las guías."
+            : `${view.comments} comentarios de las guías, ${view.pending} sin destilar.`}
+          {view.collected_at_ms
+            ? ` Leídos por última vez ${new Date(view.collected_at_ms).toLocaleString()}.`
+            : ""}
+        </p>
+      )}
+      <ActionGroup>
+        <ActionButton
+          disabled={!view || view.people.length === 0}
+          title="Lee ahora lo último que escribieron las guías en los PRs, sin esperar a la próxima lectura"
+          onAction={async () => {
+            const found = await collectDeliveryGuideComments(repo.path, repo.distro);
+            setView(found);
+            setStatus(`${found.pending} comentarios sin destilar.`);
+          }}
+        >
+          Leer de GitHub
+        </ActionButton>
+        <ActionButton
+          disabled={!view || view.pending === 0}
+          title="El coordinador del lote los lee y propone las reglas"
+          onAction={async () => {
+            const told = await requestDeliveryGuide(repo.path);
+            setStatus(
+              told === 1
+                ? "Se lo pedimos al coordinador del lote."
+                : `Se lo pedimos a los coordinadores de ${told} lotes.`,
+            );
+          }}
+        >
+          Destilar con el coordinador
+        </ActionButton>
+      </ActionGroup>
+      <span className="delivery-field__hint" role="status">
+        {status}
+      </span>
+
+      {view?.proposal && (
+        <ProposalReview
+          current={view.rules}
+          proposed={view.proposal.rules}
+          note={view.proposal.note}
+          by={view.proposal.requested_by}
+          onDecide={async (approve) => {
+            setView(await decideDeliveryGuide(repo.path, approve));
+            setStatus(approve ? "Reglas aprobadas." : "Propuesta rechazada.");
+          }}
+        />
+      )}
+
+      {KINDS.map(({ kind, label }) => {
+        const rules = (view?.rules ?? []).filter((rule) => rule.kind === kind);
+        return (
+          <div key={kind} className="delivery-guide-kind">
+            <h4>Guía {label.toLowerCase()}</h4>
+            {rules.length === 0 ? (
+              <p className="delivery-muted">Sin reglas todavía.</p>
+            ) : (
+              <ol
+                className="delivery-guide-rules"
+                aria-label={`Reglas de la guía ${label.toLowerCase()}`}
+              >
+                {rules.map((rule) => (
+                  <RuleItem key={rule.id} rule={rule} />
+                ))}
+              </ol>
+            )}
+          </div>
+        );
+      })}
+    </section>
   );
 }
 

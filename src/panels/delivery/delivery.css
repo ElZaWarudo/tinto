@@ -2363,7 +2363,7 @@
   flex: 1;
   min-width: 0;
   margin: 0;
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2373,6 +2373,46 @@
   flex: 1;
   min-height: 0;
   display: flex;
+}
+/* Where the settings apply: Tinto, all of Delivery or one repository. */
+.delivery-settings__tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.delivery-panel .delivery-settings__tabs button {
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.delivery-panel .delivery-settings__tabs button[aria-selected="true"] {
+  border-bottom-color: var(--accent-fg);
+  color: var(--fg-strong);
+  font-weight: 600;
+}
+.delivery-settings__tabs select {
+  margin-left: 8px;
+}
+.delivery-settings__group {
+  display: flex;
+  flex-direction: column;
+}
+.delivery-settings__group > span {
+  padding: 10px 12px 2px;
+  font-size: 11px;
+  color: var(--fg-subtle);
+  text-transform: none;
+}
+.delivery-panel .delivery-settings__group button {
+  padding-left: 20px;
 }
 /* The sections, the one in sight marked; a click scrolls to it. */
 .delivery-settings__rail {
@@ -2476,10 +2516,17 @@
   font-weight: 600;
 }
 .delivery-settings__section h3 {
-  margin: 10px 0 0;
-  padding-bottom: 4px;
+  margin: 18px 0 0;
+  padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+/* A part of a section (who guides, its comments, each guide's rules). */
+.delivery-settings__section h4 {
+  margin: 8px 0 0;
+  font-size: 13px;
   font-weight: 600;
   color: var(--fg-muted);
 }

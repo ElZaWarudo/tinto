@@ -79,6 +79,20 @@ const client = vi.hoisted(() => ({
   getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
   getDeliveryPrReviewers: vi.fn((): Promise<string[]> => Promise.resolve([])),
   getDeliveryQaScreenshots: vi.fn((): Promise<DeliveryQaScreenshot[]> => Promise.resolve([])),
+  getDeliveryGuide: vi.fn(() =>
+    Promise.resolve({
+      people: [],
+      rules: [],
+      proposal: null,
+      comments: 0,
+      pending: 0,
+      collected_at_ms: null,
+    }),
+  ),
+  getDeliveryGuideCandidates: vi.fn(() => Promise.resolve([])),
+  collectDeliveryGuideComments: vi.fn(),
+  requestDeliveryGuide: vi.fn(),
+  decideDeliveryGuide: vi.fn(),
   approveDeliveryReplies: vi.fn(),
   changeDeliveryPrReviewers: vi.fn(),
   correctDeliveryApproval: vi.fn(),
@@ -2509,6 +2523,34 @@ describe("DeliveryPanel", () => {
     const ok = await screen.findByRole("button", { name: "Entorno: bien. Comprobar de nuevo" });
     expect(ok).toHaveClass("delivery-env--ok");
     expect(client.checkDeliveryEnvironment).toHaveBeenCalledTimes(2);
+  });
+
+  it("splits the settings by scope and opens the repo's on its guides from Guías", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+    });
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Guías" }));
+    const rail = await screen.findByRole("navigation", { name: "Secciones de los ajustes" });
+    await waitFor(() =>
+      expect(within(rail).getByRole("button", { name: "Guías" })).toHaveAttribute(
+        "aria-current",
+        "true",
+      ),
+    );
+    expect(screen.getByRole("region", { name: "Guías de agentos" })).toBeInTheDocument();
+    // What applies to all of Delivery and to Tinto itself, each in its tab.
+    await user.click(screen.getByRole("tab", { name: "Delivery" }));
+    expect(screen.getByRole("combobox", { name: /Agentes en paralelo/ })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Ajustes de agentos" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "Tinto" }));
+    expect(screen.getByRole("combobox", { name: "Tema" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "← Volver" }));
+    expect(screen.queryByRole("tablist", { name: "Ámbito de los ajustes" })).toBeNull();
   });
 
   it("sets each step's autonomy, retrying on restart and the environment probes", async () => {
