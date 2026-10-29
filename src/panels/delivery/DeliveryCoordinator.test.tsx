@@ -8,7 +8,9 @@ const sessions = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 vi.mock("../../agent/sessionStore", () => ({
   useAgentSessionState: () => ({ sessions: sessions.value }),
 }));
-const bus = vi.hoisted(() => ({ startAgentSession: vi.fn(() => Promise.resolve("s-new")) }));
+const bus = vi.hoisted(() => ({
+  startAgentSession: vi.fn(() => Promise.resolve("s-new")),
+}));
 vi.mock("../../bus/client", () => bus);
 const client = vi.hoisted(() => ({
   handOverDeliveryRun: vi.fn(() => Promise.resolve()),
@@ -164,6 +166,14 @@ describe("CoordinatorDock", () => {
     rerender(<Dock runs={[run()]} />);
     await waitFor(() => expect(client.handOverDeliveryRun).toHaveBeenCalledWith(["r1"], "s-new"));
     expect(screen.getByRole("button", { name: "Conversación" })).toBeInTheDocument();
+  });
+
+  it("shows why starting a coordinator failed", async () => {
+    const user = userEvent.setup();
+    bus.startAgentSession.mockRejectedValueOnce({ category: "x", message: "el repo no existe" });
+    render(<Dock runs={[run()]} />);
+    await user.click(screen.getByRole("button", { name: "Iniciar coordinador" }));
+    expect(await screen.findByText("el repo no existe")).toBeInTheDocument();
   });
 
   it("starts one coordinator for the batches the user ticks, the one opened from first", async () => {

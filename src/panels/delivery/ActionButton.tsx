@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
+import { errorText } from "./errorText";
 import { Icon } from "../../workbench/Icon";
 
 type Group = { working: boolean; setWorking: (working: boolean) => void };
@@ -31,11 +32,6 @@ type State = "idle" | "working" | "done" | "failed";
 
 /** How long the check stays once the action worked. */
 const DONE_MS = 1200;
-
-function errorText(cause: unknown): string {
-  if (cause instanceof Error) return cause.message;
-  return typeof cause === "string" ? cause : String(cause);
-}
 
 export function ActionButton({
   onAction,

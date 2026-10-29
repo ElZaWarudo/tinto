@@ -23,6 +23,7 @@ import type {
 import { ActionButton, ActionGroup } from "./ActionButton";
 import type { RepoChoice } from "./DeliveryDialogs";
 import { ExternalLink } from "./ExternalLink";
+import { errorText } from "./errorText";
 
 type Role = "" | DeliveryGuideKind | "both";
 
@@ -50,11 +51,6 @@ const roleOf = (person: DeliveryGuidePerson | undefined): Role =>
 
 const kindsOf = (role: Role): DeliveryGuideKind[] =>
   role === "both" ? ["visual", "technical"] : role ? [role] : [];
-
-const errorText = (cause: unknown) =>
-  cause instanceof Error
-    ? cause.message
-    : String((cause as { message?: string })?.message ?? cause);
 
 export function GuidesPage({ repo, onBack }: { repo: RepoChoice; onBack: () => void }) {
   const [view, setView] = useState<DeliveryGuideView | null>(null);

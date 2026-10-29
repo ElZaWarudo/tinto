@@ -21,6 +21,7 @@ import { openDetachedTerminalWindow } from "../terminal/detachTerminalWindow";
 import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 
 import { ActionButton } from "./ActionButton";
+import { errorText } from "./errorText";
 import {
   agentChoice,
   effortChoices,
@@ -122,8 +123,8 @@ export function CoordinatorDock({
   const held = sessionId ? runs.filter((candidate) => sessionOf(candidate) === sessionId) : [];
 
   // Once the new conversation waits for its first message, Tinto asks it to
-  // take the batches over. Claude Code reports its turns only past its
-  // startup prompts (trusting the folder), which would swallow the message.
+  // take the batches over. A conversation that does not report its turns yet
+  // (a terminal still starting) could swallow the message: Tinto waits.
   useEffect(() => {
     if (!started || handedOver.current === started.sessionId) return;
     const live = sessions[started.sessionId];
@@ -132,7 +133,7 @@ export function CoordinatorDock({
     }
     handedOver.current = started.sessionId;
     handOverDeliveryRun(started.runIds, started.sessionId).catch((cause: unknown) =>
-      setError(cause instanceof Error ? cause.message : String(cause)),
+      setError(errorText(cause)),
     );
   }, [started, sessions]);
 
