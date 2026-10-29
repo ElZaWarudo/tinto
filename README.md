@@ -193,6 +193,10 @@ and most of the passive signals. The living roadmap is in
 [docs/roadmaps/](docs/roadmaps/) and the build/packaging plan in
 [docs/build-guide.md](docs/build-guide.md).
 
+Releases are on the repo's [Releases](https://github.com/ElZaWarudo/tinto/releases)
+page, with their notes in [CHANGELOG.md](CHANGELOG.md); installed Tinto
+updates itself. How to cut one is in [RELEASING.md](RELEASING.md).
+
 ## Development
 
 Prerequisites: Node LTS, stable Rust (MSVC on Windows), Tauri 2 platform

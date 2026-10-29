@@ -1,0 +1,152 @@
+name: Release
+
+# Pushing a version tag (scripts/release.mjs makes one) builds the Windows
+# installer and publishes it, with the signed update every installed Tinto
+# picks up, as that version's GitHub Release. See RELEASING.md.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  wsl-agent:
+    name: WSL agent
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      - name: Build WSL agent
+        working-directory: src-tauri
+        run: |
+          cargo build --release --bin tinto-agent
+          cp target/release/tinto-agent ../tinto-agent-linux-x86_64
+
+      - name: Upload WSL agent
+        uses: actions/upload-artifact@v7
+        with:
+          name: tinto-agent-linux-x86_64
+          path: tinto-agent-linux-x86_64
+          if-no-files-found: error
+
+  windows:
+    name: Windows release
+    runs-on: windows-latest
+    needs: wsl-agent
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download WSL agent
+        uses: actions/download-artifact@v8
+        with:
+          name: tinto-agent-linux-x86_64
+          path: src-tauri/resources
+
+      - name: The tag matches the app's version
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, app $version"; exit 1; }
+
+      - name: Lint and frontend tests
+        run: |
+          npm run lint
+          npm test
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Release notes
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo "body<<NOTES_END"
+            node scripts/release.mjs notes "$GITHUB_REF_NAME"
+            echo "NOTES_END"
+          } >> "$GITHUB_OUTPUT"
+
+      # Authenticode, once a certificate is in the repo's secrets: without it
+      # the installer is unsigned and Windows SmartScreen warns about it.
+      - name: Code signing certificate
+        if: env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "certificate.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          $config = Get-Content src-tauri/tauri.release.conf.json -Raw | ConvertFrom-Json
+          $config.bundle | Add-Member -NotePropertyName windows -NotePropertyValue @{
+            certificateThumbprint = $certificate.Thumbprint
+            digestAlgorithm = "sha256"
+            timestampUrl = "http://timestamp.digicert.com"
+          }
+          $config | ConvertTo-Json -Depth 5 | Set-Content src-tauri/tauri.release.conf.json
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Tinto ${{ github.ref_name }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          args: --config src-tauri/tauri.release.conf.json
