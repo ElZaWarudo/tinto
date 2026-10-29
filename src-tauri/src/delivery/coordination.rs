@@ -841,6 +841,7 @@ impl DeliveryService {
         run.unattended = true;
         run.updated_at_ms = now_ms();
         self.save_run(&run, "run_policy", "unattended")?;
+        self.take_allowed_steps(run_id)?;
         Ok(run)
     }
 
@@ -1292,34 +1293,60 @@ impl DeliveryService {
         )?;
         drop(store);
         self.notify();
-        // Past the brainstorm Tinto takes each step the repo lets it (by
-        // default commit, push and the Jira steps it runs itself; opening
-        // the PR, merging it and replies wait for the user).
-        let autonomy = self.autonomy(&task)?;
-        let tinto_runs_jira = approval.rung == DeliveryRung::Jira
-            && (!approval.jira_statuses.is_empty()
-                || (approval.jira_link_only && self.jira_site(&task.repo)?.is_some()));
-        let allowed = match approval.rung {
-            DeliveryRung::Commit => autonomy.commit,
-            DeliveryRung::Push => autonomy.push,
-            DeliveryRung::Pr => autonomy.pr,
-            DeliveryRung::Merge => autonomy.merge,
-            DeliveryRung::Jira => autonomy.jira && tinto_runs_jira,
-            DeliveryRung::PrReply => autonomy.pr_reply,
-            // A sync only brings the base into the local branch, publishing
-            // nothing, and Tinto refuses it on a dirty worktree or a running
-            // job: it runs as it is asked, brainstorm or not.
-            DeliveryRung::Sync => {
-                return match autonomy.sync {
-                    true => self.decide_approval(&approval.id, true, None),
-                    false => Ok(approval),
-                }
-            }
-        };
-        if allowed && self.unattended(&task)? {
+        // A sync only brings the base into the local branch, publishing
+        // nothing, and Tinto refuses it on a dirty worktree or a running
+        // job: it runs as it is asked, brainstorm or not.
+        let unattended = approval.rung == DeliveryRung::Sync || self.unattended(&task)?;
+        if unattended && self.step_allowed(&task, &approval)? {
             return self.decide_approval(&approval.id, true, None);
         }
         Ok(approval)
+    }
+
+    /// Whether the repo lets Tinto take this step on its own past the
+    /// brainstorm (by default commit, sync, push and the Jira steps it runs
+    /// itself; opening the PR, merging it and replies wait for the user).
+    fn step_allowed(
+        &self,
+        task: &DeliveryTask,
+        approval: &DeliveryApproval,
+    ) -> Result<bool, DeliveryError> {
+        let autonomy = self.autonomy(task)?;
+        Ok(match approval.rung {
+            DeliveryRung::Commit => autonomy.commit,
+            DeliveryRung::Sync => autonomy.sync,
+            DeliveryRung::Push => autonomy.push,
+            DeliveryRung::Pr => autonomy.pr,
+            DeliveryRung::Merge => autonomy.merge,
+            DeliveryRung::Jira => {
+                autonomy.jira
+                    && (!approval.jira_statuses.is_empty()
+                        || (approval.jira_link_only && self.jira_site(&task.repo)?.is_some()))
+            }
+            DeliveryRung::PrReply => autonomy.pr_reply,
+        })
+    }
+
+    /// Takes the batch's waiting steps the repo now lets Tinto take on its
+    /// own: its brainstorm just ended, or the user changed what Tinto does
+    /// by itself. A step requested before waits for the user otherwise.
+    pub fn take_allowed_steps(&self, run_id: &str) -> Result<(), DeliveryError> {
+        if !self.run(run_id)?.unattended {
+            return Ok(());
+        }
+        let waiting: Vec<DeliveryApproval> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|approval| approval.status == DeliveryApprovalStatus::Pending)
+            .collect();
+        for approval in waiting {
+            let task = self.task(&approval.task_id)?;
+            if task.run_id.as_deref() == Some(run_id) && self.step_allowed(&task, &approval)? {
+                self.decide_approval(&approval.id, true, None)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn approval(&self, approval_id: &str) -> Result<DeliveryApproval, DeliveryError> {

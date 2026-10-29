@@ -8,7 +8,7 @@
 //! workspace-access jobs and cannot approve anything: approvals are the
 //! user's, in Tinto.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -20,12 +20,13 @@ use super::coordination::NewApproval;
 use super::decisions::NewDecision;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryCommit,
-    DeliveryCoordinatorEndpoint, DeliveryDecisionKind, DeliveryDecisionOption, DeliveryJob,
-    DeliveryOverview, DeliveryPlatform, DeliveryRung, DeliverySettingsChanges,
-    DeliverySettingsProposalStatus, DeliveryTaskMilestone,
+    DeliveryCoordinatorEndpoint, DeliveryDecisionKind, DeliveryDecisionOption,
+    DeliveryDecisionStatus, DeliveryJob, DeliveryOverview, DeliveryPlatform,
+    DeliveryQaProblemStatus, DeliveryRung, DeliverySettingsChanges, DeliverySettingsProposalStatus,
+    DeliveryTaskMilestone,
 };
 use super::phase::Phase;
-use super::service::{DeliveryService, NewJob, NewPackage, NewTask, QA_ROLE};
+use super::service::{DeliveryService, NewJob, NewPackage, NewTask, CHECKS_ROLE, QA_ROLE};
 use super::DeliveryError;
 
 const PREFERRED_PORT: u16 = 47920;
@@ -1085,56 +1086,96 @@ fn job_json(job: &DeliveryJob, full: bool) -> Result<Value, DeliveryError> {
     Ok(value)
 }
 
-/// The overview without what the coordinator does not act on: jobs carry
-/// no instructions, changed files or long results (read_job has them), and
-/// settled history keeps only its ids: finished jobs and decisions of
-/// delivered tasks, and done steps that a later one of the same step
-/// replaced.
+/// The overview without what the coordinator does not act on, so it fits
+/// in one tool result however long the batch ran: jobs carry only what they
+/// are and how they went (read_job has the rest), only the latest of each
+/// stage of a task still in progress (of each command, for checks) and
+/// any open one, with how many older ones there are in `older_jobs`; and
+/// settled history keeps only its ids: steps a later one of the same step
+/// replaced and any of a delivered task, answered decisions and QA problems
+/// verified, dismissed or superseded.
 fn compact_overview(overview: &DeliveryOverview) -> Result<Value, DeliveryError> {
     const SUMMARY_CHARS: usize = 300;
+    const JOB_FIELDS: [&str; 17] = [
+        "id",
+        "task_id",
+        "role",
+        "attempt",
+        "agent",
+        "model",
+        "status",
+        "lease",
+        "timeout_minutes",
+        "needs_environment",
+        "created_at_ms",
+        "started_at_ms",
+        "ended_at_ms",
+        "error",
+        "result_state",
+        "activity",
+        "current_command",
+    ];
     let delivered: HashSet<&str> = overview
         .phases
         .iter()
         .filter(|(_, phase)| phase.phase == Phase::Delivered)
         .map(|(task_id, _)| task_id.as_str())
         .collect();
-    // Approvals come oldest first: the last done one of each step stands.
-    let mut standing: BTreeMap<(&str, DeliveryRung, Option<&str>), &str> = BTreeMap::new();
-    for approval in &overview.approvals {
-        if approval.status == DeliveryApprovalStatus::Executed {
-            let step = (
-                approval.task_id.as_str(),
-                approval.rung,
-                approval.stage.as_deref(),
-            );
-            standing.insert(step, approval.id.as_str());
+    let command = |job: &DeliveryJob| match job.role == CHECKS_ROLE {
+        true => job.prompt.clone(),
+        false => String::new(),
+    };
+    let mut latest: HashMap<(&str, &str, String), (u64, &str)> = HashMap::new();
+    for job in &overview.jobs {
+        let key = (job.task_id.as_str(), job.role.as_str(), command(job));
+        if latest
+            .get(&key)
+            .is_none_or(|(at, _)| *at <= job.created_at_ms)
+        {
+            latest.insert(key, (job.created_at_ms, job.id.as_str()));
         }
     }
     let mut jobs = Vec::new();
+    let mut older_jobs: BTreeMap<&str, u32> = BTreeMap::new();
     for job in &overview.jobs {
-        if !job.status.is_open() && delivered.contains(job.task_id.as_str()) {
-            jobs.push(json!({
-                "id": job.id, "task_id": job.task_id, "role": job.role,
-                "attempt": job.attempt, "status": job.status,
-            }));
+        let key = (job.task_id.as_str(), job.role.as_str(), command(job));
+        let current = latest.get(&key).is_some_and(|(_, id)| *id == job.id);
+        if !job.status.is_open() && (!current || delivered.contains(job.task_id.as_str())) {
+            *older_jobs.entry(job.task_id.as_str()).or_default() += 1;
             continue;
         }
-        let mut value = job_json(job, false)?;
-        if let Some(fields) = value.as_object_mut() {
-            for key in ["changes", "qa_followup", "frozen_scripts"] {
-                fields.remove(key);
+        let whole = to_json(job)?;
+        let mut value = serde_json::Map::new();
+        for field in JOB_FIELDS {
+            if let Some(found) = whole.get(field).filter(|found| !found.is_null()) {
+                value.insert(field.to_string(), found.clone());
             }
+        }
+        // A shell job's prompt is its command: which check it is.
+        if job.agent == DeliveryAgent::Shell {
+            value.insert("command".to_string(), json!(job.prompt));
         }
         if let Some(result) = &job.result {
             let mut summary: String = result.summary.chars().take(SUMMARY_CHARS).collect();
             if summary.len() < result.summary.len() {
                 summary.push('…');
             }
-            value["result"] = json!({
-                "status": result.status, "summary": summary, "blocked_by": result.blocked_by,
-            });
+            value.insert(
+                "result".to_string(),
+                json!({"status": result.status, "summary": summary, "blocked_by": result.blocked_by}),
+            );
         }
-        jobs.push(value);
+        jobs.push(Value::Object(value));
+    }
+    // Approvals come oldest first: the last one of each step stands.
+    let mut standing: BTreeMap<(&str, DeliveryRung, Option<&str>), &str> = BTreeMap::new();
+    for approval in &overview.approvals {
+        let step = (
+            approval.task_id.as_str(),
+            approval.rung,
+            approval.stage.as_deref(),
+        );
+        standing.insert(step, approval.id.as_str());
     }
     let mut approvals = Vec::new();
     for approval in &overview.approvals {
@@ -1143,19 +1184,21 @@ fn compact_overview(overview: &DeliveryOverview) -> Result<Value, DeliveryError>
             approval.rung,
             approval.stage.as_deref(),
         );
-        let replaced = approval.status == DeliveryApprovalStatus::Executed
-            && standing.get(&step) != Some(&approval.id.as_str());
-        approvals.push(match replaced {
-            true => json!({
-                "id": approval.id, "task_id": approval.task_id, "rung": approval.rung,
-                "stage": approval.stage, "status": approval.status,
-            }),
-            false => to_json(approval)?,
-        });
+        let settled = standing.get(&step) != Some(&approval.id.as_str())
+            || delivered.contains(approval.task_id.as_str());
+        approvals.push(
+            match settled && approval.status != DeliveryApprovalStatus::Pending {
+                true => json!({
+                    "id": approval.id, "task_id": approval.task_id, "rung": approval.rung,
+                    "stage": approval.stage, "status": approval.status,
+                }),
+                false => to_json(approval)?,
+            },
+        );
     }
     let mut decisions = Vec::new();
     for decision in &overview.decisions {
-        decisions.push(match delivered.contains(decision.task_id.as_str()) {
+        decisions.push(match decision.status == DeliveryDecisionStatus::Answered {
             true => json!({
                 "id": decision.id, "task_id": decision.task_id,
                 "kind": decision.kind, "status": decision.status,
@@ -1163,10 +1206,28 @@ fn compact_overview(overview: &DeliveryOverview) -> Result<Value, DeliveryError>
             false => to_json(decision)?,
         });
     }
+    let mut qa_problems = Vec::new();
+    for problem in &overview.qa_problems {
+        let settled = matches!(
+            problem.status,
+            DeliveryQaProblemStatus::Verified
+                | DeliveryQaProblemStatus::Dismissed
+                | DeliveryQaProblemStatus::Superseded
+        );
+        qa_problems.push(match settled {
+            true => json!({
+                "id": problem.id, "task_id": problem.task_id,
+                "label": problem.label, "status": problem.status,
+            }),
+            false => to_json(problem)?,
+        });
+    }
     let mut value = to_json(overview)?;
     value["jobs"] = Value::Array(jobs);
+    value["older_jobs"] = json!(older_jobs);
     value["approvals"] = Value::Array(approvals);
     value["decisions"] = Value::Array(decisions);
+    value["qa_problems"] = Value::Array(qa_problems);
     // The open round of each task is in its phase.
     if let Some(fields) = value.as_object_mut() {
         fields.remove("rounds");
@@ -1198,7 +1259,7 @@ fn tool_definitions() -> Value {
     // Apart from the list: one `json!` this deep exceeds the macro's recursion limit.
     let decision_item = json!({"type": "object", "properties": {"kind": {"type": "string", "enum": ["choice", "text", "permission"]}, "question": {"type": "string"}, "detail": {"type": "string"}, "references": {"type": "array", "maxItems": 5, "description": "The code the question is about, shown to the user above the options as GitHub shows a review thread: give `comment_url` (a PR review comment, e.g. https://github.com/o/r/pull/7#discussion_r123) or `path` with `start_line`/`end_line` (lines of the task worktree, relative to it). Tinto reads the comment, its diff and the code itself; add `note` to say why it matters. Always attach them when a decision comes from a PR review or from specific code.", "items": {"type": "object", "properties": {"comment_url": {"type": "string"}, "path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}, "note": {"type": "string"}}}}, "options": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "consequence": {"type": "string"}, "recommended": {"type": "boolean"}}, "required": ["label", "consequence"]}}, "text": {"type": "string"}, "command": {"type": "string"}, "undo": {"type": "string"}, "scripts": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of the scripts the command runs; frozen and shown to the user."}, "read_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of folders outside the worktree QA may read and list."}, "write_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of concrete folders outside the worktree QA's commands may write in. Never the user's whole home."}, "clients": {"type": "array", "items": {"type": "string", "enum": ["claude", "codex"]}, "description": "permission: the user's real clients the command starts."}, "blocking": {"type": "boolean", "description": "Default true: the stages wait for the user. false: your own call, answered at once with the recommended option (or the text), changeable by the user later. Never false for a permission."}, "full_access": {"type": "boolean", "description": "permission: ask the user to let this task's QA run with full access (no sandbox, any command, writes anywhere). An exception for QA that cannot run in a sandbox, for example when it must start the user's real Codex; say in the question why nothing narrower works and what QA will do. Once allowed, the QA jobs you dispatch on this task run with full access; other roles never do."}}, "required": ["kind", "question"]});
     json!([
-        { "name": "delivery_overview", "description": "Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, setup_failed, waits_environment, queued, quarantined, settings_proposal, blocked, unblocked, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, dependency, external, nobody), the `next_stage` due and, when what one of its queued jobs waits for looks stuck (a job far beyond its usual time, a resource held by a job whose process is gone), a `warning`. `unblocked` means its last blocker cleared (`cleared`, `by` user or tinto) and it waits on you until you act on it. `queued` (by job id) says why each queued job has not started (`reason`: another job of its task such as its checks, its setup, the environment, a resource held by another job, the capacity, a paused batch), since when (`since_ms`) and any `warning`; a queued phase carries its `reason` too. Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, setup_failed, waits_environment, queued, quarantined, settings_proposal, blocked, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, dependency, external, nobody), the `next_stage` due and, when its work was sent back, its `round`: number, cause, `items` to address and the stage or step it is `at` (earlier rounds are in `rounds` with `compact: false`). Act on the tasks that wait on the coordinator; do not dispatch on one that waits on the user, an agent or the queue. By default it is compact: jobs come without their prompt, allowed commands, changed files and long results (their result keeps `status`, `blocked_by` and the start of `summary`), and settled history keeps only ids and status: finished jobs and decisions of delivered tasks, and done steps that a later one of the same step replaced. Read the rest with read_job, read_approval or read_decisions; `compact: false` returns everything.", "inputSchema": schema(json!({"compact": {"type": "boolean", "description": "Default true."}}), json!([])) },
+        { "name": "delivery_overview", "description": "Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, setup_failed, waits_environment, queued, quarantined, settings_proposal, blocked, unblocked, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, dependency, external, nobody), the `next_stage` due and, when what one of its queued jobs waits for looks stuck (a job far beyond its usual time, a resource held by a job whose process is gone), a `warning`. `unblocked` means its last blocker cleared (`cleared`, `by` user or tinto) and it waits on you until you act on it. `queued` (by job id) says why each queued job has not started (`reason`: another job of its task such as its checks, its setup, the environment, a resource held by another job, the capacity, a paused batch), since when (`since_ms`) and any `warning`; a queued phase carries its `reason` too. Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, setup_failed, waits_environment, queued, quarantined, settings_proposal, blocked, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, dependency, external, nobody), the `next_stage` due and, when its work was sent back, its `round`: number, cause, `items` to address and the stage or step it is `at` (earlier rounds are in `rounds` with `compact: false`). Act on the tasks that wait on the coordinator; do not dispatch on one that waits on the user, an agent or the queue. By default it is compact, to fit however long the batch ran: jobs carry what they are (a check its `command`), their status, timing, activity and the start of their result's `summary`; only the latest job of each stage of a task in progress (of each command, for checks) and any queued or running one are listed, with how many older ones each task has in `older_jobs`; and settled history keeps only ids and status: steps a later one of the same step replaced and any of a delivered task, answered decisions, and QA problems verified, dismissed or superseded. Read the rest with read_job, read_approval, read_decisions or read_qa_problems; `compact: false` returns everything.", "inputSchema": schema(json!({"compact": {"type": "boolean", "description": "Default true."}}), json!([])) },
         { "name": "create_run", "description": "Start a run you coordinate. Returns its id and generation 1.", "inputSchema": schema(json!({"repo": {"type": "string"}, "title": {"type": "string"}, "owner": {"type": "string"}}), json!(["repo", "title", "owner"])) },
         { "name": "acquire_run", "description": "Take a run nobody coordinates, or confirm you hold it. The run comes with `pending`: what waits on you since the cursor you last acknowledged (tasks whose blockers cleared, answered decisions, approved or rejected steps, QA problems sent), one line each with its `kind`, `key` and `text`. When another coordinator holds it, it is refused with run_locked: then, if the user asked you to coordinate it, use takeover_run.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}}), json!(["run_id", "owner"])) },
         { "name": "takeover_run", "description": "Become the run's coordinator in place of the one holding it. Do it when the user asks you to coordinate (or take over) the batch, which is enough: you need not check on the other coordinator; also when that coordinator stopped. The generation increases, so whatever the previous coordinator still sends is refused (fenced), and its wait_run hands it a run_takeover event. Pass `expect_generation` (the generation you read) to make sure nobody took it in between; without it the current one is taken. `reason` says why (default: asked by the user). Its result's `pending` sums up what waits on the coordinator since the last acknowledged cursor (tasks whose blockers cleared, answered decisions, approved or rejected steps, QA problems sent). Then call wait_run without a cursor and go on with the batch from delivery_overview. When the user asks you to coordinate several batches, take each one (each keeps its own generation) and wait on all of them with wait_run's `runs`.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "expect_generation": {"type": "integer"}, "reason": {"type": "string"}}), json!(["run_id", "owner"])) },

@@ -18,12 +18,13 @@ use super::decisions;
 use super::environment::{self, DeliveryEnvironmentCheck};
 use super::job_process::{self, JobProcess};
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryDecision,
-    DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
-    DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryOverview, DeliveryPackage,
-    DeliveryPlatform, DeliveryPreparedStack, DeliveryQaPrepare, DeliveryQaStack,
-    DeliveryRepoSettings, DeliveryResultState, DeliverySettings, DeliverySettingsProposalStatus,
-    DeliveryTask, DeliveryTaskMilestone, DeliveryTiming, NewBlocker,
+    DeliveryAccess, DeliveryAgent, DeliveryBlocker, DeliveryChange, DeliveryCoordinatorEndpoint,
+    DeliveryDecision, DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy,
+    DeliveryJob, DeliveryJobLog, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
+    DeliveryOverview, DeliveryPackage, DeliveryPlatform, DeliveryPreparedStack, DeliveryQaPrepare,
+    DeliveryQaStack, DeliveryRepoSettings, DeliveryResultState, DeliverySettings,
+    DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
+    NewBlocker,
 };
 use super::phase::{current_checks, current_setup, has_open_findings, is_broken, last_change};
 use super::prs::{self, GitHub};
@@ -1968,7 +1969,8 @@ impl DeliveryService {
         Ok(job)
     }
 
-    /// Once every task of the run is being implemented, the brainstorm is
+    /// Once every task of the run is being implemented, or waits for what
+    /// blocks it (another task, a package before it), the brainstorm is
     /// over even if the coordinator did not say so: from then on the run
     /// does not wait for the user (commits, pushes, decisions). It stays
     /// open while a decision or settings proposal of the run is pending.
@@ -1986,8 +1988,10 @@ impl DeliveryService {
             .iter()
             .filter(|other| other.run_id.as_deref() == Some(run_id))
             .all(|other| {
-                jobs.iter()
-                    .any(|job| job.task_id == other.id && job.role == IMPLEMENTATION_ROLE)
+                other.blockers.iter().any(DeliveryBlocker::is_open)
+                    || jobs
+                        .iter()
+                        .any(|job| job.task_id == other.id && job.role == IMPLEMENTATION_ROLE)
             });
         drop(store);
         if all_implementing {

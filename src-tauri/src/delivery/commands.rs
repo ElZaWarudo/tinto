@@ -592,8 +592,28 @@ pub fn delivery_set_repo_settings(
     service
         .store()
         .and_then(|store| store.set_repo_settings(&repo, &settings))
-        .map(|_| settings)
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+    // Steps already waiting that the repo now lets Tinto take, taken in the
+    // background: a Jira or push step should not hold the save up.
+    let runs = service
+        .store()
+        .and_then(|store| store.runs())
+        .map_err(CommandError::from)?;
+    let service = service.inner().clone();
+    std::thread::spawn(move || {
+        for run in runs
+            .iter()
+            .filter(|run| run.repo == repo && run.status == "active")
+        {
+            if let Err(error) = service.take_allowed_steps(&run.id) {
+                eprintln!(
+                    "tinto: delivery could not take the allowed steps of {}: {error}",
+                    run.id
+                );
+            }
+        }
+    });
+    Ok(settings)
 }
 
 #[tauri::command]

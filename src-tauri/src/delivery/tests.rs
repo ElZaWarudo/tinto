@@ -8077,15 +8077,28 @@ fn the_coordinator_reads_a_compact_overview_and_jobs_without_their_instructions(
             .unwrap()
             .clone()
     };
-    // A finished job of a delivered task: its id, to read it if needed.
-    assert_eq!(
-        find("jobs", "job-0-2"),
-        json!({"id": "job-0-2", "task_id": delivered.id, "role": "review", "attempt": 1, "status": "finished"})
-    );
-    // An active task's job: what it is, without instructions or long text.
-    let current = find("jobs", "job-6-2");
+    // Ended jobs of a delivered task, and those a later one of the same
+    // stage replaced, are only counted.
+    let listed = |id: &str| {
+        compact["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|job| job["id"] == id)
+    };
+    assert!(!listed("job-0-2") && !listed("job-6-2"));
+    assert_eq!(compact["older_jobs"][&delivered.id], 7);
+    assert_eq!(compact["older_jobs"][&active.id], 3);
+    // The latest review: what it is, without instructions or long text.
+    let current = find("jobs", "job-6-4");
     assert_eq!(current["role"], "review");
-    for key in ["prompt", "allowed_commands", "decisions", "changes"] {
+    for key in [
+        "prompt",
+        "allowed_commands",
+        "decisions",
+        "changes",
+        "check_env",
+    ] {
         assert!(current.get(key).is_none(), "{key}: {current}");
     }
     assert_eq!(
@@ -8101,10 +8114,9 @@ fn the_coordinator_reads_a_compact_overview_and_jobs_without_their_instructions(
     assert_eq!(replaced["status"], "executed");
     assert!(replaced.get("body").is_none());
     assert!(find("approvals", "approval-6-1").get("body").is_some());
-    assert!(find("approvals", "approval-0-6").get("body").is_some());
-    // Decisions: settled for the delivered task, whole for the active one.
-    assert!(find("decisions", "decision-0-0").get("question").is_none());
-    assert!(find("decisions", "decision-6-0").get("question").is_some());
+    // A delivered task's steps and answered decisions: settled.
+    assert!(find("approvals", "approval-0-6").get("body").is_none());
+    assert!(find("decisions", "decision-6-0").get("question").is_none());
 
     // read_job leaves the instructions out unless asked.
     let read = mcp_tool(&h, "read_job", json!({"job_id": "job-6-2"}));
@@ -9765,8 +9777,35 @@ fn the_brainstorm_ends_once_every_task_of_the_run_is_being_implemented() {
     h.service
         .answer_decision(&pending[0].id, "Save", "user")
         .unwrap();
+    // A task waiting for another one does not keep the brainstorm going.
+    let (third, _) = coordinator.task("B-3");
+    h.service
+        .set_blockers(
+            &third,
+            vec![super::model::NewBlocker::Task {
+                task: "B-2".into(),
+                until: None,
+            }],
+            "builds on B-2",
+        )
+        .unwrap();
+    // A step asked during the brainstorm waits for the user…
+    let first_task = h.service.task(&first).unwrap();
+    write_files(&first_task, &["done.txt"]);
+    git(&first_task.worktree, &["add", "--all"]);
+    git(&first_task.worktree, &["commit", "-q", "-m", "done"]);
+    let push = h
+        .service
+        .request_approval(step(&first_task, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    assert_eq!(push.status, DeliveryApprovalStatus::Pending);
     implement(&second);
     assert!(unattended());
+    // …until it ends: then Tinto takes it, as the repo lets it.
+    assert_ne!(
+        h.service.approval(&push.id).unwrap().status,
+        DeliveryApprovalStatus::Pending
+    );
 }
 
 /// A workflow on main that runs CI only once a PR gets the `Ready` label,
