@@ -308,6 +308,14 @@ pub(super) fn open_round(
         // it already had to address.
         let refines = open.kind == "qa" && new.kind == "qa_problems";
         if !worked {
+            // The same news again (opened as it arrived, then a stage
+            // dispatched on it): nothing changes.
+            let same = open.kind == new.kind
+                && open.cause == new.cause
+                && items.iter().all(|item| open.items.contains(item));
+            if same {
+                return Ok(());
+            }
             if refines {
                 open.items = items;
             } else {

@@ -1705,6 +1705,11 @@ impl DeliveryService {
             if let Some(news) = pr_news(&before, &pr) {
                 store.record_event(now_ms(), "pr_changed", Some(task_id), None, &news)?;
             }
+            // Changes asked send the work back as they arrive, whatever the
+            // push's state: the round is there before any stage answers it.
+            if asked(&pr) && !asked(&before) {
+                super::rounds::for_pr(&store, task_id)?;
+            }
             (before, pr)
         };
         let changed = pr_changed(&before, &pr);

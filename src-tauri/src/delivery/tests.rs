@@ -9286,6 +9286,64 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
 }
 
 #[test]
+fn changes_asked_open_their_round_as_they_arrive_even_with_the_push_drifted() {
+    use super::phase::Phase;
+    let h = harness();
+    let task = h.task("R-11");
+    for (rung, id) in [("commit", "c0"), ("pr", "pr0")] {
+        put_step(&h, &task, id, rung, "executed", "hecho");
+    }
+    put_step(&h, &task, "p0", "push", "drifted", "hecho");
+    put_stage(&h, &task, "t1", "tests", "pass", &[], true);
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(&h, &task, "r1", "review", "pass", &[], false);
+    put_stage(&h, &task, "q1", "qa", "pass", &[], false);
+    let snapshot = |decision: &str| {
+        json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": decision,
+            "statusCheckRollup": [], "comments": [],
+            "reviews": [{"author": {"login": "dvald"}, "state": decision, "submittedAt": "2026-10-29T10:00:00Z", "body": "Renombra el campo"}],
+        })
+    };
+    let github = FakeGitHub::new(snapshot("COMMENTED"), json!([]));
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/199").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert!(round_now(&h, &task).is_none());
+
+    *github.snapshot.lock().unwrap() = snapshot("CHANGES_REQUESTED");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert!(matches!(
+        phase.phase,
+        Phase::Drifted {
+            rung: DeliveryRung::Push,
+            ..
+        }
+    ));
+    let round = phase.round.expect("the changes asked open a round");
+    assert_eq!(round.round.kind, "pr");
+    assert_eq!(phase.next_stage.as_deref(), Some("implementation"));
+
+    // Settled another way (answered on the PR): resolve_job with the task
+    // closes it with the note.
+    let closed = h
+        .service
+        .resolve_round(
+            &task.id,
+            "Respondido en el PR: el nombre se queda",
+            "coordinator",
+        )
+        .unwrap();
+    assert_eq!(
+        closed.outcome.as_deref(),
+        Some("resuelta por coordinator: Respondido en el PR: el nombre se queda")
+    );
+    assert!(round_now(&h, &task).is_none());
+}
+
+#[test]
 fn a_sync_with_conflicts_opens_a_round_once() {
     let h = harness();
     let task = h.task("R-6");

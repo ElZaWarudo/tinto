@@ -896,6 +896,18 @@ fn phase_in_round(
             next = Some("review".to_string());
         }
     }
+    // Changes asked on the PR sent the work back and no stage answered
+    // them yet: implementation does.
+    let unanswered = round.is_some_and(|round| {
+        round.kind == "pr"
+            && !round.waits_merge_commit
+            && !jobs.iter().any(|job| {
+                job.agent != DeliveryAgent::Shell && job.created_at_ms >= round.opened_at_ms
+            })
+    });
+    if next.is_none() && merge.is_none() && unanswered {
+        next = Some("implementation".to_string());
+    }
     let resolving = merge.is_some() && next.is_some();
     let ladder = steps_for(task);
     let steps: Vec<DeliveryStep> = if ladder.len() == STEPS.len() {
