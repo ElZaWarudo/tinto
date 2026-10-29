@@ -2035,7 +2035,10 @@ pub fn rate_limit(agent: DeliveryAgent, line: &str) -> Option<DeliveryQuota> {
     let value: Value = serde_json::from_str(line).ok()?;
     let info = &value["rate_limit_info"];
     let windows: Vec<(String, &Value)> = match info["unifiedWindows"].as_object() {
-        Some(windows) => windows.iter().map(|(name, window)| (name.clone(), window)).collect(),
+        Some(windows) => windows
+            .iter()
+            .map(|(name, window)| (name.clone(), window))
+            .collect(),
         None => vec![(info["rateLimitType"].as_str()?.to_string(), info)],
     };
     windows
@@ -2650,10 +2653,9 @@ pub fn parse_result(value: &Value) -> Result<DeliveryJobResult, String> {
 /// that way, moves to `addressed`, and a `findings` result left without
 /// findings is a pass.
 fn settle_confirmations(result: &mut DeliveryJobResult) {
-    let (confirmed, open): (Vec<String>, Vec<String>) =
-        std::mem::take(&mut result.findings)
-            .into_iter()
-            .partition(|finding| confirmation(finding));
+    let (confirmed, open): (Vec<String>, Vec<String>) = std::mem::take(&mut result.findings)
+        .into_iter()
+        .partition(|finding| confirmation(finding));
     result.findings = open;
     result.addressed.extend(confirmed);
     if result.status == "findings" && result.findings.is_empty() {
@@ -3349,7 +3351,10 @@ pub(crate) mod tests {
                 seen_at_ms: 0,
             })
         );
-        assert_eq!(rate_limit(DeliveryAgent::Claude, CLAUDE_OK.lines().next().unwrap()), None);
+        assert_eq!(
+            rate_limit(DeliveryAgent::Claude, CLAUDE_OK.lines().next().unwrap()),
+            None
+        );
     }
 
     #[test]
@@ -3567,13 +3572,23 @@ pub(crate) mod tests {
             script.contains(" --allowedTools 'Bash' --disallowedTools 'CronCreate'"),
             "{script}"
         );
-        for tool in ["'PushNotification'", "'RemoteTrigger'", "'Workflow'", "'WebFetch'"] {
+        for tool in [
+            "'PushNotification'",
+            "'RemoteTrigger'",
+            "'Workflow'",
+            "'WebFetch'",
+        ] {
             assert!(script.contains(tool), "{tool}: {script}");
         }
         // Any command, compound ones too, but Tinto's own steps, also
         // spelled with `git -C <worktree>`, and the suites Tinto runs as
         // they are written: the lint check stays, as writers run it.
-        assert!(script.contains(" 'Bash(git commit:*)' 'Bash(git -C /repo-wt/K-1 commit:*)' 'Bash(git push:*)'"), "{script}");
+        assert!(
+            script.contains(
+                " 'Bash(git commit:*)' 'Bash(git -C /repo-wt/K-1 commit:*)' 'Bash(git push:*)'"
+            ),
+            "{script}"
+        );
         assert!(
             script.ends_with(" 'Bash(cargo install:*)' 'Bash(npm test)'"),
             "{script}"
@@ -3610,7 +3625,10 @@ pub(crate) mod tests {
         let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
         assert!(script.contains(" --strict-mcp-config"), "{script}");
-        assert!(script.contains("--disallowedTools 'CronCreate'"), "{script}");
+        assert!(
+            script.contains("--disallowedTools 'CronCreate'"),
+            "{script}"
+        );
         assert!(
             !script.contains("Bash(") && !script.contains("WebFetch"),
             "{script}"

@@ -1136,9 +1136,15 @@ fn narrow_overview(
     overview.jobs.retain(|job| kept(&job.task_id));
     let jobs: HashSet<&str> = overview.jobs.iter().map(|job| job.id.as_str()).collect();
     overview.queued.retain(|job, _| jobs.contains(job.as_str()));
-    overview.approvals.retain(|approval| kept(&approval.task_id));
-    overview.decisions.retain(|decision| kept(&decision.task_id));
-    overview.qa_problems.retain(|problem| kept(&problem.task_id));
+    overview
+        .approvals
+        .retain(|approval| kept(&approval.task_id));
+    overview
+        .decisions
+        .retain(|decision| kept(&decision.task_id));
+    overview
+        .qa_problems
+        .retain(|problem| kept(&problem.task_id));
     overview.rounds.retain(|round| kept(&round.task_id));
     overview.prs.retain(|pr| kept(&pr.task_id));
     overview

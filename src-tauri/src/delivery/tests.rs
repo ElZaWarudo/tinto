@@ -8133,7 +8133,12 @@ fn the_overview_narrows_to_a_batch_or_task_leaves_closed_batches_out_and_sends_r
     let h = harness();
     let run = |title: &str| {
         h.service
-            .create_run(h.repo.path().to_path_buf(), title, Some("coord".into()), None)
+            .create_run(
+                h.repo.path().to_path_buf(),
+                title,
+                Some("coord".into()),
+                None,
+            )
             .unwrap()
     };
     let (open, other, closed) = (run("Abierto"), run("Otro"), run("Cerrado"));
@@ -8176,7 +8181,10 @@ fn the_overview_narrows_to_a_batch_or_task_leaves_closed_batches_out_and_sends_r
     assert!(all["phases"].get(&old.id).is_none());
     assert!(all["phases"].get(&elsewhere.id).is_some());
     // The round's items come once; the phase names it.
-    assert_eq!(all["phases"][&first.id]["round"], json!({"id": "round-1", "number": 2, "kind": "review", "at": all["phases"][&first.id]["round"]["at"]}));
+    assert_eq!(
+        all["phases"][&first.id]["round"],
+        json!({"id": "round-1", "number": 2, "kind": "review", "at": all["phases"][&first.id]["round"]["at"]})
+    );
     assert_eq!(ids(&all, "rounds"), ["round-1"]);
     assert_eq!(all["rounds"][0]["items"], json!(items));
     let closed_too = mcp_tool(&h, "delivery_overview", json!({"closed": true}));
@@ -8190,8 +8198,8 @@ fn the_overview_narrows_to_a_batch_or_task_leaves_closed_batches_out_and_sends_r
         "delivery_overview",
         json!({"task_id": second.id, "fields": ["tasks", "phases", "runs"]}),
     );
-    assert_eq!(ids(&task, "tasks"), [second.id.clone()]);
-    assert_eq!(ids(&task, "runs"), [open.id.clone()]);
+    assert_eq!(ids(&task, "tasks"), std::slice::from_ref(&second.id));
+    assert_eq!(ids(&task, "runs"), std::slice::from_ref(&open.id));
     let mut parts: Vec<&String> = task.as_object().unwrap().keys().collect();
     parts.sort();
     assert_eq!(parts, ["phases", "runs", "tasks"]);

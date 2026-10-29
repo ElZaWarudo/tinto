@@ -92,7 +92,12 @@ fn latest_check_runs(checks: &[String], jobs: &[&DeliveryJob]) -> Option<String>
             let run = jobs
                 .iter()
                 .filter(|job| job.role == CHECKS_ROLE && job.prompt == *check)
-                .filter(|job| matches!(job.status, DeliveryJobStatus::Finished | DeliveryJobStatus::Failed))
+                .filter(|job| {
+                    matches!(
+                        job.status,
+                        DeliveryJobStatus::Finished | DeliveryJobStatus::Failed
+                    )
+                })
                 .max_by_key(|job| job.created_at_ms)?;
             let took = run.ended_at_ms?.saturating_sub(run.started_at_ms?) / 1000;
             let took = match took {
@@ -106,12 +111,7 @@ fn latest_check_runs(checks: &[String], jobs: &[&DeliveryJob]) -> Option<String>
             Some(format!("`{check}` {how} in {took}"))
         })
         .collect();
-    (!runs.is_empty()).then(|| {
-        format!(
-            "Their latest runs, on earlier code: {}.",
-            runs.join("; ")
-        )
-    })
+    (!runs.is_empty()).then(|| format!("Their latest runs, on earlier code: {}.", runs.join("; ")))
 }
 
 /// A provider stopping the account for its usage, not the job's work.
