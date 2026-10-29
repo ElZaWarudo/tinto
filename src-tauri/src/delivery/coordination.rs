@@ -2430,11 +2430,73 @@ impl DeliveryService {
             }
             // A sync's merge committed by hand, its round still open.
             let store = self.store()?;
-            if super::rounds::open_of(&store, &task.id)?.is_some() {
+            if let Some(round) = super::rounds::open_of(&store, &task.id)? {
                 drop(store);
                 self.record_merge_concluded_outside(&task)?;
+                self.settle_rerun_checks(&task, round)?;
             }
         }
+        Ok(())
+    }
+
+    /// Closes a checks round whose failing checks passed when run again
+    /// (after a setup step, say) while no stage of it changed the code, once
+    /// the worktree is clean and, when the branch was published before it
+    /// opened, equal to what was published: there is nothing to commit or
+    /// push, and the task goes back to its PR.
+    fn settle_rerun_checks(
+        &self,
+        task: &DeliveryTask,
+        mut round: super::model::DeliveryRound,
+    ) -> Result<(), DeliveryError> {
+        if round.kind != "checks" || round.waits_merge_commit || task.checks.is_empty() {
+            return Ok(());
+        }
+        {
+            let jobs = self.store()?.task_jobs(&task.id)?;
+            let changed = jobs.iter().any(|job| {
+                job.agent != super::model::DeliveryAgent::Shell
+                    && job.created_at_ms >= round.opened_at_ms
+                    && job.undone_at_ms.is_none()
+                    && !job.changes.is_empty()
+            });
+            let refs: Vec<&super::model::DeliveryJob> = jobs.iter().collect();
+            let current = super::phase::current_checks(&task.checks, &refs);
+            let passed = task.checks.iter().all(|command| {
+                current.iter().any(|check| {
+                    &check.prompt == command
+                        && check.status == super::model::DeliveryJobStatus::Finished
+                })
+            });
+            if changed || !passed || jobs.iter().any(|job| job.status.is_open()) {
+                return Ok(());
+            }
+        }
+        let place = Place::of(task.distro.as_deref());
+        let Ok(state) = tasks::worktree_state(place, &task.worktree, &task.base_commit) else {
+            return Ok(());
+        };
+        let published = !round.after_push || (state.has_upstream && state.unpublished == 0);
+        if state.dirty || !published || tasks::merge_head(place, &task.worktree).is_some() {
+            return Ok(());
+        }
+        let store = self.store()?;
+        // Another reader may have closed it first.
+        if super::rounds::open_of(&store, &task.id)?.map(|open| open.id) != Some(round.id.clone()) {
+            return Ok(());
+        }
+        round.closed_at_ms = Some(now_ms());
+        round.outcome = Some("pasaron al repetirlas; nada que publicar".to_string());
+        store.put_round(&round)?;
+        store.record_event(
+            now_ms(),
+            "round_closed",
+            Some(&task.id),
+            None,
+            &super::rounds::round_text(&round),
+        )?;
+        drop(store);
+        self.notify();
         Ok(())
     }
 

@@ -9130,6 +9130,41 @@ fn resolve_job_accepts_a_failing_check_and_says_why_it_refuses() {
 }
 
 #[test]
+fn a_checks_round_closes_once_its_checks_pass_again_with_nothing_to_publish() {
+    let h = harness();
+    set_repo_checks(&h, &["cargo check"]);
+    let task = h.task("R-10");
+    h.service
+        .set_task_checks(&task.id, vec!["cargo check".into()])
+        .unwrap();
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    let check = |id: &str, status: &str| {
+        std::thread::sleep(Duration::from_millis(5));
+        let at = super::now_ms();
+        let job: DeliveryJob = serde_json::from_value(json!({
+            "id": id, "task_id": task.id, "role": "checks", "attempt": 1, "agent": "shell",
+            "access": "workspace", "prompt": "cargo check", "contract_version": 1,
+            "writes": false, "timeout_minutes": 60, "status": status,
+            "created_at_ms": at - 1, "started_at_ms": at - 1, "ended_at_ms": at,
+        }))
+        .unwrap();
+        let store = h.service.store().unwrap();
+        store.put_job(&job).unwrap();
+        super::rounds::after_job(&store, &job).unwrap();
+    };
+    check("c1", "failed");
+    assert_eq!(round_now(&h, &task).unwrap().round.kind, "checks");
+    // A setup step later, the same check passes on the same code: the
+    // worktree is clean, so the round has nothing left to commit.
+    check("c2", "finished");
+    assert!(round_now(&h, &task).is_none());
+    assert_eq!(
+        h.service.overview().unwrap().rounds[0].outcome.as_deref(),
+        Some("pasaron al repetirlas; nada que publicar")
+    );
+}
+
+#[test]
 fn a_round_whose_stages_pass_without_changes_has_nothing_to_publish() {
     let h = harness();
     let task = h.task("R-8");
