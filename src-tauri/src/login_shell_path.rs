@@ -1,7 +1,8 @@
 //! Apps opened from the Dock or Finder get launchd's PATH
-//! (`/usr/bin:/bin:/usr/sbin:/sbin`), not the one the user's shell builds, so
-//! agents, npm and Gitleaks installed with Homebrew, nvm or their own
-//! installers are not found. At startup Tinto takes the PATH the user's login
+//! (`/usr/bin:/bin:/usr/sbin:/sbin`), and on Linux apps opened from the
+//! desktop launcher get the session's PATH, not the one the user's shell
+//! builds, so agents, npm and Gitleaks installed with Homebrew, nvm or their
+//! own installers (`~/.local/bin`) are not found. At startup Tinto takes the PATH the user's login
 //! shell gives, as a terminal would see it.
 
 use std::{
@@ -14,6 +15,10 @@ use std::{
 };
 
 const MARKER: &str = "__TINTO_PATH__";
+#[cfg(target_os = "macos")]
+const DEFAULT_SHELL: &str = "/bin/zsh";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_SHELL: &str = "/bin/sh";
 const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Puts the login shell's PATH before the inherited one when Tinto was not
@@ -36,7 +41,7 @@ pub(crate) fn adopt_login_shell_path() {
 fn login_shell_path() -> Option<OsString> {
     let shell = env::var_os("SHELL")
         .filter(|shell| !shell.is_empty())
-        .unwrap_or_else(|| OsString::from("/bin/zsh"));
+        .unwrap_or_else(|| OsString::from(DEFAULT_SHELL));
     // Interactive too: nvm and most installers set PATH up in ~/.zshrc.
     let mut child = Command::new(shell)
         .arg("-ilc")
