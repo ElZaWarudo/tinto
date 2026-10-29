@@ -383,6 +383,10 @@ export interface DeliveryApproval {
   conflicts?: string[];
   /** `commit`: the commits Tinto created. */
   created?: string[];
+  /** `commit`: the author git records on the commits (`Name <email>`), from the worktree's config. */
+  author?: string | null;
+  /** `push`: the branch's HEAD when the push was asked. */
+  head?: string | null;
   /** What Tinto noticed checking the step against git and GitHub. */
   notice?: string | null;
   /** The user's corrections of `outcome`, oldest first; `outcome` is the latest. */

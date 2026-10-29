@@ -1096,6 +1096,10 @@ impl DeliveryService {
         }
         let start_commit =
             tasks::create_worktree(place, &request.repo, &worktree, &branch, &base_commit)?;
+        // A job that finds them missing checks them out too (see run_job).
+        if let Err(error) = tasks::init_submodules(place, &worktree, true) {
+            eprintln!("tinto: delivery could not check out the submodules of {key}: {error}");
+        }
         let now = now_ms();
         let task = DeliveryTask {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1123,6 +1127,7 @@ impl DeliveryService {
             setup: Vec::new(),
             parent: None,
             parent_read_at_ms: None,
+            restack_from: None,
             skip_ci: false,
         };
         {
@@ -2639,6 +2644,16 @@ impl DeliveryService {
         }
         let paths = (self.inner.paths_for)(&job.id)?;
         paths.prepare()?;
+        // Submodules a sync, a restack or a checkout brought in and the
+        // worktree never checked out: every check would fail without them.
+        let submodules =
+            tasks::init_submodules(Place::of(task.distro.as_deref()), &task.worktree, false)?;
+        if let Some(note) = &submodules {
+            job.prepare = Some(DeliveryQaPrepare {
+                note: note.clone(),
+                ..Default::default()
+            });
+        }
         if job.role == QA_ROLE {
             job.frozen_scripts = self.prepare_permissions(&task, &paths, start.as_ref())?;
             // A sandbox cannot create the folder it is given as writable.
@@ -2657,7 +2672,12 @@ impl DeliveryService {
         // this worktree; its time limit counts from then.
         if let Some(stack) = job.qa_stack.clone() {
             match self.prepare_qa_stack(&job, &task, &stack, &paths, start.as_ref()) {
-                Ok(prepare) => job.prepare = Some(prepare),
+                Ok(mut prepare) => {
+                    if let Some(note) = &submodules {
+                        prepare.note = format!("{note}\n{}", prepare.note);
+                    }
+                    job.prepare = Some(prepare)
+                }
                 Err(PrepareStop::Cancelled) => return self.cancel_preparing(&job.id),
                 Err(PrepareStop::Failed(message)) => {
                     return Err(DeliveryError::new(
@@ -3246,16 +3266,15 @@ impl DeliveryService {
             .collect())
     }
 
-    /// A package built on another starts from that package's latest work:
-    /// until it has anything of its own, its branch moves up to that one's.
+    /// A task based on another's branch (a package built on another, or a
+    /// task created from another task's branch) starts from that task's
+    /// latest work: until it has anything of its own, its branch moves up
+    /// to that one's.
     fn catch_up_package(&self, mut task: DeliveryTask) -> Result<DeliveryTask, DeliveryError> {
-        let Some(other_id) = task.package.as_ref().and_then(|p| p.builds_on.clone()) else {
+        let Some(other) = self.base_task(&task)? else {
             return Ok(task);
         };
-        let Some(other) = self.store()?.task(&other_id)? else {
-            return Ok(task);
-        };
-        if other.removed_at_ms.is_some() || task.base_ref != other.branch {
+        if other.removed_at_ms.is_some() {
             return Ok(task);
         }
         let place = Place::of(task.distro.as_deref());

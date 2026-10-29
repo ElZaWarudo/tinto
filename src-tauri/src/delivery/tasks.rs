@@ -643,13 +643,129 @@ pub fn remote_has(place: Place<'_>, repo: &Path, branch: &str, commit: &str, tip
     git_ok(place, repo, &["merge-base", "--is-ancestor", commit, tip])
 }
 
+/// Publishes the branch. With `lease`, a branch whose history was rewritten
+/// (a restack) replaces the remote one only while that still ends at
+/// `lease`, what Tinto last published there.
 pub fn push_branch(
     place: Place<'_>,
     worktree: &Path,
     branch: &str,
+    lease: Option<&str>,
 ) -> Result<String, DeliveryError> {
-    git(place, worktree, &["push", "-u", "origin", branch])?;
+    match lease {
+        Some(expected) => {
+            let lease = format!("--force-with-lease=refs/heads/{branch}:{expected}");
+            git(place, worktree, &["push", "-u", &lease, "origin", branch])?
+        }
+        None => git(place, worktree, &["push", "-u", "origin", branch])?,
+    };
     Ok(format!("origin/{branch}"))
+}
+
+/// The tree (content) of `commit`, to tell a history rewrite from a change.
+pub fn tree(place: Place<'_>, dir: &Path, commit: &str) -> Option<String> {
+    git(place, dir, &["rev-parse", &format!("{commit}^{{tree}}")])
+        .ok()
+        .filter(|tree| !tree.is_empty())
+}
+
+/// Moves the branch's own commits, those not in `from`, onto `onto`
+/// (`rebase --onto`). On conflicts the rebase is abandoned, leaving the
+/// branch as it was, and the files are returned.
+pub fn restack(
+    place: Place<'_>,
+    worktree: &Path,
+    onto: &str,
+    from: &str,
+) -> Result<Result<(), Vec<String>>, DeliveryError> {
+    if git(
+        place,
+        worktree,
+        &["rebase", "--quiet", "--onto", onto, from],
+    )
+    .is_ok()
+    {
+        return Ok(Ok(()));
+    }
+    let conflicts: Vec<String> = git(place, worktree, &["diff", "--name-only", "--diff-filter=U"])
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    git(place, worktree, &["rebase", "--abort"])?;
+    Ok(Err(conflicts))
+}
+
+/// Checks out the worktree's submodules when it has a `.gitmodules`: all
+/// of them at the commits the branch records (`all`, after Tinto moved the
+/// branch), or only those never checked out. Says what it did, `None` when
+/// there was nothing to do.
+pub fn init_submodules(
+    place: Place<'_>,
+    worktree: &Path,
+    all: bool,
+) -> Result<Option<String>, DeliveryError> {
+    if !git_ok(place, worktree, &["cat-file", "-e", "HEAD:.gitmodules"]) {
+        return Ok(None);
+    }
+    let status = git(place, worktree, &["submodule", "status", "--recursive"])?;
+    let pending: Vec<&str> = status
+        .lines()
+        .filter(|line| line.starts_with('-') || (all && line.starts_with('+')))
+        .filter_map(|line| line.get(1..)?.split_whitespace().nth(1))
+        .collect();
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let mut args = vec!["submodule", "update", "--init", "--recursive", "--"];
+    args.extend(pending.iter().copied());
+    git(place, worktree, &args).map_err(|error| {
+        DeliveryError::new(
+            "submodules_failed",
+            format!(
+                "no se pudieron preparar los submódulos ({}): {}",
+                pending.join(", "),
+                error.message
+            ),
+        )
+    })?;
+    Ok(Some(format!(
+        "submódulos preparados: {}",
+        pending.join(", ")
+    )))
+}
+
+/// The author git records on a commit made in `worktree` now, as `Name
+/// <email>`, from its config; Tinto never sets one of its own.
+pub fn author(place: Place<'_>, worktree: &Path) -> Result<String, DeliveryError> {
+    let ident = git(place, worktree, &["var", "GIT_AUTHOR_IDENT"]).map_err(|_| {
+        DeliveryError::new(
+            "no_identity",
+            "git no tiene nombre ni email de autor en este repositorio: configura user.name y user.email (git config) antes del commit",
+        )
+    })?;
+    // "Name <email> 1700000000 +0100": without the date.
+    Ok(match ident.rfind('>') {
+        Some(end) => ident[..=end].to_string(),
+        None => ident,
+    })
+}
+
+/// The emails of the latest authors of `reference`'s history.
+pub fn recent_authors(place: Place<'_>, worktree: &Path, reference: &str) -> Vec<String> {
+    let log = git(
+        place,
+        worktree,
+        &["log", "-50", "--no-merges", "--format=%ae", reference, "--"],
+    )
+    .unwrap_or_default();
+    let mut authors: Vec<String> = Vec::new();
+    for email in log.lines() {
+        if !authors.iter().any(|known| known == email) {
+            authors.push(email.to_string());
+        }
+    }
+    authors
 }
 
 #[cfg(test)]
@@ -843,5 +959,61 @@ mod tests {
                 .category,
             "invalid_branch"
         );
+    }
+
+    #[test]
+    fn a_worktree_gets_the_submodules_its_branch_records() {
+        let sub = repo_with_commit();
+        let repo = repo_with_commit();
+        run_git(
+            repo.path(),
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &plain_path(sub.path()),
+                "vendor/sub",
+            ],
+        );
+        run_git(repo.path(), &["commit", "-q", "-m", "add submodule"]);
+        let head = git(Place::Native, repo.path(), &["rev-parse", "HEAD"]).unwrap();
+        let worktree = repo.path().join("wt");
+        create_worktree(Place::Native, repo.path(), &worktree, "delivery/s-1", &head).unwrap();
+        assert!(!worktree.join("vendor/sub/README.md").exists());
+        // git refuses to clone a local submodule outside the user's own
+        // command (protocol.file.allow): the worktree gets the clone the
+        // main checkout already has, as a remote one would be fetched.
+        copy_dir(
+            &repo.path().join(".git/modules"),
+            &repo.path().join(".git/worktrees/wt/modules"),
+        );
+
+        let note = init_submodules(Place::Native, &worktree, false).unwrap();
+        assert_eq!(note.as_deref(), Some("submódulos preparados: vendor/sub"));
+        assert!(worktree.join("vendor/sub/README.md").exists());
+        // Nothing left to do; a repo without submodules has nothing either.
+        assert_eq!(
+            init_submodules(Place::Native, &worktree, true).unwrap(),
+            None
+        );
+        assert_eq!(
+            init_submodules(Place::Native, sub.path(), true).unwrap(),
+            None
+        );
+    }
+
+    fn copy_dir(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_dir(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
     }
 }
