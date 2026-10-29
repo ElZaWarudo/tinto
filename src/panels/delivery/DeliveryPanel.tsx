@@ -4131,9 +4131,7 @@ function ApprovalBanner({
               Autor: {approval.author}
             </p>
           )}
-          {pending && approval.notice && (
-            <p className="delivery-tone--danger">{approval.notice}</p>
-          )}
+          {pending && approval.notice && <p className="delivery-tone--danger">{approval.notice}</p>}
         </>
       ) : (
         <pre className="delivery-banner__text">
