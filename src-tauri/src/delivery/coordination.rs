@@ -364,6 +364,8 @@ pub(super) fn found_step(
         created: Vec::new(),
         before: None,
         tip: None,
+        head: None,
+        author: None,
         notice: None,
         corrections: Vec::new(),
         comment_url: None,
@@ -1151,6 +1153,24 @@ impl DeliveryService {
             DeliveryRung::Commit => tasks::merge_head(place, &task.worktree),
             _ => None,
         };
+        // The user sees who the commits will be by, as git's config says:
+        // Tinto never sets an identity of its own.
+        let author = match request.rung {
+            DeliveryRung::Commit => {
+                let author = tasks::author(place, &task.worktree)?;
+                notice = author_notice(
+                    &author,
+                    &tasks::recent_authors(place, &task.worktree, &task.base_commit),
+                );
+                Some(author)
+            }
+            _ => None,
+        };
+        // A push publishes the commit the user saw when it was asked.
+        let head = match request.rung {
+            DeliveryRung::Push => tasks::head(place, &task.worktree).ok(),
+            _ => None,
+        };
         match request.rung {
             // A merge in progress is concluded whole, so the commit keeps the
             // merged branch as its second parent.
@@ -1256,6 +1276,8 @@ impl DeliveryService {
             created: Vec::new(),
             before: None,
             tip: None,
+            head,
+            author,
             notice,
             corrections: Vec::new(),
             resolve_thread: reply && request.resolve_thread,
@@ -1296,7 +1318,9 @@ impl DeliveryService {
         // A sync only brings the base into the local branch, publishing
         // nothing, and Tinto refuses it on a dirty worktree or a running
         // job: it runs as it is asked, brainstorm or not.
-        let unattended = approval.rung == DeliveryRung::Sync || self.unattended(&task)?;
+        // A restack rewrites the branch's history: it waits like a commit.
+        let unattended = (approval.rung == DeliveryRung::Sync && task.restack_from.is_none())
+            || self.unattended(&task)?;
         if unattended && self.step_allowed(&task, &approval)? {
             return self.decide_approval(&approval.id, true, None);
         }
@@ -1507,7 +1531,6 @@ impl DeliveryService {
             DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
         ) {
             let task = self.task(&approval.task_id)?;
-            let place = Place::of(task.distro.as_deref());
             let executed = match approval.rung {
                 DeliveryRung::Commit => run_commit_plan(&task, &mut approval),
                 DeliveryRung::Sync => self.run_sync(&task, &mut approval),
@@ -1515,13 +1538,7 @@ impl DeliveryService {
                     "commit_missing",
                     "No se publicó: los commits que hizo Tinto ya no están en la rama. Vuelve a preparar el commit.",
                 )),
-                // Right before publishing: the base synced is still merged.
-                _ => self.check_base_merged(&task).and_then(|()| {
-                    tasks::push_branch(place, &task.worktree, &task.branch).map(|upstream| {
-                        approval.tip = tasks::head(place, &task.worktree).ok();
-                        format!("Publicado en {upstream}")
-                    })
-                }),
+                _ => self.run_push(&task, &mut approval),
             };
             approval.executed_at_ms = Some(now_ms());
             match executed {
@@ -1551,6 +1568,7 @@ impl DeliveryService {
             && approval.status == DeliveryApprovalStatus::Executed
             && approval.conflicts.is_empty()
             && !approval.created.is_empty()
+            && !self.same_tree(&approval.task_id, approval.before.as_deref())?
         {
             self.queue_task_checks(&approval.task_id, None)?;
         }
@@ -1563,6 +1581,9 @@ impl DeliveryService {
         // take Tinto's own merge for one made outside it.
         if approval.rung == DeliveryRung::Merge {
             let _ = self.refresh_pr(&approval.task_id, std::time::Duration::ZERO);
+            if approval.status == DeliveryApprovalStatus::Executed {
+                self.delete_merged_branch(&self.task(&approval.task_id)?)?;
+            }
         }
         Ok(approval)
     }
@@ -1870,10 +1891,14 @@ impl DeliveryService {
     /// cannot start now is only logged.
     fn auto_sync(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
         let base = self.sync_base(task)?;
+        let title = match task.restack_from {
+            Some(_) => format!("Restack {} onto {base}", task.branch),
+            None => format!("Merge branch '{base}' into {}", task.branch),
+        };
         let request = NewApproval {
             task_id: task.id.clone(),
             rung: DeliveryRung::Sync,
-            title: format!("Merge branch '{base}' into {}", task.branch),
+            title,
             body: String::new(),
             requested_by: super::decisions::AUTO.to_string(),
             commits: Vec::new(),
@@ -1922,6 +1947,16 @@ impl DeliveryService {
         }
         let base = self.sync_base(task)?;
         let (name, commit) = tasks::base_tip(place, &task.worktree, &base, true)?;
+        // A restack is due while the branch still has the rewritten base's
+        // commits; one done outside Tinto is not asked again.
+        if let Some(from) = &task.restack_from {
+            if tasks::on_branch(place, &task.worktree, from) {
+                return Ok((name, commit));
+            }
+            let mut done = task.clone();
+            done.restack_from = None;
+            self.store()?.put_task(&done)?;
+        }
         if tasks::on_branch(place, &task.worktree, &commit) {
             return Err(DeliveryError::new(
                 "base_merged",
@@ -1944,8 +1979,12 @@ impl DeliveryService {
         approval: &mut DeliveryApproval,
     ) -> Result<String, DeliveryError> {
         let (name, commit) = self.sync_prerequisites(task)?;
+        let task = &self.task(&task.id)?;
         let place = Place::of(task.distro.as_deref());
         approval.merge_head = Some(commit.clone());
+        if let Some(from) = task.restack_from.clone() {
+            return self.run_restack(task, approval, &name, &from);
+        }
         let message = match approval.body.trim() {
             "" => approval.title.clone(),
             body => format!("{}\n\n{body}", approval.title),
@@ -1954,9 +1993,10 @@ impl DeliveryService {
             tasks::Merged::Commit(merge) => {
                 approval.created = vec![merge.clone()];
                 Ok(format!(
-                    "{name} ({}) fusionada en la rama: commit de merge {}",
+                    "{name} ({}) fusionada en la rama: commit de merge {}{}",
                     short(&commit),
-                    short(&merge)
+                    short(&merge),
+                    submodules_note(place, &task.worktree)
                 ))
             }
             tasks::Merged::Conflicts(files) => {
@@ -2247,18 +2287,188 @@ impl DeliveryService {
             .latest_approval(&task.id, DeliveryRung::Sync)?
             .filter(|sync| sync.status == DeliveryApprovalStatus::Executed)
             .and_then(|sync| sync.merge_head);
-        match synced {
-            Some(base) if !tasks::on_branch(place, &task.worktree, &base) => {
-                Err(DeliveryError::new(
-                    "base_unmerged",
-                    format!(
-                        "la base que se sincronizó ({}) ya no está en la rama: sincroniza de nuevo antes de publicar",
-                        short(&base)
-                    ),
-                ))
-            }
-            _ => Ok(()),
+        let Some(synced) = synced.filter(|base| !tasks::on_branch(place, &task.worktree, base))
+        else {
+            return Ok(());
+        };
+        // Rebuilt on the PR's current base (a restack after the base merged
+        // rewritten): the old synced commit is gone for good reason.
+        let base = self.sync_base(task)?;
+        let current = tasks::base_tip(place, &task.worktree, &base, true)
+            .or_else(|_| tasks::base_tip(place, &task.worktree, &base, false));
+        if current.is_ok_and(|(_, commit)| tasks::on_branch(place, &task.worktree, &commit)) {
+            return Ok(());
         }
+        Err(DeliveryError::new(
+            "base_unmerged",
+            format!(
+                "la base que se sincronizó ({}) ya no está en la rama, ni la base actual del PR ({base}): sincroniza de nuevo antes de publicar",
+                short(&synced)
+            ),
+        ))
+    }
+
+    /// Whether the task's HEAD has the same content as `commit`.
+    fn same_tree(&self, task_id: &str, commit: Option<&str>) -> Result<bool, DeliveryError> {
+        let task = self.task(task_id)?;
+        let place = Place::of(task.distro.as_deref());
+        let Some(commit) = commit else {
+            return Ok(false);
+        };
+        let tree = tasks::tree(place, &task.worktree, commit);
+        Ok(tree.is_some() && tree == tasks::tree(place, &task.worktree, "HEAD"))
+    }
+
+    /// Publishes the branch as approved: the HEAD the push was asked for, or
+    /// past it only commits Tinto's own steps (sync, commit) added since,
+    /// else `head_moved`. A branch Tinto restacked since its last push
+    /// replaces the remote one only while that is still what Tinto
+    /// published (`--force-with-lease`). A remote that already ends at HEAD
+    /// (rewritten outside Tinto from this worktree) is adopted as published,
+    /// and the checks run again when its content is not what was published.
+    fn run_push(
+        &self,
+        task: &DeliveryTask,
+        approval: &mut DeliveryApproval,
+    ) -> Result<String, DeliveryError> {
+        // Right before publishing: the base synced is still merged.
+        self.check_base_merged(task)?;
+        let place = Place::of(task.distro.as_deref());
+        let head = tasks::head(place, &task.worktree)?;
+        let approvals: Vec<DeliveryApproval> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|other| other.task_id == task.id && other.id != approval.id)
+            .collect();
+        let mut added = String::new();
+        if let Some(asked) = approval.head.clone().filter(|asked| *asked != head) {
+            let since: Vec<String> = if tasks::on_branch(place, &task.worktree, &asked) {
+                tasks::git(
+                    place,
+                    &task.worktree,
+                    &["rev-list", "--first-parent", &format!("{asked}..HEAD")],
+                )
+                .map(|list| list.lines().map(str::to_string).collect())
+                .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let own = |commit: &String| {
+                approvals.iter().any(|step| {
+                    matches!(step.rung, DeliveryRung::Commit | DeliveryRung::Sync)
+                        && step.status.was_done()
+                        && step.created.contains(commit)
+                })
+            };
+            if since.is_empty() || !since.iter().all(own) {
+                return Err(DeliveryError::new(
+                    "head_moved",
+                    format!(
+                        "No se publicó (head_moved): la rama ya no está en {} como cuando se pidió el push, y lo nuevo no son pasos de Tinto. Vuelve a pedir el push para publicar {}.",
+                        short(&asked),
+                        short(&head)
+                    ),
+                ));
+            }
+            added = format!(
+                ", con lo que Tinto añadió después de pedirlo ({})",
+                shorts(&since)
+            );
+        }
+        let last_push = approvals
+            .iter()
+            .rev()
+            .find(|step| step.rung == DeliveryRung::Push && step.status.was_done());
+        let published = last_push.and_then(|push| push.tip.clone());
+        let remote = tasks::remote_tip(place, &task.repo, &task.branch)
+            .ok()
+            .flatten();
+        approval.tip = Some(head.clone());
+        if remote.as_deref() == Some(head.as_str()) {
+            let same = published.as_deref().is_some_and(|published| {
+                let tree = tasks::tree(place, &task.worktree, published);
+                tree.is_some() && tree == tasks::tree(place, &task.worktree, &head)
+            });
+            if !same && published.is_some() {
+                self.queue_task_checks(&task.id, None)?;
+            }
+            return Ok(format!(
+                "La rama remota ya estaba en {}: Tinto la adopta como publicada{}",
+                short(&head),
+                if same || published.is_none() {
+                    ""
+                } else {
+                    "; su contenido no es el publicado, así que vuelven a correr las comprobaciones"
+                }
+            ));
+        }
+        let restacked = approvals.iter().any(|step| {
+            step.rung == DeliveryRung::Sync
+                && step.status == DeliveryApprovalStatus::Executed
+                && step.before.is_some()
+                && step.executed_at_ms >= last_push.and_then(|push| push.executed_at_ms)
+        });
+        let lease = published
+            .as_deref()
+            .filter(|tip| restacked && !tasks::on_branch(place, &task.worktree, tip));
+        let upstream = tasks::push_branch(place, &task.worktree, &task.branch, lease)?;
+        Ok(match lease {
+            Some(_) => {
+                format!("Publicado en {upstream} (rama restackeada, con --force-with-lease){added}")
+            }
+            None => format!("Publicado en {upstream}{added}"),
+        })
+    }
+
+    /// The sync of a task whose base merged rewritten: its own commits move
+    /// onto the base (`rebase --onto <base> <from>`) in the worktree. Nothing
+    /// is published; the push step replaces the remote branch.
+    fn run_restack(
+        &self,
+        task: &DeliveryTask,
+        approval: &mut DeliveryApproval,
+        name: &str,
+        from: &str,
+    ) -> Result<String, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let before = tasks::head(place, &task.worktree)?;
+        let onto = approval.merge_head.clone().unwrap_or_default();
+        if let Err(files) = tasks::restack(place, &task.worktree, &onto, from)? {
+            return Err(DeliveryError::new(
+                "restack_conflicts",
+                format!(
+                    "El restack sobre {name} tiene conflictos en: {}. La rama quedó como estaba: rebásala a mano (rebase --onto {name} {}) y publícala con el paso push.",
+                    files.join(", "),
+                    short(from)
+                ),
+            ));
+        }
+        approval.before = Some(before.clone());
+        approval.created = tasks::git(
+            place,
+            &task.worktree,
+            &["rev-list", "--reverse", &format!("{onto}..HEAD")],
+        )?
+        .lines()
+        .map(str::to_string)
+        .collect();
+        let mut done = task.clone();
+        done.restack_from = None;
+        done.updated_at_ms = now_ms();
+        self.store()?.put_task(&done)?;
+        let content = if self.same_tree(&task.id, Some(&before))? {
+            "el contenido no cambió: no hace falta repetir las comprobaciones"
+        } else {
+            "el contenido cambió: Tinto repite las comprobaciones"
+        };
+        Ok(format!(
+            "Rama rebasada sobre {name} ({}) sin los commits de la base fusionada ({}): {} commit(s) propios; {content}. Publícala con el paso push, que reemplaza la rama remota con --force-with-lease.{}",
+            short(&onto),
+            short(from),
+            approval.created.len(),
+            submodules_note(place, &task.worktree)
+        ))
     }
 
     /// Whether the commits of the task's commit step are gone from its
@@ -2363,18 +2573,51 @@ impl DeliveryService {
             .clone()
             .or_else(|| tasks::git(place, &task.repo, &["rev-parse", &tracking]).ok());
         let drift = match remote {
-            None => Some("La rama remota ya no existe"),
+            None => Some("La rama remota ya no existe".to_string()),
             Some(tip)
-                if published.is_some_and(|published| {
-                    published != tip
-                        && !tasks::remote_has(place, &task.repo, &task.branch, &published, &tip)
+                if published.as_ref().is_some_and(|published| {
+                    *published != tip
+                        && !tasks::remote_has(place, &task.repo, &task.branch, published, &tip)
                 }) =>
             {
-                Some("La rama remota cambió fuera de Tinto")
+                // Rewritten outside Tinto from this worktree (re-authored,
+                // restacked): the local branch is the remote one.
+                let local = tasks::head(place, &task.worktree).ok();
+                let published_tree = published
+                    .as_deref()
+                    .and_then(|published| tasks::tree(place, &task.repo, published));
+                if local.as_deref() != Some(tip.as_str()) {
+                    Some("La rama remota cambió fuera de Tinto".to_string())
+                } else if published_tree.is_some()
+                    && published_tree == tasks::tree(place, &task.repo, &tip)
+                {
+                    // Tinto's commits stand on their rewritten copies.
+                    self.commits_lost(task)?;
+                    return self.adopt_push(push, &tip);
+                } else {
+                    Some(format!(
+                        "La rama remota cambió fuera de Tinto: es la rama local ({}), con otro contenido que lo publicado; al pedir el push de nuevo Tinto la adopta y repite las comprobaciones",
+                        short(&tip)
+                    ))
+                }
             }
             Some(_) => None,
         };
-        self.set_drift(push, drift.map(str::to_string))
+        self.set_drift(push, drift)
+    }
+
+    /// The remote branch was rewritten outside Tinto with the content Tinto
+    /// published, and the worktree has it: a pure history rewrite. The push
+    /// stands on the new tip, with nothing to approve or check again.
+    fn adopt_push(&self, mut push: DeliveryApproval, tip: &str) -> Result<(), DeliveryError> {
+        push.outcome = Some(format!(
+            "La rama remota se reescribió fuera de Tinto con el mismo contenido: Tinto adopta {} como publicada",
+            short(tip)
+        ));
+        push.tip = Some(tip.to_string());
+        push.status = DeliveryApprovalStatus::Executed;
+        push.notice = None;
+        self.save_approval(&push, "step_adopted")
     }
 
     /// Marks a done step as no longer matching git or GitHub, with why, or
@@ -2483,6 +2726,11 @@ impl DeliveryService {
                 "el PR #{} no tiene una revisión aprobada",
                 pr.number
             ))
+        } else if task.restack_from.is_some() {
+            Some(format!(
+                "el PR #{} aún lleva los commits de la base que se fusionó reescrita: pide el paso sync (restack) y publica la rama antes de fusionar",
+                pr.number
+            ))
         } else if pr.conflicts {
             Some(format!("el PR #{} tiene conflictos con su base", pr.number))
         } else {
@@ -2563,15 +2811,64 @@ impl DeliveryService {
         let pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
             DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
         })?;
+        // GitHub closes the PRs that go into a branch it deletes: those are
+        // pointed at the merge target first (`delete_merged_branch`).
+        let stacked = !self.stacked_prs(&task)?.is_empty();
         self.github_client()
-            .merge(&pr.url, method, &approval.title, &approval.body)?;
-        Ok(format!(
-            "PR #{} fusionado ({method}) y rama {} borrada en GitHub",
-            pr.number,
-            self.task(&approval.task_id)
-                .map(|task| task.branch)
-                .unwrap_or_default()
-        ))
+            .merge(&pr.url, method, &approval.title, &approval.body, !stacked)?;
+        Ok(match stacked {
+            false => format!(
+                "PR #{} fusionado ({method}) y rama {} borrada en GitHub",
+                pr.number, task.branch
+            ),
+            true => format!(
+                "PR #{} fusionado ({method}); la rama {} se borra en GitHub en cuanto los PRs que van a ella apunten a {}",
+                pr.number,
+                task.branch,
+                pr.base.as_deref().unwrap_or(&task.base_ref)
+            ),
+        })
+    }
+
+    /// The open PRs of the batch that go into the task's branch.
+    fn stacked_prs(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Vec<super::prs::DeliveryPr>, DeliveryError> {
+        let store = self.store()?;
+        let mut stacked = Vec::new();
+        for other in store.tasks()? {
+            if other.id == task.id || other.repo != task.repo {
+                continue;
+            }
+            if let Some(pr) = store
+                .pr(&other.id)?
+                .filter(|pr| pr.is_open() && pr.base.as_deref() == Some(task.branch.as_str()))
+            {
+                stacked.push(pr);
+            }
+        }
+        Ok(stacked)
+    }
+
+    /// After Tinto merged the task's PR keeping its branch: the PRs that go
+    /// into it are pointed where it merged, then the branch is deleted.
+    fn delete_merged_branch(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        if self.stacked_prs(task)?.is_empty() {
+            return Ok(());
+        }
+        self.retarget_packages()?;
+        if !self.stacked_prs(task)?.is_empty() {
+            eprintln!("tinto: delivery kept {}: PRs still go into it", task.branch);
+            return Ok(());
+        }
+        let Some(repo) = super::prs::task_github_repo(task) else {
+            return Ok(());
+        };
+        if let Err(error) = self.github_client().delete_branch(&repo, &task.branch) {
+            eprintln!("tinto: delivery could not delete {}: {error}", task.branch);
+        }
+        Ok(())
     }
 
     pub(super) fn save_approval(
@@ -2630,6 +2927,15 @@ fn run_commit_plan(
             Some(_) => "No se creó ningún commit: el merge en curso cuando se preparó el commit ya no está. Prepáralo de nuevo.",
             None => "No se creó ningún commit: hay un merge en curso que este plan no contemplaba. Prepara de nuevo el commit, que concluirá el merge.",
         }));
+    }
+    if let Some(shown) = &approval.author {
+        let now = tasks::author(place, &task.worktree)?;
+        if now != *shown {
+            return Err(DeliveryError::new(
+                "author_changed",
+                format!("No se creó ningún commit: se aprobó con el autor {shown} y git usaría ahora {now}. Prepáralo de nuevo."),
+            ));
+        }
     }
     check_plan(&changed, &approval.commits, &approval.left_out).map_err(|error| {
         invalid_plan(format!(
@@ -2740,6 +3046,31 @@ fn rewritten(
     match since {
         Some(commits) => Some(commits),
         None => tasks::head(place, worktree).ok().map(|head| vec![head]),
+    }
+}
+
+/// A warning when the commits' author signs none of the base's latest
+/// commits: a wrong identity is cheap to fix before the commit and costly
+/// after (rewriting published history).
+fn author_notice(author: &str, recent: &[String]) -> Option<String> {
+    let email = author.rsplit_once('<')?.1.trim_end_matches('>');
+    if recent.is_empty() || recent.iter().any(|known| known.eq_ignore_ascii_case(email)) {
+        return None;
+    }
+    Some(format!(
+        "Los commits se harán como {author}, que no firma ninguno de los últimos commits de la base (los firman {}). Si no es tu identidad, corrige user.name y user.email (git config) en el repositorio y pide el commit de nuevo",
+        recent.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+    ))
+}
+
+/// Checks out the submodules at the commits the branch now records, after
+/// Tinto moved it (sync, restack), and says so in the step's outcome. A
+/// failure is said too: the next job tries again.
+fn submodules_note(place: Place<'_>, worktree: &std::path::Path) -> String {
+    match tasks::init_submodules(place, worktree, true) {
+        Ok(Some(note)) => format!(". {note}"),
+        Ok(None) => String::new(),
+        Err(error) => format!(". {}", error.message),
     }
 }
 

@@ -4692,11 +4692,12 @@ impl super::prs::GitHub for FakeGitHub {
         method: &str,
         subject: &str,
         _body: &str,
+        delete_branch: bool,
     ) -> Result<(), super::DeliveryError> {
-        self.merged
-            .lock()
-            .unwrap()
-            .push(format!("{url} {method} {subject}"));
+        self.merged.lock().unwrap().push(match delete_branch {
+            true => format!("{url} {method} {subject}"),
+            false => format!("{url} {method} {subject} (branch kept)"),
+        });
         let mut snapshot = self.snapshot.lock().unwrap();
         snapshot["state"] = json!("MERGED");
         Ok(())
@@ -11105,4 +11106,411 @@ fn guides_turn_their_reviewers_comments_into_rules_the_user_approves() {
         ["Falta manejar el timeout", "Los vacíos dicen qué hacer"]
     );
     assert_eq!(read["through"], 4);
+}
+
+/// A bare `origin` with `main` pushed, for tests that publish.
+fn bare_origin(h: &Harness) -> tempfile::TempDir {
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        h.repo.path(),
+        &["remote", "add", "origin", &plain_path(origin.path())],
+    );
+    git(h.repo.path(), &["push", "-q", "origin", "main"]);
+    origin
+}
+
+/// A task created from another task's branch.
+fn task_on(h: &Harness, key: &str, base: &DeliveryTask) -> DeliveryTask {
+    h.service
+        .create_task(NewTask {
+            repo: h.repo.path().to_path_buf(),
+            distro: None,
+            key: key.into(),
+            title: key.into(),
+            read_dirs: Vec::new(),
+            base: Some(base.branch.clone()),
+            branch: None,
+            run_id: None,
+            package: None,
+        })
+        .unwrap()
+}
+
+/// Commits everything changed in the worktree outside Tinto.
+fn commit_outside(task: &DeliveryTask, message: &str) {
+    git(&task.worktree, &["add", "--all"]);
+    git(&task.worktree, &["commit", "-q", "-m", message]);
+}
+
+/// The task's commit and push steps, approved by the user.
+fn commit_and_push(
+    h: &Harness,
+    task: &DeliveryTask,
+    title: &str,
+) -> super::model::DeliveryApproval {
+    let commit = h
+        .service
+        .request_approval(step(task, DeliveryRung::Commit, title))
+        .unwrap();
+    h.service.decide_approval(&commit.id, true, None).unwrap();
+    let push = h
+        .service
+        .request_approval(step(task, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    let push = h.service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(
+        push.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        push.outcome
+    );
+    push
+}
+
+fn latest_push(h: &Harness, task: &DeliveryTask) -> super::model::DeliveryApproval {
+    h.service
+        .store()
+        .unwrap()
+        .approvals()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|step| step.task_id == task.id && step.rung == DeliveryRung::Push)
+        .unwrap()
+}
+
+#[test]
+fn a_branch_rewritten_outside_tinto_is_adopted_when_the_worktree_has_it() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let first = h.task("RW-1");
+    write_files(&first, &["one.txt"]);
+    commit_outside(&first, "one");
+    git(&first.worktree, &["push", "-q", "origin", &first.branch]);
+    let second = task_on(&h, "RW-2", &first);
+    write_files(&second, &["two.txt"]);
+    commit_and_push(&h, &second, "Add two");
+
+    // Re-authored outside Tinto, same content: adopted with a notice, no
+    // push to approve.
+    git(
+        &second.worktree,
+        &[
+            "-c",
+            "user.email=o@o",
+            "commit",
+            "-q",
+            "--amend",
+            "--no-edit",
+            "--reset-author",
+        ],
+    );
+    git(
+        &second.worktree,
+        &["push", "-q", "-f", "origin", &second.branch],
+    );
+    h.service.check_pushes(true).unwrap();
+    let push = latest_push(&h, &second);
+    assert_eq!(
+        push.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        push.notice
+    );
+    assert!(
+        push.outcome.as_deref().unwrap().contains("adopta"),
+        "{:?}",
+        push.outcome
+    );
+    assert_eq!(push.tip, Some(in_worktree(&second, &["rev-parse", "HEAD"])));
+
+    // It syncs the first branch, which then merges into main rewritten
+    // (with main moved on): restacked onto main outside Tinto and pushed.
+    write_files(&first, &["one2.txt"]);
+    commit_outside(&first, "one more");
+    git(&first.worktree, &["push", "-q", "origin", &first.branch]);
+    let sync = h
+        .service
+        .request_approval(step(&second, DeliveryRung::Sync, "Merge first"))
+        .unwrap();
+    assert_eq!(
+        sync.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        sync.outcome
+    );
+    let push = h
+        .service
+        .request_approval(step(&second, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    h.service.decide_approval(&push.id, true, None).unwrap();
+    let repo = h.repo.path();
+    for name in ["one.txt", "one2.txt", "other.txt"] {
+        std::fs::write(repo.join(name), format!("{name}\n")).unwrap();
+    }
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "first, squashed (#1)"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    let mut moved = h.service.task(&second.id).unwrap();
+    moved.base_ref = "main".into();
+    h.service.store().unwrap().put_task(&moved).unwrap();
+    git(&second.worktree, &["fetch", "-q", "origin"]);
+    let old_base = format!("origin/{}", first.branch);
+    git(
+        &second.worktree,
+        &["rebase", "-q", "--onto", "origin/main", &old_base],
+    );
+    git(
+        &second.worktree,
+        &["push", "-q", "-f", "origin", &second.branch],
+    );
+
+    // Other content than published: it stays drifted until a push adopts
+    // it, which the synced commit no longer in the branch does not refuse:
+    // the PR's current base is in it.
+    h.service.check_pushes(true).unwrap();
+    let drifted = latest_push(&h, &second);
+    assert_eq!(drifted.status, DeliveryApprovalStatus::Drifted);
+    assert!(drifted
+        .notice
+        .as_deref()
+        .unwrap()
+        .contains("otro contenido"));
+    let again = h
+        .service
+        .request_approval(step(&second, DeliveryRung::Push, "Adopt"))
+        .unwrap();
+    let again = h.service.decide_approval(&again.id, true, None).unwrap();
+    assert_eq!(
+        again.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        again.outcome
+    );
+    assert!(
+        again.outcome.as_deref().unwrap().contains("adopta"),
+        "{:?}",
+        again.outcome
+    );
+}
+
+#[test]
+fn a_task_on_another_tasks_branch_follows_it_and_is_restacked_when_it_merges_squashed() {
+    let h = harness();
+    let origin = bare_origin(&h);
+    let first = h.task("RS-1");
+    write_files(&first, &["one.txt"]);
+    commit_outside(&first, "one");
+    let second = task_on(&h, "RS-2", &first);
+
+    // Not a package, yet it starts each stage from the first's latest work
+    // until it has its own.
+    write_files(&first, &["one2.txt"]);
+    commit_outside(&first, "one more");
+    let job = h.dispatch(&second, "tests", "events=codex-ok");
+    assert_eq!(h.wait(&job.id).status, DeliveryJobStatus::Finished);
+    assert!(second.worktree.join("one2.txt").exists());
+    git(&first.worktree, &["push", "-q", "origin", &first.branch]);
+    write_files(&second, &["two.txt"]);
+    let published = commit_and_push(&h, &second, "Add two").tip.unwrap();
+
+    // The first merges into main squashed: the second's base moves there
+    // and it is marked for a restack.
+    let repo = h.repo.path();
+    for name in ["one.txt", "one2.txt"] {
+        std::fs::write(repo.join(name), format!("{name}\n")).unwrap();
+    }
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "first (#1)"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    let mut merge = executed_step(&first.id, "merge");
+    merge.merge_method = Some("squash".into());
+    h.service.store().unwrap().put_approval(&merge).unwrap();
+    assert_eq!(h.service.retarget_packages().unwrap(), 1);
+    let moved = h.service.task(&second.id).unwrap();
+    assert_eq!(moved.base_ref, "main");
+    let first_tip = in_worktree(&first, &["rev-parse", "HEAD"]);
+    assert_eq!(moved.restack_from.as_deref(), Some(first_tip.as_str()));
+
+    // The restack waits for the user, then keeps only its own commit.
+    let restack = h
+        .service
+        .request_approval(step(&second, DeliveryRung::Sync, "Restack"))
+        .unwrap();
+    assert_eq!(restack.status, DeliveryApprovalStatus::Pending);
+    let restack = h.service.decide_approval(&restack.id, true, None).unwrap();
+    assert_eq!(
+        restack.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        restack.outcome
+    );
+    assert_eq!(
+        in_worktree(&second, &["rev-parse", "HEAD^"]),
+        in_worktree(&second, &["rev-parse", "origin/main"])
+    );
+    assert_eq!(h.service.task(&second.id).unwrap().restack_from, None);
+
+    // Its push replaces the remote branch while it is what Tinto published.
+    let push = h
+        .service
+        .request_approval(step(&second, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    let push = h.service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(
+        push.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        push.outcome
+    );
+    assert!(push
+        .outcome
+        .as_deref()
+        .unwrap()
+        .contains("force-with-lease"));
+    let remote = super::tasks::git(
+        super::tasks::Place::Native,
+        origin.path(),
+        &["rev-parse", &format!("refs/heads/{}", second.branch)],
+    )
+    .unwrap();
+    assert_eq!(remote, in_worktree(&second, &["rev-parse", "HEAD"]));
+    assert_ne!(remote, published);
+}
+
+#[test]
+fn merging_a_pr_others_go_into_keeps_its_branch_until_they_point_at_the_merge_target() {
+    let h = harness();
+    github_origin(&h);
+    let github = FakeGitHub::new(
+        json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
+            "statusCheckRollup": [], "reviews": [], "comments": [],
+            "baseRefName": "delivery/k-63-1"
+        }),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let first = package(&h, "K-63", 1, None).unwrap();
+    let second = package(&h, "K-63", 2, Some(1)).unwrap();
+    for (task, number) in [(&first, 50), (&second, 51)] {
+        let url = format!("https://github.com/o/r/pull/{number}");
+        let reference = super::prs::parse_pr_url(&url).unwrap();
+        h.service.link_pr(&task.id, &reference).unwrap();
+        h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    }
+    let mut merge = step(&first, DeliveryRung::Merge, "K-63: API (#50)");
+    merge.merge_method = Some("squash".into());
+    let merge = h.service.request_approval(merge).unwrap();
+    let merged = h.service.decide_approval(&merge.id, true, None).unwrap();
+    assert_eq!(
+        merged.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        merged.outcome
+    );
+
+    assert_eq!(
+        github.merged.lock().unwrap().as_slice(),
+        ["https://github.com/o/r/pull/50 squash K-63: API (#50) (branch kept)"]
+    );
+    let actions = github.actions.lock().unwrap().clone();
+    let at = |action: &str| actions.iter().position(|done| done == action);
+    let retargeted = at("base https://github.com/o/r/pull/51 main").expect("retargeted");
+    let deleted = at("delete-branch o/r delivery/k-63-1").expect("deleted");
+    assert!(retargeted < deleted, "{actions:?}");
+    // Squashed: the second still carries the first's commits as they were.
+    assert!(h.service.task(&second.id).unwrap().restack_from.is_some());
+}
+
+#[test]
+fn a_push_publishes_the_head_it_was_asked_for_or_only_tintos_steps_after_it() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let task = h.task("HM-1");
+    let commit = |name: &str| {
+        write_files(&task, &[name]);
+        let commit = h
+            .service
+            .request_approval(step(&task, DeliveryRung::Commit, name))
+            .unwrap();
+        h.service.decide_approval(&commit.id, true, None).unwrap();
+    };
+    commit("a.txt");
+    let push = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    assert_eq!(push.head, Some(in_worktree(&task, &["rev-parse", "HEAD"])));
+
+    // A commit step Tinto ran before the approval goes with it.
+    commit("b.txt");
+    let pushed = h.service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(
+        pushed.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        pushed.outcome
+    );
+    assert!(pushed.outcome.as_deref().unwrap().contains("Tinto añadió"));
+    assert_eq!(pushed.tip, Some(in_worktree(&task, &["rev-parse", "HEAD"])));
+
+    // A commit made outside Tinto meanwhile is not published.
+    commit("c.txt");
+    let push = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    write_files(&task, &["d.txt"]);
+    commit_outside(&task, "outside");
+    let refused = h.service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(refused.status, DeliveryApprovalStatus::Failed);
+    assert!(
+        refused.outcome.as_deref().unwrap().contains("head_moved"),
+        "{:?}",
+        refused.outcome
+    );
+}
+
+#[test]
+fn a_commit_shows_its_author_and_warns_when_the_base_history_has_another() {
+    let h = harness();
+    let task = h.task("AU-1");
+    write_files(&task, &["a.txt"]);
+    let asked = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Commit, "Add a"))
+        .unwrap();
+    assert_eq!(asked.author.as_deref(), Some("t <t@t>"));
+    assert_eq!(asked.notice, None);
+    h.service
+        .withdraw_approval(&asked.id, "other author")
+        .unwrap();
+
+    git(
+        &task.worktree,
+        &["config", "user.email", "me@elsewhere.org"],
+    );
+    let asked = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Commit, "Add a"))
+        .unwrap();
+    assert_eq!(asked.author.as_deref(), Some("t <me@elsewhere.org>"));
+    assert!(
+        asked.notice.as_deref().unwrap().contains("t@t"),
+        "{:?}",
+        asked.notice
+    );
+
+    // Approved, it commits as the author shown or not at all.
+    git(&task.worktree, &["config", "user.email", "t@t"]);
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Failed);
+    assert!(
+        done.outcome.as_deref().unwrap().contains("autor"),
+        "{:?}",
+        done.outcome
+    );
+    assert!(!changed(&task).is_empty());
 }

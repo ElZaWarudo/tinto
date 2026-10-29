@@ -2625,6 +2625,7 @@ pub(crate) mod tests {
             setup: Vec::new(),
             parent: None,
             parent_read_at_ms: None,
+            restack_from: None,
             skip_ci: false,
         }
     }

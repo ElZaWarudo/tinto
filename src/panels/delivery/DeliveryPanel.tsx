@@ -4126,6 +4126,14 @@ function ApprovalBanner({
               Un solo commit porque: {approval.single_commit_reason}
             </p>
           )}
+          {approval.author && (
+            <p className="delivery-job__note" aria-label="Autor de los commits">
+              Autor: {approval.author}
+            </p>
+          )}
+          {pending && approval.notice && (
+            <p className="delivery-tone--danger">{approval.notice}</p>
+          )}
         </>
       ) : (
         <pre className="delivery-banner__text">

@@ -71,6 +71,12 @@ pub struct DeliveryTask {
     /// When `parent` was last read from Jira; never, while `None`.
     #[serde(default)]
     pub parent_read_at_ms: Option<u64>,
+    /// The tip of the branch it was based on, which merged with its commits
+    /// rewritten (squash or rebase): the branch still carries them, so it is
+    /// rebased onto `base_ref` from here (its sync step restacks it) before
+    /// it is published again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restack_from: Option<String>,
 }
 
 /// A task's place among the pull requests of its issue: "2 of 3".
@@ -844,12 +850,21 @@ pub struct DeliveryApproval {
     /// commit, when the merge had no conflicts.
     #[serde(default)]
     pub created: Vec<String>,
-    /// `commit` only: where the branch was before them, to undo the step.
+    /// `commit`: where the branch was before them, to undo the step.
+    /// `sync` that restacked the branch: where it was before the rebase.
     #[serde(default)]
     pub before: Option<String>,
     /// `push` only: the commit the remote branch ended at once published.
     #[serde(default)]
     pub tip: Option<String>,
+    /// `push` only: the branch's HEAD when the push was asked, the commit
+    /// the user approves publishing.
+    #[serde(default)]
+    pub head: Option<String>,
+    /// `commit` only: the author git records on the commits (`Name
+    /// <email>`), from the worktree's git config, as the user approves it.
+    #[serde(default)]
+    pub author: Option<String>,
     /// What Tinto noticed when it checked the step against git and GitHub,
     /// such as a recorded PR URL that is not the branch's PR.
     #[serde(default)]

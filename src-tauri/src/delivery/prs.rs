@@ -735,14 +735,16 @@ pub trait GitHub: Send + Sync {
     fn delete_branch(&self, _repo: &str, _branch: &str) -> Result<(), DeliveryError> {
         Err(offline())
     }
-    /// Merges the PR and deletes its branch on GitHub. `subject` and `body`
-    /// are the merge commit's message (`rebase` has none).
+    /// Merges the PR and, with `delete_branch`, deletes its branch on
+    /// GitHub. `subject` and `body` are the merge commit's message
+    /// (`rebase` has none).
     fn merge(
         &self,
         url: &str,
         method: &str,
         subject: &str,
         body: &str,
+        delete_branch: bool,
     ) -> Result<(), DeliveryError>;
     /// Opens a PR from `head` into `base` (`None`: the repo's default
     /// branch) in `repo` (`owner/name`) and returns its URL.
@@ -957,6 +959,7 @@ impl GitHub for Offline {
         _method: &str,
         _subject: &str,
         _body: &str,
+        _delete_branch: bool,
     ) -> Result<(), DeliveryError> {
         self.pr("").map(|_| ())
     }
@@ -1232,9 +1235,13 @@ impl GitHub for GhCli {
         method: &str,
         subject: &str,
         body: &str,
+        delete_branch: bool,
     ) -> Result<(), DeliveryError> {
         let flag = format!("--{method}");
-        let mut args = vec!["pr", "merge", url, flag.as_str(), "--delete-branch"];
+        let mut args = vec!["pr", "merge", url, flag.as_str()];
+        if delete_branch {
+            args.push("--delete-branch");
+        }
         if method != "rebase" {
             if !subject.trim().is_empty() {
                 args.extend(["--subject", subject]);
@@ -1535,31 +1542,65 @@ impl DeliveryService {
             .unwrap_or_else(|_| Arc::new(Offline))
     }
 
-    /// Once the package a package builds on has merged, the package's PR
-    /// merges where that one did: Tinto points it there (GitHub may have
-    /// done it already, deleting the merged branch). With merge commits the
-    /// PR then shows only its own commits; after a squash or rebase merge it
-    /// would need a rebase, which Tinto leaves to the user.
+    /// The task whose branch this one is based on: the package it builds
+    /// on, or any other active task of the repo whose branch is its base.
+    pub(super) fn base_task(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Option<DeliveryTask>, DeliveryError> {
+        let base = task.base_ref.trim_start_matches("origin/");
+        let store = self.store()?;
+        if let Some(other_id) = task.package.as_ref().and_then(|p| p.builds_on.as_deref()) {
+            return Ok(store.task(other_id)?.filter(|other| other.branch == base));
+        }
+        Ok(store
+            .tasks()?
+            .into_iter()
+            .find(|other| other.id != task.id && other.repo == task.repo && other.branch == base))
+    }
+
+    /// Once the task a task is based on (see `base_task`) has merged, the
+    /// task's PR merges where that one did: Tinto points it there (GitHub
+    /// may have done it already, deleting the merged branch). With merge
+    /// commits the PR then shows only its own commits; after a squash or
+    /// rebase merge the branch still carries the merged commits as they
+    /// were, so it is marked for a restack (`restack_from`), which its next
+    /// sync step does.
     pub fn retarget_packages(&self) -> Result<usize, DeliveryError> {
         let tasks = self.store()?.tasks()?;
         let mut moved = 0;
         for task in &tasks {
-            let Some(other_id) = task.package.as_ref().and_then(|p| p.builds_on.as_deref()) else {
+            let Some(other) = self.base_task(task)? else {
                 continue;
             };
-            let Some(other) = self.store()?.task(other_id)? else {
-                continue;
-            };
-            if task.base_ref == other.base_ref || !self.task_merged(&other)? {
+            if !self.task_merged(&other)? {
                 continue;
             }
-            let squashed = self
+            let rewritten = self
                 .latest_approval(&other.id, DeliveryRung::Merge)?
                 .and_then(|merge| merge.merge_method)
                 .is_some_and(|method| method != "merge");
-            if squashed {
-                continue;
-            }
+            // What the branch has of the merged one: its local branch, else
+            // what Tinto last published of it.
+            let place = Place::of(other.distro.as_deref());
+            let restack_from = match rewritten {
+                false => None,
+                true => tasks::git(
+                    place,
+                    &other.repo,
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--quiet",
+                        &format!("refs/heads/{}", other.branch),
+                    ],
+                )
+                .ok()
+                .filter(|commit| !commit.is_empty())
+                .or(self
+                    .latest_approval(&other.id, DeliveryRung::Push)?
+                    .and_then(|push| push.tip)),
+            };
             let target = other.base_ref.clone();
             let branch = target.trim_start_matches("origin/").to_string();
             let pr = self.task_pr(&task.id)?.filter(DeliveryPr::is_open);
@@ -1574,6 +1615,7 @@ impl DeliveryService {
             let store = self.store()?;
             let mut moved_task = task.clone();
             moved_task.base_ref = target;
+            moved_task.restack_from = restack_from.clone();
             moved_task.updated_at_ms = now_ms();
             store.put_task(&moved_task)?;
             if let Some(mut pr) = pr {
@@ -1585,10 +1627,13 @@ impl DeliveryService {
                 "package_retargeted",
                 Some(&task.id),
                 None,
-                &format!(
-                    "{} se fusionó: este paquete va ahora a {branch}",
-                    other.label()
-                ),
+                &match restack_from {
+                    None => format!("{} se fusionó: esta tarea va ahora a {branch}", other.label()),
+                    Some(_) => format!(
+                        "{} se fusionó reescrita (squash o rebase): esta tarea va ahora a {branch} y necesita un restack; pide el paso sync, que la rebasa sobre {branch}, y después el push",
+                        other.label()
+                    ),
+                },
             )?;
             moved += 1;
         }
