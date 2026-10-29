@@ -3978,6 +3978,8 @@ function ApprovalBanner({
   // The repo's people who can review, or why they could not be read.
   const [candidates, setCandidates] = useState<string[] | null>(null);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
+  // "PR sin revisor" in the repo's settings lets the step go without one.
+  const [reviewerOptional, setReviewerOptional] = useState(false);
   useEffect(() => {
     if (!choosesReviewers) return;
     let live = true;
@@ -3985,12 +3987,20 @@ function ApprovalBanner({
       (logins) => live && setCandidates(logins),
       (cause) => live && setCandidatesError(errorText(cause)),
     );
+    getDeliveryRepoSettings(task.repo).then(
+      (settings) => live && setReviewerOptional(settings.pr_without_reviewer ?? false),
+      () => undefined,
+    );
     return () => {
       live = false;
     };
-  }, [choosesReviewers, task.id]);
+  }, [choosesReviewers, task.id, task.repo]);
   // Without a reviewer nobody can approve the PR, and it cannot be merged.
-  const needsReviewer = choosesReviewers && (candidates?.length ?? 0) > 0 && reviewers.length === 0;
+  const needsReviewer =
+    choosesReviewers &&
+    !reviewerOptional &&
+    (candidates?.length ?? 0) > 0 &&
+    reviewers.length === 0;
   // The PR's description can show the task's QA screenshots.
   const [images, setImages] = useState<DeliveryReplyImage[]>(approval.images ?? []);
   const [shots, setShots] = useState<DeliveryQaScreenshot[]>([]);

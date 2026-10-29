@@ -1324,6 +1324,10 @@ pub struct DeliveryRepoSettings {
     /// queued again once, unless repeating it is not safe.
     #[serde(default)]
     pub retry_on_restart: bool,
+    /// "PR sin revisor": the PR step can be approved without choosing a
+    /// reviewer, for repos where nobody else reviews.
+    #[serde(default)]
+    pub pr_without_reviewer: bool,
     /// The verification commands (`checks`) the user marked as environment
     /// probes: the "Entorno" check runs them (e.g. a database ping).
     #[serde(default)]

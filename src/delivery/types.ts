@@ -620,6 +620,8 @@ export interface DeliveryRepoSettings {
   jira?: DeliveryJiraSettings | null;
   /** "Reintentar al reiniciar": jobs a restart interrupted run again once, when safe. */
   retry_on_restart?: boolean;
+  /** "PR sin revisor": the PR step can be approved without choosing a reviewer. */
+  pr_without_reviewer?: boolean;
   /** The checks the user marked as environment probes, run by the "Entorno" check. */
   environment_probes?: string[];
   /** The reviewers whose comments make the repo's guides. */

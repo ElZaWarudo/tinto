@@ -11,6 +11,7 @@ import type {
   DeliveryDecision,
   DeliveryQaProblem,
   DeliveryQaScreenshot,
+  DeliveryRepoSettings,
   DeliveryJob,
   DeliveryOverview,
   DeliveryPhase,
@@ -47,7 +48,9 @@ const client = vi.hoisted(() => ({
   updateDeliverySettings: vi.fn(),
   releaseDeliveryLease: vi.fn(),
   getDeliveryJobLog: vi.fn(),
-  getDeliveryRepoSettings: vi.fn(),
+  getDeliveryRepoSettings: vi.fn((): Promise<DeliveryRepoSettings> =>
+    Promise.resolve({ worktree_root: null, bootstrap: null, default_base: null }),
+  ),
   setDeliveryRepoSettings: vi.fn(),
   setDeliveryModelCatalog: vi.fn(() => Promise.resolve()),
   openDeliveryTaskInAgents: vi.fn(),
@@ -2510,6 +2513,7 @@ describe("DeliveryPanel", () => {
     const save = await within(settings).findByRole("button", { name: "Guardar" });
     await waitFor(() => expect(save).toBeEnabled());
     await user.click(within(settings).getByRole("checkbox", { name: /^Reintentar al reiniciar/ }));
+    await user.click(within(settings).getByRole("checkbox", { name: /^PR sin revisor/ }));
     await user.click(within(settings).getByRole("checkbox", { name: "pg_isready -h localhost" }));
     expect(within(settings).getByRole("checkbox", { name: "npm test" })).not.toBeChecked();
     await user.type(
@@ -2522,6 +2526,7 @@ describe("DeliveryPanel", () => {
         REPO,
         expect.objectContaining({
           retry_on_restart: true,
+          pr_without_reviewer: true,
           environment_probes: ["pg_isready -h localhost"],
           setup: ["npm --prefix frontend ci", "npm run bindings"],
         }),
@@ -3419,48 +3424,65 @@ describe("DeliveryPanel", () => {
     expect(client.getDeliveryMergeMethod).toHaveBeenCalledWith("t1");
   });
 
-  it("approves the PR step only with a reviewer chosen from GitHub's list", async () => {
-    const user = userEvent.setup();
-    const step = (rung: DeliveryApproval["rung"], status: DeliveryApproval["status"]) => ({
-      id: rung,
-      task_id: "t1",
-      rung,
-      title: rung === "pr" ? "AGOS-501: Fix the thing" : rung,
-      body: "",
-      status,
-      requested_by: "coord",
-      requested_at_ms: 1,
-      decided_at_ms: null,
-      executed_at_ms: null,
-      outcome: null,
-    });
-    client.getDeliveryOverview.mockResolvedValue(
-      overview({
-        approvals: [step("commit", "executed"), step("push", "executed"), step("pr", "pending")],
-      }),
-    );
-    client.getDeliveryPrReviewers.mockResolvedValueOnce(["ana", "luis"]);
-    client.decideDeliveryApproval.mockResolvedValue({});
-    renderPanel();
-    const banner = await openStep("Revisar PR", "pr");
-    const reviewers = within(banner).getByRole("group", { name: "Revisores" });
-    const approve = within(banner).getByRole("button", { name: "Aprobar y abrir el PR" });
-    await within(reviewers).findByRole("checkbox", { name: "ana" });
-    expect(approve).toBeDisabled();
-    await user.click(within(reviewers).getByRole("checkbox", { name: "luis" }));
-    await user.click(approve);
-    await waitFor(() =>
-      expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
-        "pr",
-        true,
-        undefined,
-        ["luis"],
-        undefined,
-        [],
-      ),
-    );
-    expect(client.getDeliveryPrReviewers).toHaveBeenCalledWith("t1");
-  });
+  it.each([
+    { optional: false, chosen: ["luis"] },
+    { optional: true, chosen: [] },
+  ])(
+    "approves the PR step with a reviewer from GitHub's list, or without one when the repo allows it ($optional)",
+    async ({ optional, chosen }) => {
+      const user = userEvent.setup();
+      const step = (rung: DeliveryApproval["rung"], status: DeliveryApproval["status"]) => ({
+        id: rung,
+        task_id: "t1",
+        rung,
+        title: rung === "pr" ? "AGOS-501: Fix the thing" : rung,
+        body: "",
+        status,
+        requested_by: "coord",
+        requested_at_ms: 1,
+        decided_at_ms: null,
+        executed_at_ms: null,
+        outcome: null,
+      });
+      client.getDeliveryOverview.mockResolvedValue(
+        overview({
+          approvals: [step("commit", "executed"), step("push", "executed"), step("pr", "pending")],
+        }),
+      );
+      client.getDeliveryPrReviewers.mockResolvedValueOnce(["ana", "luis"]);
+      client.getDeliveryRepoSettings.mockResolvedValueOnce({
+        worktree_root: null,
+        bootstrap: null,
+        default_base: null,
+        pr_without_reviewer: optional,
+      });
+      client.decideDeliveryApproval.mockResolvedValue({});
+      renderPanel();
+      const banner = await openStep("Revisar PR", "pr");
+      const reviewers = within(banner).getByRole("group", { name: "Revisores" });
+      const approve = within(banner).getByRole("button", { name: "Aprobar y abrir el PR" });
+      await within(reviewers).findByRole("checkbox", { name: "ana" });
+      await waitFor(() => expect(client.getDeliveryRepoSettings).toHaveBeenCalledWith(REPO));
+      if (optional) {
+        await waitFor(() => expect(approve).toBeEnabled());
+      } else {
+        expect(approve).toBeDisabled();
+        await user.click(within(reviewers).getByRole("checkbox", { name: "luis" }));
+      }
+      await user.click(approve);
+      await waitFor(() =>
+        expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
+          "pr",
+          true,
+          undefined,
+          chosen,
+          undefined,
+          [],
+        ),
+      );
+      expect(client.getDeliveryPrReviewers).toHaveBeenCalledWith("t1");
+    },
+  );
 
   it("shows every pending reply to a reviewer in one place, with the user's style, and posts the edited texts", async () => {
     const user = userEvent.setup();

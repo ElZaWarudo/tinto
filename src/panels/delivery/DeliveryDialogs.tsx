@@ -841,6 +841,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
   const [maxLines, setMaxLines] = useState("");
   const [stages, setStages] = useState<Record<string, DeliveryStageAgent>>({});
   const [retryOnRestart, setRetryOnRestart] = useState(false);
+  const [prWithoutReviewer, setPrWithoutReviewer] = useState(false);
   const [probes, setProbes] = useState<string[]>([]);
   const [jiraHost, setJiraHost] = useState("");
   const [jiraProject, setJiraProject] = useState("");
@@ -890,6 +891,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         );
         setStages(settings.stages ?? {});
         setRetryOnRestart(settings.retry_on_restart ?? false);
+        setPrWithoutReviewer(settings.pr_without_reviewer ?? false);
         setProbes(settings.environment_probes ?? []);
         setJiraHost(settings.jira?.host ?? "");
         setJiraProject(settings.jira?.project ?? "");
@@ -1081,6 +1083,20 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
           </small>
         </span>
       </label>
+      <label className="delivery-check">
+        <input
+          type="checkbox"
+          checked={prWithoutReviewer}
+          onChange={(event) => setPrWithoutReviewer(event.target.checked)}
+        />
+        <span>
+          PR sin revisor
+          <small>
+            Puedes aprobar el paso PR sin elegir revisor, para repositorios donde nadie más revisa.
+            Tinto sigue sin fusionar un PR que no tenga una revisión aprobada.
+          </small>
+        </span>
+      </label>
       <div className="delivery-field">
         <span className="delivery-field__label">Sondas de entorno</span>
         {(loaded?.checks ?? []).length === 0 ? (
@@ -1240,6 +1256,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
               single_commit_max_lines: positive(maxLines),
               stages,
               retry_on_restart: retryOnRestart,
+              pr_without_reviewer: prWithoutReviewer,
               environment_probes: probes,
               jira: jiraHost.trim()
                 ? {
