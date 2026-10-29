@@ -735,6 +735,12 @@ pub async fn delivery_pr_reviewers(
 
 /// Asks reviewers for a review (again) or takes their request back on the
 /// task's open PR.
+/// The models OpenCode offers on this machine, for the stages' pickers.
+#[tauri::command]
+pub async fn delivery_opencode_models() -> Result<Vec<String>, CommandError> {
+    blocking(super::adapters::opencode_models).await
+}
+
 /// Approves several replies at once; they are posted in the background.
 #[tauri::command]
 pub async fn delivery_approve_replies(
@@ -1125,17 +1131,17 @@ pub async fn delivery_open_job_in_agents(
     job_id: String,
 ) -> Result<DeliveryConversation, CommandError> {
     let job = service.job(&job_id).map_err(CommandError::from)?;
-    let agent_type = match job.agent {
-        DeliveryAgent::Codex => "codex",
-        DeliveryAgent::Claude => "claude",
-        DeliveryAgent::Muse => "muse",
-        DeliveryAgent::Shell => {
-            return Err(CommandError::new(
+    let agent_type =
+        match job.agent {
+            DeliveryAgent::Codex => "codex",
+            DeliveryAgent::Claude => "claude",
+            DeliveryAgent::Muse => "muse",
+            DeliveryAgent::Opencode => "opencode",
+            DeliveryAgent::Shell => return Err(CommandError::new(
                 "resume_unsupported",
-                "Agents solo puede continuar trabajos de Codex, Claude Code o Muse Code",
-            ))
-        }
-    };
+                "Agents solo puede continuar trabajos de Codex, Claude Code, Muse Code u OpenCode",
+            )),
+        };
     if job.status.is_open() {
         return Err(CommandError::new(
             "job_open",

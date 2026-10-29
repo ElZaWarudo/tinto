@@ -105,6 +105,7 @@ fn fake_launcher() -> Launcher {
                 wsl_job: None,
                 note: None,
                 files: Vec::new(),
+                env: Vec::new(),
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -146,6 +147,7 @@ fn fake_launcher() -> Launcher {
                 wsl_job: None,
                 note: None,
                 files: Vec::new(),
+                env: Vec::new(),
             })
         }
     })

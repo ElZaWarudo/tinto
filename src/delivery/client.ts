@@ -313,6 +313,9 @@ export const getDeliveryQaScreenshots = (taskId: string) =>
   invoke<DeliveryQaScreenshot[]>("delivery_qa_screenshots", { taskId });
 
 /** Asks for a review (again) or takes requests back on the task's open PR. */
+/** The models OpenCode offers on this machine, as `provider/model`. */
+export const getOpencodeModels = () => invoke<string[]>("delivery_opencode_models");
+
 /** Approves several replies with the user's texts; Tinto posts them one
  *  after another in the background, then asks `rerequest` to review again. */
 export const approveDeliveryReplies = (

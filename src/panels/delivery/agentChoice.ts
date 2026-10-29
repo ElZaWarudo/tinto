@@ -20,9 +20,39 @@ const CLAUDE_MODELS: Choice[] = [
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const CODEX_FALLBACK_EFFORTS = ["low", "medium", "high"];
 
+/** Where the models OpenCode last listed are kept, for the pickers to have
+ *  them before it answers again. */
+const OPENCODE_MODELS_KEY = "tinto.delivery.opencodeModels";
+
+/** Keeps the models OpenCode listed on this machine. */
+export function rememberOpencodeModels(models: string[]) {
+  try {
+    localStorage.setItem(OPENCODE_MODELS_KEY, JSON.stringify(models));
+  } catch {
+    // Without storage the pickers offer OpenCode's default only.
+  }
+}
+
+function opencodeModels(): string[] {
+  try {
+    const stored = JSON.parse(localStorage.getItem(OPENCODE_MODELS_KEY) ?? "[]");
+    return Array.isArray(stored) ? stored.filter((model) => typeof model === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** The models an agent offers. Codex's and Muse Code's come from the catalog
- *  Agents keeps; Sol 6.1 is Codex's default when the account has it. */
+ *  Agents keeps; Sol 6.1 is Codex's default when the account has it.
+ *  OpenCode's are what it lists on this machine. */
 export function modelChoices(agent: DeliveryAgent): { choices: Choice[]; preferred: string } {
+  if (agent === "opencode") {
+    const choices = [
+      { value: "", label: "Predeterminado" },
+      ...opencodeModels().map((model) => ({ value: model, label: model })),
+    ];
+    return { choices, preferred: "" };
+  }
   if (agent !== "codex" && agent !== "muse") return { choices: CLAUDE_MODELS, preferred: "" };
   const catalog = lastRuntimeCatalog(agent);
   const models = catalog?.models ?? [];
@@ -51,6 +81,9 @@ export function effortChoices(
   agent: DeliveryAgent,
   model: string,
 ): { choices: Choice[]; preferred: string } {
+  // OpenCode's effort is a variant each provider names its own way: the
+  // model's default, unless a coordinator names one.
+  if (agent === "opencode") return { choices: [{ value: "", label: "Del modelo" }], preferred: "" };
   const values =
     agent === "codex" || agent === "muse"
       ? (lastRuntimeCatalog(agent)
@@ -75,7 +108,9 @@ export interface AgentChoice {
  *  where this machine offers them, the preferred ones otherwise. */
 export function agentChoice(from: DeliveryStageAgent | null | undefined): AgentChoice {
   const agent =
-    from?.agent === "claude" || from?.agent === "muse" ? from.agent : ("codex" as const);
+    from?.agent === "claude" || from?.agent === "muse" || from?.agent === "opencode"
+      ? from.agent
+      : ("codex" as const);
   const models = modelChoices(agent);
   const wanted = from?.agent === agent ? (from.model ?? "") : null;
   const model = models.choices.some((choice) => choice.value === wanted)

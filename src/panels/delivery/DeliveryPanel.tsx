@@ -76,6 +76,7 @@ import {
   getDeliveryQaScreenshots,
   getDeliveryJobLog,
   getDeliveryOverview,
+  getOpencodeModels,
   getDeliveryRepoSettings,
   onDeliveryChanged,
   openDeliveryJobInAgents,
@@ -196,6 +197,7 @@ import { ExternalLink } from "./ExternalLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
 import { GrowingTextarea } from "./GrowingTextarea";
+import { rememberOpencodeModels } from "./agentChoice";
 
 type Dialog =
   | { kind: "new-task" }
@@ -562,7 +564,9 @@ function agentName(agent: string): string {
       ? "Claude Code"
       : agent === "muse"
         ? "Muse Code"
-        : "Shell";
+        : agent === "opencode"
+          ? "OpenCode"
+          : "Shell";
 }
 
 /** The model and reasoning a stage runs with, named even when they are the defaults. */
@@ -731,6 +735,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
       const catalog = lastRuntimeCatalog(provider);
       if (catalog) tellDelivery(provider, catalog);
     }
+    // OpenCode lists its own; without it installed the pickers keep its default.
+    getOpencodeModels().then(rememberOpencodeModels, () => undefined);
   }, []);
 
   useEffect(() => {

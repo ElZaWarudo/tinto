@@ -255,6 +255,8 @@ pub enum DeliveryAgent {
     Claude,
     /// Muse Code, headless through `muse exec --json`.
     Muse,
+    /// OpenCode, headless through `opencode run --format json`.
+    Opencode,
     /// A plain shell command (bootstrap, checks); no snapshot, no result.
     Shell,
 }
@@ -575,6 +577,21 @@ pub struct DeliveryUsage {
     pub output_tokens: u64,
     /// Millionths of a dollar (Claude Code reports the cost; Codex does not).
     pub cost_micro_usd: Option<u64>,
+}
+
+impl DeliveryUsage {
+    /// Both together: an agent that reports each step's use.
+    pub fn plus(&self, other: &DeliveryUsage) -> DeliveryUsage {
+        DeliveryUsage {
+            input_tokens: self.input_tokens + other.input_tokens,
+            cached_tokens: self.cached_tokens + other.cached_tokens,
+            output_tokens: self.output_tokens + other.output_tokens,
+            cost_micro_usd: match (self.cost_micro_usd, other.cost_micro_usd) {
+                (None, None) => None,
+                (left, right) => Some(left.unwrap_or(0) + right.unwrap_or(0)),
+            },
+        }
+    }
 }
 
 /// Where a job's time went, from its agent's output.

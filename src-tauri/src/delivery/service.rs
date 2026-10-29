@@ -94,7 +94,7 @@ fn catalog_setting(agent: DeliveryAgent) -> Option<&'static str> {
     match agent {
         DeliveryAgent::Codex => Some("codex_models"),
         DeliveryAgent::Muse => Some("muse_models"),
-        DeliveryAgent::Claude | DeliveryAgent::Shell => None,
+        DeliveryAgent::Claude | DeliveryAgent::Opencode | DeliveryAgent::Shell => None,
     }
 }
 
@@ -1778,9 +1778,12 @@ impl DeliveryService {
                 None => timeout,
             });
         // The checks the job is given. Codex's sandbox must also be
-        // able to start their programs.
+        // able to start their programs; OpenCode's rules allow them.
         let allowed_commands = match (request.agent, request.access) {
-            (DeliveryAgent::Claude | DeliveryAgent::Codex, DeliveryAccess::Workspace) => {
+            (
+                DeliveryAgent::Claude | DeliveryAgent::Codex | DeliveryAgent::Opencode,
+                DeliveryAccess::Workspace,
+            ) => {
                 let mut commands = settings.checks;
                 if qa {
                     commands.extend(settings.qa_commands);
@@ -2670,6 +2673,7 @@ impl DeliveryService {
         command
             .args(&launch.args)
             .envs(&job.check_env)
+            .envs(launch.env.iter().cloned())
             .stdin(std::fs::File::open(&stdin_path).map_err(DeliveryError::io)?)
             .stdout(std::fs::File::create(&paths.events).map_err(DeliveryError::io)?)
             .stderr(std::fs::File::create(&paths.stderr).map_err(DeliveryError::io)?);
@@ -2788,7 +2792,11 @@ impl DeliveryService {
                 let one = adapters::observe(agent, &line);
                 seen.activity = one.activity.or(seen.activity.take());
                 seen.plan = one.plan.or(seen.plan.take());
-                seen.usage = one.usage.or(seen.usage.take());
+                seen.usage = match (agent, one.usage, seen.usage.take()) {
+                    // OpenCode reports each step's tokens, not the total.
+                    (DeliveryAgent::Opencode, Some(step), Some(before)) => Some(before.plus(&step)),
+                    (_, one, before) => one.or(before),
+                };
                 if let Some(command) = clock.line(agent, &line, now_ms()) {
                     seen.command = Some(command);
                 }
@@ -3327,7 +3335,10 @@ impl DeliveryService {
                     job.plan = plan;
                 }
                 if let Some(usage) = seen.usage {
-                    job.usage = Some(usage);
+                    job.usage = Some(match (job.agent, &job.usage) {
+                        (DeliveryAgent::Opencode, Some(before)) => before.plus(&usage),
+                        _ => usage,
+                    });
                 }
                 if let Some(command) = seen.command {
                     // A command that ends is the agent's turn again.
@@ -3539,6 +3550,9 @@ impl DeliveryService {
             ..timing
         });
         job.reverted = reverted;
+        if outcome.usage.is_some() {
+            job.usage = outcome.usage.clone();
+        }
         if outcome.provider_session_id.is_some() {
             job.provider_session_id = outcome.provider_session_id.clone();
         }
@@ -4311,6 +4325,7 @@ pub(crate) fn agent_name(agent: DeliveryAgent) -> &'static str {
         DeliveryAgent::Codex => "Codex",
         DeliveryAgent::Claude => "Claude Code",
         DeliveryAgent::Muse => "Muse Code",
+        DeliveryAgent::Opencode => "OpenCode",
         DeliveryAgent::Shell => "Shell",
     }
 }

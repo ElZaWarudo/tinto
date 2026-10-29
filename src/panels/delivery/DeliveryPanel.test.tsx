@@ -93,6 +93,7 @@ const client = vi.hoisted(() => ({
   collectDeliveryGuideComments: vi.fn(),
   requestDeliveryGuide: vi.fn(),
   decideDeliveryGuide: vi.fn(),
+  getOpencodeModels: vi.fn(() => Promise.resolve([])),
   approveDeliveryReplies: vi.fn(),
   changeDeliveryPrReviewers: vi.fn(),
   correctDeliveryApproval: vi.fn(),

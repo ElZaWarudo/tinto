@@ -433,6 +433,7 @@ export function DispatchDialog({
             <option value="codex">Codex</option>
             <option value="claude">Claude Code</option>
             <option value="muse">Muse Code</option>
+            <option value="opencode">OpenCode</option>
           </select>
         </Field>
       </div>
@@ -767,6 +768,7 @@ export function StageAgentRow({
           <option value="codex">Codex</option>
           <option value="claude">Claude Code</option>
           <option value="muse">Muse Code</option>
+          <option value="opencode">OpenCode</option>
         </select>
       </Field>
       {shown && (

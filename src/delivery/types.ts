@@ -76,7 +76,7 @@ export interface DeliverySlowCommand {
   at_ceiling: number;
 }
 
-export type DeliveryAgent = "codex" | "claude" | "muse" | "shell";
+export type DeliveryAgent = "codex" | "claude" | "muse" | "opencode" | "shell";
 export type DeliveryAccess = "workspace" | "full";
 export type DeliveryResultState = "accepted" | "stale" | "invalid";
 export type DeliveryLeaseState = "free" | "active" | "quarantined";

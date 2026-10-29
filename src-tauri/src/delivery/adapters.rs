@@ -116,6 +116,9 @@ pub struct JobLaunch {
     pub note: Option<String>,
     /// Files the job needs in its folder, written when it starts.
     pub files: Vec<JobFile>,
+    /// Variables the agent starts with (a job on this machine's filesystem;
+    /// a WSL job exports them in its script).
+    pub env: Vec<(String, String)>,
 }
 
 /// A file a job needs, as its path and contents.
@@ -444,6 +447,15 @@ pub fn launch(
             };
             muse_launch(job, task, paths, native)
         }
+        DeliveryAgent::Opencode => {
+            let native = match task.distro {
+                Some(_) => None,
+                None => Some(crate::agent_console::validation::resolve_agent_binary(
+                    "opencode",
+                )?),
+            };
+            opencode_launch(job, task, paths, native)
+        }
         DeliveryAgent::Shell => shell_launch(job, task, paths),
     }
 }
@@ -457,6 +469,9 @@ pub fn installed_on_windows(agent: DeliveryAgent) -> bool {
         DeliveryAgent::Claude => claude_binary().is_some(),
         DeliveryAgent::Muse => {
             crate::agent_console::validation::resolve_agent_binary("muse").is_ok()
+        }
+        DeliveryAgent::Opencode => {
+            crate::agent_console::validation::resolve_agent_binary("opencode").is_ok()
         }
         DeliveryAgent::Shell => true,
     }
@@ -759,6 +774,7 @@ fn codex_launch(
                 wsl_job: None,
                 note: plan.note.clone(),
                 files: Vec::new(),
+                env: Vec::new(),
             })
         }
         Some(distro) => {
@@ -893,6 +909,7 @@ fn muse_launch(
                 wsl_job: None,
                 note: None,
                 files: Vec::new(),
+                env: Vec::new(),
             })
         }
         (None, Some(distro)) => {
@@ -914,6 +931,241 @@ fn muse_launch(
             "no se encontró Muse Code en este equipo",
         )),
     }
+}
+
+/// Where OpenCode reads a job's settings from: its permission rules.
+const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+
+/// OpenCode has no flag for a result schema: its last message must be the
+/// result itself, which [`read_outcome`] takes out of it.
+fn opencode_result_note() -> String {
+    format!(
+        "Your final message must be only the structured result: one JSON object, without prose or code fences around it, that matches this JSON schema:\n{RESULT_SCHEMA}"
+    )
+}
+
+/// `opencode run --format json`, the prompt on stdin. OpenCode names its
+/// session, which the first event gives; a job it continues passes it back.
+/// Its permission rules go in [`OPENCODE_CONFIG_ENV`] (see
+/// [`opencode_permissions`]).
+fn opencode_launch(
+    job: &DeliveryJob,
+    task: &DeliveryTask,
+    paths: &JobPaths,
+    native: Option<PathBuf>,
+) -> Result<JobLaunch, DeliveryError> {
+    let resume = resumed_session(job)?;
+    let from_wsl = native.is_none();
+    let prompt = match resume {
+        Some(_) => resume_prompt(job),
+        None => format!(
+            "{}\n\n{}",
+            job_prompt(job, task, paths, from_wsl, &[]),
+            opencode_result_note()
+        ),
+    };
+    let worktree = if from_wsl {
+        task.worktree.to_string_lossy().to_string()
+    } else {
+        plain_path(&task.worktree)
+    };
+    let mut args: Vec<String> = ["run", "--format", "json"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if let Some(session) = resume {
+        args.extend(["--session".to_string(), session.to_string()]);
+    }
+    if let Some(model) = job.model.as_deref() {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    // OpenCode's reasoning effort is the model's variant.
+    if let Some(effort) = job.reasoning.as_deref() {
+        args.extend(["--variant".to_string(), effort.to_string()]);
+    }
+    let config =
+        serde_json::json!({ "permission": opencode_permissions(job, paths, &worktree, from_wsl) })
+            .to_string();
+    match (native, task.distro.as_deref()) {
+        (Some(program), _) => Ok(JobLaunch {
+            program,
+            args,
+            cwd: Some(PathBuf::from(worktree)),
+            stdin: prompt,
+            provider_session_id: resume.map(str::to_string),
+            wsl_job: None,
+            note: None,
+            files: Vec::new(),
+            env: vec![(OPENCODE_CONFIG_ENV.to_string(), config)],
+        }),
+        (None, Some(distro)) => {
+            let script = format!(
+                "export {OPENCODE_CONFIG_ENV}={}; exec opencode {}",
+                sh_quote(&config),
+                args.iter()
+                    .map(|arg| sh_quote(arg))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            wsl_launch(
+                distro,
+                &worktree,
+                script,
+                prompt,
+                resume.map(str::to_string),
+                job,
+            )
+        }
+        (None, None) => Err(DeliveryError::new(
+            "binary_not_found",
+            "no se encontró OpenCode en este equipo",
+        )),
+    }
+}
+
+/// The models OpenCode offers on this machine (`provider/model`), as
+/// `opencode models` lists them.
+pub fn opencode_models() -> Result<Vec<String>, DeliveryError> {
+    let binary = crate::agent_console::validation::resolve_agent_binary("opencode")?;
+    let output = std::process::Command::new(binary)
+        .arg("models")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(DeliveryError::io)?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains('/') && !line.contains(' '))
+        .map(str::to_string)
+        .collect())
+}
+
+/// Commands a read-only OpenCode job may run besides the repo's checks.
+const OPENCODE_READ_COMMANDS: [&str; 13] = [
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "rg",
+    "find",
+    "pwd",
+    "git status",
+    "git diff",
+    "git log",
+    "git show",
+];
+
+/// What an OpenCode job may do, as OpenCode's permission rules: OpenCode
+/// has no sandbox of its own, so these are its only fence.
+///
+/// - Full access: everything.
+/// - A job that writes: any edit in the worktree and any command but
+///   Tinto's own steps (the deny list Claude jobs get).
+/// - A read-only job (review, QA, explore): no edits and only the repo's
+///   checks and a few commands that read; QA may write in its QA folder.
+/// - Outside the worktree only the folders it may read or, for QA, write.
+///
+/// Edit rules name a path from the worktree; folders outside it are also
+/// named whole for `external_directory`. A rule for one path or command
+/// comes after the `*` it narrows.
+fn opencode_permissions(
+    job: &DeliveryJob,
+    paths: &JobPaths,
+    worktree: &str,
+    from_wsl: bool,
+) -> Value {
+    if job.access == DeliveryAccess::Full {
+        return serde_json::json!({
+            "edit": "allow", "bash": "allow", "webfetch": "allow", "external_directory": "allow",
+        });
+    }
+    let worktree = worktree.replace('\\', "/");
+    let mut edit = serde_json::Map::new();
+    let mut bash = serde_json::Map::new();
+    let mut outside = serde_json::Map::new();
+    let rule = |map: &mut serde_json::Map<String, Value>, key: String, action: &str| {
+        map.insert(key, Value::from(action));
+    };
+    let read_only = !job.writes;
+    rule(
+        &mut edit,
+        "*".into(),
+        if read_only { "deny" } else { "allow" },
+    );
+    rule(
+        &mut bash,
+        "*".into(),
+        if read_only { "deny" } else { "allow" },
+    );
+    rule(&mut outside, "*".into(), "deny");
+    if read_only {
+        for command in OPENCODE_READ_COMMANDS
+            .iter()
+            .map(|command| command.to_string())
+            .chain(job.allowed_commands.iter().cloned())
+        {
+            rule(&mut bash, format!("{command} *"), "allow");
+            rule(&mut bash, command, "allow");
+        }
+    }
+    for dir in job.read_dirs.iter().map(|dir| agent_path(dir, from_wsl)) {
+        rule(
+            &mut edit,
+            format!("{}/**", relative_path(&worktree, &dir)),
+            "deny",
+        );
+        rule(&mut outside, format!("{dir}/**"), "allow");
+        rule(&mut outside, dir, "allow");
+    }
+    if job.role == QA_ROLE {
+        let writable = [qa_folder(paths, from_wsl)]
+            .into_iter()
+            .chain(job.write_dirs.iter().map(|dir| agent_path(dir, from_wsl)));
+        for dir in writable {
+            rule(
+                &mut edit,
+                format!("{}/**", relative_path(&worktree, &dir)),
+                "allow",
+            );
+            rule(&mut outside, format!("{dir}/**"), "allow");
+            rule(&mut outside, dir, "allow");
+        }
+    }
+    for command in CLAUDE_DENIED {
+        rule(&mut bash, format!("{command} *"), "deny");
+        rule(&mut bash, command.to_string(), "deny");
+        if let Some(rest) = command.strip_prefix("git ") {
+            rule(&mut bash, format!("git -C {worktree} {rest} *"), "deny");
+        }
+    }
+    serde_json::json!({
+        "edit": edit,
+        "bash": bash,
+        "external_directory": outside,
+        "webfetch": if job.role == QA_ROLE { "allow" } else { "deny" },
+    })
+}
+
+/// `path` as seen from `base`, both absolute with `/`: `../qa/K-1` for a
+/// folder beside the worktree.
+fn relative_path(base: &str, path: &str) -> String {
+    let parts = |path: &str| -> Vec<String> {
+        path.split('/')
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let (base, path) = (parts(base), parts(path));
+    let common = base
+        .iter()
+        .zip(&path)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = vec!["..".to_string(); base.len() - common];
+    relative.extend(path[common..].iter().cloned());
+    relative.join("/")
 }
 
 fn claude_launch(
@@ -1001,6 +1253,7 @@ fn claude_launch(
             wsl_job: None,
             note: None,
             files,
+            env: Vec::new(),
         });
     }
     let (distro, cwd) = match task.distro.as_deref() {
@@ -1363,6 +1616,7 @@ fn shell_launch(
         wsl_job: None,
         note: None,
         files: Vec::new(),
+        env: Vec::new(),
     })
 }
 
@@ -1411,6 +1665,7 @@ fn wsl_launch(
         wsl_job: Some(wsl_job),
         note: None,
         files: Vec::new(),
+        env: Vec::new(),
     })
 }
 
@@ -1488,6 +1743,9 @@ pub struct JobOutcome {
     pub result: Option<DeliveryJobResult>,
     /// Why the final answer was not a valid result.
     pub result_error: Option<String>,
+    /// The whole job's use, for an agent that reports it step by step: the
+    /// sum the view kept as it ran may have read lines twice after a restart.
+    pub usage: Option<DeliveryUsage>,
 }
 
 pub fn session_id_from_line(agent: DeliveryAgent, line: &str) -> Option<String> {
@@ -1502,6 +1760,8 @@ pub fn session_id_from_line(agent: DeliveryAgent, line: &str) -> Option<String> 
         DeliveryAgent::Muse => (value.pointer("/stream/kind") == Some(&Value::from("session")))
             .then(|| value.pointer("/stream/id")?.as_str().map(str::to_string))
             .flatten(),
+        // Every OpenCode event names its session.
+        DeliveryAgent::Opencode => value["sessionID"].as_str().map(str::to_string),
         DeliveryAgent::Shell => None,
     }
 }
@@ -1637,6 +1897,31 @@ pub fn observe(agent: DeliveryAgent, line: &str) -> Observation {
                 });
             (plan, None)
         }
+        DeliveryAgent::Opencode => {
+            let part = &value["part"];
+            let plan = (value["type"] == "tool_use" && part["tool"] == "todowrite")
+                .then(|| part.pointer("/state/input/todos")?.as_array())
+                .flatten()
+                .map(|todos| {
+                    todos
+                        .iter()
+                        .map(|todo| DeliveryPlanItem {
+                            text: todo["content"].as_str().unwrap_or_default().to_string(),
+                            status: todo["status"].as_str().unwrap_or("pending").to_string(),
+                        })
+                        .collect()
+                });
+            // One step's tokens: the service adds the steps up.
+            let usage = (value["type"] == "step_finish").then(|| DeliveryUsage {
+                input_tokens: count("/part/tokens/input") + count("/part/tokens/cache/write"),
+                cached_tokens: count("/part/tokens/cache/read"),
+                output_tokens: count("/part/tokens/output") + count("/part/tokens/reasoning"),
+                cost_micro_usd: part["cost"]
+                    .as_f64()
+                    .map(|usd| (usd * 1_000_000.0).round() as u64),
+            });
+            (plan, usage)
+        }
         DeliveryAgent::Shell => (None, None),
     };
     Observation {
@@ -1744,6 +2029,14 @@ impl JobClock {
                     "tool_batch.effect.terminal" => self.end(id, at_ms, false),
                     _ => {}
                 }
+            }
+            // OpenCode tells of a tool call once it ended, with its times.
+            DeliveryAgent::Opencode if value["type"] == "tool_use" => {
+                let part = &value["part"];
+                let id = part["callID"].as_str().unwrap_or_default();
+                let time = |key: &str| part["state"]["time"][key].as_u64().unwrap_or(at_ms);
+                self.start(id, &opencode_tool_summary(part), time("start"));
+                self.end(id, time("end"), false);
             }
             _ => {}
         }
@@ -1978,8 +2271,75 @@ pub fn log_entries(agent: DeliveryAgent, line: &str) -> Vec<DeliveryLogEntry> {
                 _ => Vec::new(),
             }
         }
+        DeliveryAgent::Opencode => {
+            let part = &value["part"];
+            match value["type"].as_str() {
+                Some("text") => part["text"]
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty())
+                    .map(|text| vec![entry("message", text.to_string())])
+                    .unwrap_or_default(),
+                Some("tool_use") if part["state"]["status"] == "error" => vec![entry(
+                    "info",
+                    format!(
+                        "No se pudo {}: {}",
+                        opencode_tool_summary(part),
+                        part["state"]["error"]
+                            .as_str()
+                            .and_then(|error| error.lines().next())
+                            .unwrap_or("sin detalle")
+                    ),
+                )],
+                Some("tool_use") => vec![entry("command", opencode_tool_summary(part))],
+                Some("error") => vec![entry("error", opencode_error(&value))],
+                _ => Vec::new(),
+            }
+        }
         DeliveryAgent::Shell => Vec::new(),
     }
+}
+
+/// OpenCode tools that only read; any other may have changed something.
+const OPENCODE_READ_TOOLS: [&str; 9] = [
+    "read",
+    "glob",
+    "grep",
+    "list",
+    "todoread",
+    "todowrite",
+    "webfetch",
+    "websearch",
+    "codesearch",
+];
+
+/// An OpenCode tool call in one line: its command, else the tool and what
+/// it was on.
+fn opencode_tool_summary(part: &Value) -> String {
+    let input = &part["state"]["input"];
+    let tool = part["tool"].as_str().unwrap_or("herramienta");
+    match input["command"].as_str() {
+        Some(command) => command.to_string(),
+        None => match input["filePath"]
+            .as_str()
+            .or_else(|| input["pattern"].as_str())
+            .or_else(|| input["path"].as_str())
+        {
+            Some(detail) => format!("{tool}: {detail}"),
+            None => tool.to_string(),
+        },
+    }
+}
+
+/// Why an OpenCode run failed, from its `error` event.
+fn opencode_error(value: &Value) -> String {
+    let error = &value["error"];
+    error["data"]["message"]
+        .as_str()
+        .or_else(|| error["message"].as_str())
+        .or_else(|| value["message"].as_str())
+        .or_else(|| error["name"].as_str())
+        .map(provider_error_reason)
+        .unwrap_or_else(|| "el agente terminó con error".to_string())
 }
 
 fn claude_tool_summary(block: &Value) -> String {
@@ -2014,6 +2374,13 @@ pub fn acted(job: &DeliveryJob, events: &str) -> bool {
                 let (kind, body) = muse_record(&value);
                 kind == "tool_batch.effect.started"
                     && !MUSE_READ_TOOLS.contains(&body["tool_name"].as_str().unwrap_or_default())
+            }
+            // A call its rules refused did nothing.
+            DeliveryAgent::Opencode => {
+                value["type"] == "tool_use"
+                    && value["part"]["state"]["status"] == "completed"
+                    && !OPENCODE_READ_TOOLS
+                        .contains(&value["part"]["tool"].as_str().unwrap_or_default())
             }
             // Its sandbox lets it run anything inside the worktree.
             DeliveryAgent::Codex => matches!(
@@ -2106,6 +2473,21 @@ pub fn read_outcome(agent: DeliveryAgent, events: &str, result_file: Option<&str
                     _ => {}
                 }
             }
+            DeliveryAgent::Opencode => match value["type"].as_str() {
+                Some("text") => {
+                    last_message = value["part"]["text"].as_str().map(str::to_string);
+                }
+                Some("step_finish") => {
+                    if let Some(step) = observe(agent, line).usage {
+                        outcome.usage = Some(match &outcome.usage {
+                            Some(before) => before.plus(&step),
+                            None => step,
+                        });
+                    }
+                }
+                Some("error") => outcome.error = Some(opencode_error(&value)),
+                _ => {}
+            },
             DeliveryAgent::Shell => {}
         }
     }
@@ -2357,6 +2739,130 @@ pub(crate) mod tests {
     const MUSE_FAILED: &str = include_str!("fixtures/muse-failed.jsonl");
     // Assembled from the record shapes Muse writes to its session logs.
     const MUSE_OK: &str = include_str!("fixtures/muse-ok.jsonl");
+
+    // A real `opencode run --format json` run (opencode 1.19.5): a write, a
+    // command its rules refused, a command, then the result as its answer.
+    const OPENCODE_OK: &str = include_str!("fixtures/opencode-ok.jsonl");
+
+    #[test]
+    fn opencode_run_yields_session_result_summed_use_and_what_it_did() {
+        let outcome = read_outcome(DeliveryAgent::Opencode, OPENCODE_OK, None);
+        assert_eq!(
+            outcome.provider_session_id.as_deref(),
+            Some("ses_e7872946bffexCQDWUZfzeWg79")
+        );
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.result.expect("result").changed_paths, ["a.txt"]);
+        // Its three steps together: input with what it cached for later,
+        // output with its reasoning.
+        assert_eq!(
+            outcome.usage,
+            Some(DeliveryUsage {
+                input_tokens: 16_733,
+                cached_tokens: 38_528,
+                output_tokens: 163,
+                cost_micro_usd: Some(0),
+            })
+        );
+        let entries: Vec<(String, String)> = OPENCODE_OK
+            .lines()
+            .flat_map(|line| log_entries(DeliveryAgent::Opencode, line))
+            .map(|entry| (entry.kind, entry.text))
+            .filter(|(kind, _)| kind != "message")
+            .collect();
+        assert_eq!(entries[0], ("command".into(), "write: /repo/a.txt".into()));
+        assert!(entries[1].1.starts_with("No se pudo printf"), "{entries:?}");
+        assert_eq!(entries[2], ("command".into(), "ls".into()));
+        let job = sample_job(DeliveryAgent::Opencode);
+        assert!(acted(&job, OPENCODE_OK));
+        // Calls its rules refused did nothing.
+        let refused: String = OPENCODE_OK
+            .lines()
+            .filter(|line| !line.contains(r#""status":"completed""#))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!acted(&job, &refused));
+    }
+
+    #[test]
+    fn an_opencode_job_runs_by_rules_for_its_stage() {
+        let dir = std::env::temp_dir().join(format!("tinto-opencode-{}", uuid::Uuid::new_v4()));
+        let paths = JobPaths::in_dir(dir);
+        let task = sample_task();
+        let rules = |job: &DeliveryJob| {
+            let launch =
+                opencode_launch(job, &task, &paths, Some(PathBuf::from("opencode"))).unwrap();
+            let (name, config) = &launch.env[0];
+            assert_eq!(name, OPENCODE_CONFIG_ENV);
+            let config: Value = serde_json::from_str(config).unwrap();
+            (launch, config["permission"].clone())
+        };
+        let mut job = sample_job(DeliveryAgent::Opencode);
+        job.model = Some("opencode/big-pickle".into());
+        job.reasoning = Some("high".into());
+        job.allowed_commands = vec!["npm test".into()];
+        let (launch, writer) = rules(&job);
+        assert_eq!(
+            launch.args,
+            [
+                "run",
+                "--format",
+                "json",
+                "--model",
+                "opencode/big-pickle",
+                "--variant",
+                "high"
+            ]
+        );
+        assert!(launch.stdin.contains("Write the failing test."));
+        assert!(launch
+            .stdin
+            .contains("Your final message must be only the structured result"));
+        // A stage that writes: any edit and command but Tinto's own steps.
+        assert_eq!(writer["edit"]["*"], "allow");
+        assert_eq!(writer["bash"]["*"], "allow");
+        assert_eq!(writer["bash"]["git push *"], "deny");
+        assert_eq!(writer["bash"]["git -C /repo-wt/K-1 commit *"], "deny");
+        assert_eq!(writer["external_directory"]["*"], "deny");
+
+        // Review reads: no edits, only the checks and commands that read.
+        job.role = "review".into();
+        job.writes = false;
+        job.read_dirs = vec!["/repo/.agent/K-1".into()];
+        let (_, review) = rules(&job);
+        assert_eq!(review["edit"]["*"], "deny");
+        assert_eq!(review["bash"]["*"], "deny");
+        assert_eq!(review["bash"]["npm test *"], "allow");
+        assert_eq!(review["bash"]["git diff *"], "allow");
+        assert_eq!(review["bash"]["git commit *"], "deny");
+        assert_eq!(review["external_directory"]["/repo/.agent/K-1/**"], "allow");
+        assert_eq!(review["edit"]["../../repo/.agent/K-1/**"], "deny");
+        assert_eq!(review["webfetch"], "deny");
+
+        // QA also writes its record in its QA folder, outside the worktree.
+        job.role = QA_ROLE.into();
+        let (_, qa) = rules(&job);
+        let folder = qa_folder(&paths, false);
+        assert_eq!(
+            qa["edit"][format!("{}/**", relative_path("/repo-wt/K-1", &folder))],
+            "allow"
+        );
+        assert_eq!(qa["external_directory"][format!("{folder}/**")], "allow");
+        assert_eq!(qa["webfetch"], "allow");
+
+        // Full access, and a paused job going on in its session.
+        job.access = DeliveryAccess::Full;
+        job.resumes = Some("j0".into());
+        job.provider_session_id = Some("ses_1".into());
+        let (resumed, full) = rules(&job);
+        assert_eq!(full["bash"], "allow");
+        assert_eq!(full["edit"], "allow");
+        assert!(resumed
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--session", "ses_1"]));
+        assert_eq!(resumed.stdin, RESUME_PROMPT);
+    }
 
     #[test]
     fn muse_success_yields_session_plan_and_result() {
