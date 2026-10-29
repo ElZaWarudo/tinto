@@ -2376,6 +2376,7 @@ También se desharán los cambios hechos después en este repo, incluidos los de
               visibleTurns.map((turn) => (
                 <AgentTurn
                   key={turn.id}
+                  agentName={agentLabel(agentType)}
                   copiedTarget={copiedTarget}
                   editingMessage={editingMessage?.id === turn.id ? editingMessage : null}
                   firstTurnAtMs={turns[0]?.startedAtMs ?? null}
@@ -4606,6 +4607,7 @@ function AgentTurnFocus({
 
 function AgentTurn({
   activityActive,
+  agentName,
   copiedTarget,
   editingMessage,
   firstTurnAtMs,
@@ -4623,6 +4625,7 @@ function AgentTurn({
   turnElementId,
 }: {
   activityActive: boolean;
+  agentName: string;
   copiedTarget: string | null;
   editingMessage: EditingAgentMessage | null;
   firstTurnAtMs: number | null;
@@ -4733,7 +4736,7 @@ function AgentTurn({
           event.kind === "steer_message"
             ? "Tú"
             : event.kind === "agent_message"
-              ? "Agent"
+              ? agentName
               : event.kind === "command_output"
                 ? "Comando"
                 : "Sistema";
@@ -9005,7 +9008,7 @@ function agentLabel(agentType: string): string {
     case "muse":
       return "Muse Code";
     default:
-      return agentType;
+      return agentType.charAt(0).toUpperCase() + agentType.slice(1);
   }
 }
 

@@ -3109,7 +3109,9 @@ describe("TerminalPanel", () => {
     expect(await within(conversation).findByText("Tú")).toBeInTheDocument();
     expect(within(conversation).getByText("Turno 1")).toBeInTheDocument();
     expect(within(conversation).getByText("Haz el cambio")).toBeInTheDocument();
-    expect(within(conversation).getAllByText("Agent")).toHaveLength(2);
+    expect(
+      within(conversation).getAllByText("Codex", { selector: ".agent-panel__message-role" }),
+    ).toHaveLength(2);
     expect(within(conversation).getByText("Voy con ello")).toBeInTheDocument();
     expect(within(conversation).getByText("Salida")).toBeInTheDocument();
     expect(within(conversation).getAllByText("cargo test").length).toBeGreaterThan(0);
@@ -3259,13 +3261,13 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const copyAgent = await screen.findByLabelText("Copiar mensaje de Agent");
+    const copyAgent = await screen.findByLabelText("Copiar mensaje de Codex");
     expect(copyAgent).not.toHaveAttribute("title");
     await user.click(copyAgent);
 
     await waitFor(() => expect(writeClipboardTextMock).toHaveBeenCalledWith("Voy con ello"));
-    expect(await screen.findByLabelText("Copiar mensaje de Agent")).toHaveTextContent("Copiado");
-    expect(screen.getByLabelText("Copiar mensaje de Agent")).not.toHaveAttribute("title");
+    expect(await screen.findByLabelText("Copiar mensaje de Codex")).toHaveTextContent("Copiado");
+    expect(screen.getByLabelText("Copiar mensaje de Codex")).not.toHaveAttribute("title");
   });
 
   it("copies a complete turn with messages, commands, and files", async () => {
