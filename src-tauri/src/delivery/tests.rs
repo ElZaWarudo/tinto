@@ -8246,6 +8246,14 @@ fn set_repo_checks(h: &Harness, checks: &[&str]) {
     store.set_repo_settings(h.repo.path(), &settings).unwrap();
 }
 
+/// Whether the repo has QA to run (a browser) or none.
+fn set_repo_qa(h: &Harness, browser: bool) {
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(h.repo.path()).unwrap();
+    settings.qa_browser = browser;
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+}
+
 /// The task's check jobs, once there are `count` and all ended.
 fn ended_checks(h: &Harness, task: &DeliveryTask, count: usize) -> Vec<DeliveryJob> {
     ended_jobs(h, task, "checks", count)
@@ -9167,6 +9175,7 @@ fn a_checks_round_closes_once_its_checks_pass_again_with_nothing_to_publish() {
 #[test]
 fn a_round_whose_stages_pass_without_changes_has_nothing_to_publish() {
     let h = harness();
+    set_repo_qa(&h, true);
     let task = h.task("R-8");
     put_stage(&h, &task, "t1", "tests", "pass", &[], true);
     put_stage(&h, &task, "i1", "implementation", "pass", &[], true);

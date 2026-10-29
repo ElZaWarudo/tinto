@@ -12,7 +12,7 @@ use super::model::{
 };
 use super::phase::{
     check_fails, current_checks, failing_checks, has_open_findings, next_stage, open_merge,
-    resolves_merge, round_step,
+    resolves_merge, round_step, skips_qa,
 };
 use super::prs::DeliveryPr;
 use super::service::{CHECKS_ROLE, QA_ROLE};
@@ -429,7 +429,14 @@ pub(super) fn settle_round(store: &DeliveryStore, task_id: &str) -> Result<(), D
                     .is_some_and(|at| at >= round.opened_at_ms)
         }));
     let settled = !jobs.iter().any(|job| job.status.is_open())
-        && next_stage(&task.setup, &task.checks, &job_refs, &approval_refs).is_none();
+        && next_stage(
+            &task.setup,
+            &task.checks,
+            skips_qa(store.repo_settings(&task.repo)?.has_qa(), &job_refs),
+            &job_refs,
+            &approval_refs,
+        )
+        .is_none();
     let unchanged = settled
         && worked.iter().all(|job| job.changes.is_empty())
         && worked.last().is_some_and(|job| {

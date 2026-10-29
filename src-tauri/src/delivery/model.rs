@@ -1362,6 +1362,14 @@ pub struct DeliveryRepoSettings {
     pub autonomy: DeliveryAutonomy,
 }
 
+impl DeliveryRepoSettings {
+    /// Whether QA has something to run here beyond reading the code: a
+    /// browser, its own commands or a stack to start.
+    pub fn has_qa(&self) -> bool {
+        self.qa_browser || !self.qa_commands.is_empty() || self.qa_stack.is_some()
+    }
+}
+
 /// Per step, `true` when Tinto takes it on its own past the brainstorm (a
 /// sync, at any time). The defaults stop only to open and merge the PR and
 /// to reply on it.

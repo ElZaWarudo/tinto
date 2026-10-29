@@ -844,6 +844,15 @@ impl DeliveryService {
             })
             .map(|task| task.id.clone())
             .collect();
+        let no_qa: HashSet<String> = tasks
+            .iter()
+            .filter(|task| {
+                store
+                    .repo_settings(&task.repo)
+                    .is_ok_and(|settings| !settings.has_qa())
+            })
+            .map(|task| task.id.clone())
+            .collect();
         // Where each task is, from the same facts the view gets.
         let facts = super::phase::Facts {
             runs: &runs,
@@ -858,6 +867,7 @@ impl DeliveryService {
             merging: &merging,
             releasable_runs: &releasable_runs,
             review_optional: &review_optional,
+            no_qa: &no_qa,
         };
         let phases = tasks
             .iter()

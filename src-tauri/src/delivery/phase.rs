@@ -236,6 +236,8 @@ pub struct Facts<'a> {
     pub releasable_runs: &'a HashSet<String>,
     /// Tasks whose repo merges a PR without a review ("PR sin revisor").
     pub review_optional: &'a HashSet<String>,
+    /// Tasks whose repo has no QA configured (see `skips_qa`).
+    pub no_qa: &'a HashSet<String>,
 }
 
 fn is_open(job: &DeliveryJob) -> bool {
@@ -647,6 +649,7 @@ fn stage_of(approval: &DeliveryApproval) -> Option<String> {
 pub fn next_stage(
     setup: &[String],
     checks: &[String],
+    skip_qa: bool,
     jobs: &[&DeliveryJob],
     approvals: &[&DeliveryApproval],
 ) -> Option<String> {
@@ -704,6 +707,7 @@ pub fn next_stage(
     }
     STAGES
         .iter()
+        .filter(|stage| !(skip_qa && **stage == "qa"))
         .find(|stage| {
             let job = agent_jobs
                 .iter()
@@ -719,6 +723,28 @@ pub fn next_stage(
             }
         })
         .map(|stage| stage.to_string())
+}
+
+/// Documentation, by its extension.
+fn is_doc(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    name.rsplit_once('.').is_some_and(|(_, ext)| {
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "md" | "mdx" | "markdown" | "rst" | "adoc" | "asciidoc"
+        )
+    })
+}
+
+/// Whether QA has nothing to verify on the task: its repo has no QA
+/// configured (`has_qa` false), or its stages changed only documentation.
+pub fn skips_qa(has_qa: bool, jobs: &[&DeliveryJob]) -> bool {
+    let mut changed = jobs
+        .iter()
+        .filter(|job| job.agent != DeliveryAgent::Shell && is_live(job))
+        .flat_map(|job| &job.changes)
+        .peekable();
+    !has_qa || (changed.peek().is_some() && changed.all(|change| is_doc(&change.path)))
 }
 
 /// Each issue delivered in packages, across the packages Tinto has of it:
@@ -886,7 +912,8 @@ fn phase_in_round(
         .iter()
         .any(|run| Some(&run.id) == task.run_id.as_ref() && run.unattended);
     let merge = open_merge(&approvals, facts.merging.contains(&task.id));
-    let mut next = next_stage(&task.setup, &task.checks, &jobs, &approvals);
+    let skip_qa = skips_qa(!facts.no_qa.contains(&task.id), &jobs);
+    let mut next = next_stage(&task.setup, &task.checks, skip_qa, &jobs, &approvals);
     // While a merge is in progress only the stages resolving it run, and
     // none once they passed: the merge is committed first.
     if let Some(sync) = merge {
@@ -1314,6 +1341,7 @@ mod tests {
         merging: HashSet<String>,
         releasable_runs: HashSet<String>,
         review_optional: HashSet<String>,
+        no_qa: HashSet<String>,
         checks: Vec<String>,
     }
 
@@ -1331,6 +1359,7 @@ mod tests {
                 merging: HashSet::new(),
                 releasable_runs: HashSet::new(),
                 review_optional: HashSet::new(),
+                no_qa: HashSet::new(),
                 checks: Vec::new(),
             }
         }
@@ -1353,6 +1382,7 @@ mod tests {
                     merging: &self.merging,
                     releasable_runs: &self.releasable_runs,
                     review_optional: &self.review_optional,
+                    no_qa: &self.no_qa,
                 },
             )
         }
@@ -1488,6 +1518,7 @@ mod tests {
             merging: &HashSet::new(),
             releasable_runs: &HashSet::new(),
             review_optional: &HashSet::new(),
+            no_qa: &HashSet::new(),
         };
         assert!(matches!(
             task_phase(&task, &facts).phase,
@@ -1850,5 +1881,42 @@ mod tests {
         world.checks = vec![old.into()];
         world.jobs[2].resolved_at_ms = Some(9);
         assert_eq!(world.phase().next_stage.as_deref(), Some("qa"));
+    }
+
+    #[test]
+    fn qa_is_skipped_without_qa_configured_or_on_a_docs_only_change() {
+        let docs = |path: &str| {
+            let mut job = job("j2", "implementation", Finished, Some("pass"));
+            job.changes = vec![crate::delivery::model::DeliveryChange {
+                path: path.into(),
+                kind: "modified".into(),
+            }];
+            job
+        };
+        for (has_qa, path, next) in [
+            (true, "src/app.ts", Some("qa")),
+            (true, "docs/adr/0007-hash.md", None),
+            (false, "src/app.ts", None),
+        ] {
+            let mut world = World::new(vec![
+                job("j1", "tests", Finished, Some("pass")),
+                docs(path),
+                job("j3", "review", Finished, Some("pass")),
+            ]);
+            if !has_qa {
+                world.no_qa.insert("t1".into());
+            }
+            let phase = world.phase();
+            assert_eq!(phase.next_stage.as_deref(), next, "{has_qa} {path}");
+            if next.is_none() {
+                assert!(matches!(
+                    phase.phase,
+                    Phase::NextStep {
+                        rung: DeliveryRung::Commit,
+                        ..
+                    }
+                ));
+            }
+        }
     }
 }
