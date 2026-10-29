@@ -2487,7 +2487,8 @@ impl DeliveryService {
     }
 
     /// Why the CI on the PR's head does not let it merge. A repo without
-    /// workflows may have no check at all; what checks it has still count.
+    /// workflows may have no check at all, nor a task the coordinator said
+    /// needs none; what checks it has still count.
     pub(super) fn ci_refusal(
         &self,
         task: &DeliveryTask,
@@ -2495,7 +2496,7 @@ impl DeliveryService {
     ) -> Option<String> {
         let place = Place::of(task.distro.as_deref());
         if pr.checks.state() == super::prs::CiState::NotRun
-            && !super::prs::has_ci(place, &task.worktree)
+            && (task.skip_ci || !super::prs::has_ci(place, &task.worktree))
         {
             return None;
         }

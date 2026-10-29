@@ -9789,6 +9789,30 @@ fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
             ci: Some(super::prs::CiState::NotRun)
         }
     );
+    // A change the coordinator said needs no CI merges without it; checks
+    // that did run still count.
+    h.service.set_task_needs_ci(&task.id, false).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        h.service.overview().unwrap().phases[&task.id].phase,
+        super::phase::Phase::Pr {
+            number: 7,
+            ci: None
+        }
+    );
+    assert!(refused(json!([])).is_none());
+    let asked = h
+        .service
+        .store()
+        .unwrap()
+        .approvals()
+        .unwrap()
+        .pop()
+        .unwrap();
+    h.service.withdraw_approval(&asked.id, "again").unwrap();
+    let red = refused(json!([check("ci", "COMPLETED", "FAILURE")])).unwrap();
+    assert_eq!(red.message, "el PR #7 tiene checks fallando en abc1234");
+    h.service.set_task_needs_ci(&task.id, true).unwrap();
     // Green, beside a job of the same workflow that runs only on main and
     // a workflow that skipped by its own condition.
     let green = json!([
@@ -9837,6 +9861,12 @@ fn the_pr_and_push_steps_put_the_ci_label_on_and_a_push_starts_ci_again() {
     let reference = super::prs::parse_pr_url(url).unwrap();
     h.service.link_pr(&task.id, &reference).unwrap();
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+
+    // A task that needs no CI gets no label.
+    let docs_only = h.service.set_task_needs_ci(&task.id, false).unwrap();
+    assert_eq!(h.service.label_for_ci(&docs_only, url, false), None);
+    assert!(github.actions.lock().unwrap().is_empty());
+    let task = h.service.set_task_needs_ci(&task.id, true).unwrap();
 
     // Opening the PR: the label goes on.
     assert_eq!(h.service.label_for_ci(&task, url, false), None);

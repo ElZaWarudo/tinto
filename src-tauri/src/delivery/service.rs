@@ -1119,6 +1119,7 @@ impl DeliveryService {
             setup: Vec::new(),
             parent: None,
             parent_read_at_ms: None,
+            skip_ci: false,
         };
         {
             let store = self.store()?;
@@ -1336,6 +1337,29 @@ impl DeliveryService {
             Some(&task.id),
             None,
             &format!("comprobaciones: {}", task.checks.join("; ")),
+        )?;
+        drop(store);
+        self.notify();
+        Ok(task)
+    }
+
+    /// Whether the task's PR needs CI, as the coordinator judged its change.
+    pub fn set_task_needs_ci(
+        &self,
+        task_id: &str,
+        needs_ci: bool,
+    ) -> Result<DeliveryTask, DeliveryError> {
+        let mut task = self.task(task_id)?;
+        task.skip_ci = !needs_ci;
+        task.updated_at_ms = now_ms();
+        let store = self.store()?;
+        store.put_task(&task)?;
+        store.record_event(
+            task.updated_at_ms,
+            "task_state_set",
+            Some(&task.id),
+            None,
+            if needs_ci { "necesita CI" } else { "sin CI" },
         )?;
         drop(store);
         self.notify();

@@ -61,6 +61,10 @@ pub struct DeliveryTask {
     /// the task's worktree before its stages, as the coordinator chose them.
     #[serde(default)]
     pub setup: Vec<String>,
+    /// The coordinator judged its change one CI has nothing to verify (only
+    /// docs): its PR gets no CI label and merges without CI having run.
+    #[serde(default)]
+    pub skip_ci: bool,
     /// Its issue's parent in Jira (an epic, a story), as last read.
     #[serde(default)]
     pub parent: Option<super::jira::DeliveryIssueParent>,

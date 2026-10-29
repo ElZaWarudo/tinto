@@ -1636,7 +1636,8 @@ impl DeliveryService {
             }
             pr.checked_at_ms = Some(now_ms());
             let state = pr.checks.state();
-            pr.ci = (state != CiState::NotRun || has_ci(place, &task.worktree)).then_some(state);
+            pr.ci = (state != CiState::NotRun || (!task.skip_ci && has_ci(place, &task.worktree)))
+                .then_some(state);
             let asked =
                 |pr: &DeliveryPr| pr.review_decision.as_deref() == Some("changes_requested");
             if asked(&pr) && !asked(&before) {
@@ -2010,13 +2011,17 @@ impl DeliveryService {
     /// Makes the repo's CI run on the PR's head when it runs only on a
     /// label: the label goes on, and after a push it goes off and on again
     /// (adding it is what starts CI, and one already there adds nothing).
-    /// Returns what could not be done, for the step's notice.
+    /// Returns what could not be done, for the step's notice. A task that
+    /// needs no CI gets no label.
     pub(super) fn label_for_ci(
         &self,
         task: &DeliveryTask,
         url: &str,
         pushed: bool,
     ) -> Option<String> {
+        if task.skip_ci {
+            return None;
+        }
         let place = Place::of(task.distro.as_deref());
         let label = ci_label(place, &task.worktree)?;
         let github = self.github_client();
