@@ -366,6 +366,17 @@ pub fn job_prompt(
         );
         lines.extend(job.guide_rules.iter().map(|rule| format!("- {rule}")));
     }
+    // Each finding sends the work back for one more round of fix, checks
+    // and review: only what has to change earns one.
+    if job.role == "review" || job.role == QA_ROLE {
+        lines.push("Findings are only what must change before this merges: a defect in what the change does, a requirement of the task it misses, or a requirement it adds without a test. Put the rest in handoff, not in findings: low-severity notes, style preferences, hardening against failures the task does not ask about, and what you checked and found fine. With only those, the status is pass.".to_string());
+    }
+    if job.role == QA_ROLE {
+        lines.push("Test what the task asks for. Failures it does not ask about (a service stopped or paused, a provider's limits) are observations in the record, not problems.".to_string());
+    }
+    if job.role == "review" && !job.round.is_empty() {
+        lines.push("This review re-checks a round: check that its items were addressed and that the fix broke nothing near them; do not review the rest of the change again.".to_string());
+    }
     lines.push(
         "Do not commit, push, open pull requests or change issue trackers: Tinto asks the user for those steps."
             .to_string(),
