@@ -216,6 +216,8 @@ export interface DeliveryJobResult {
   changed_paths: string[];
   checks: DeliveryCheck[];
   findings: string[];
+  /** What the job fixed or confirmed of its round or earlier findings. */
+  addressed?: string[];
   handoff: string;
   /** What stopped the job: its own sandbox or rules, something outside, or nothing. */
   blocked_by?: "none" | "environment" | "sandbox" | string;

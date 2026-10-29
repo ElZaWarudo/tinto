@@ -305,8 +305,12 @@ pub struct DeliveryJobResult {
     pub changed_paths: Vec<String>,
     #[serde(default)]
     pub checks: Vec<DeliveryCheck>,
+    /// Only defects still open.
     #[serde(default)]
     pub findings: Vec<String>,
+    /// What the job fixed or confirmed of its round or earlier findings.
+    #[serde(default)]
+    pub addressed: Vec<String>,
     #[serde(default)]
     pub handoff: String,
     /// What stopped the job, if anything: `sandbox` (its sandbox or

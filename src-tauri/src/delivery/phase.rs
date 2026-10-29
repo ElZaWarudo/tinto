@@ -1253,6 +1253,7 @@ mod tests {
             changed_paths: Vec::new(),
             checks: Vec::new(),
             findings: vec!["x".into()],
+            addressed: Vec::new(),
             handoff: String::new(),
             blocked_by: String::new(),
         });
