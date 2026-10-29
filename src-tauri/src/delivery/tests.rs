@@ -10770,7 +10770,7 @@ fn guides_turn_their_reviewers_comments_into_rules_the_user_approves() {
         "propose_guide",
         json!({"through": 3, "note": "Primeras reglas", "rules": [
             {"kind": "visual", "rule": "El espaciado sale de los tokens de 4px", "applies_to": ["frontend/"], "seen": 1},
-            {"kind": "technical", "rule": "Los errores pasan por el handler común"}
+            {"kind": "technical", "rule": "Los errores pasan por el handler común", "stages": ["review"]}
         ]}),
     );
     let view = h.service.guide_view(repo).unwrap();
@@ -10796,4 +10796,13 @@ fn guides_turn_their_reviewers_comments_into_rules_the_user_approves() {
         json!([]),
         "distilled comments are not read again"
     );
+
+    // A job gets the approved rules for its stage.
+    let task = h.task("AGOS-1");
+    let job = h.dispatch(&task, "implementation", "events=codex-ok");
+    assert_eq!(
+        job.guide_rules,
+        ["V-1: El espaciado sale de los tokens de 4px (in frontend/)"]
+    );
+    h.wait(&job.id);
 }

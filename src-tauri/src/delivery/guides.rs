@@ -152,6 +152,27 @@ fn last_lines(text: &str, count: usize) -> String {
     lines[lines.len().saturating_sub(count)..].join("\n")
 }
 
+/// The rules a job of `role` follows, one line each, as its instructions
+/// state them: a rule without stages holds for every stage.
+pub fn rule_notes(rules: &[DeliveryGuideRule], role: &str) -> Vec<String> {
+    rules
+        .iter()
+        .filter(|rule| rule.stages.is_empty() || rule.stages.iter().any(|stage| stage == role))
+        .map(|rule| {
+            let mut note = format!("{}: {}", rule.id, rule.rule.trim());
+            if !rule.applies_to.is_empty() {
+                note.push_str(&format!(" (in {})", rule.applies_to.join(", ")));
+            }
+            for (label, text) in [("Why", &rule.why), ("Example", &rule.example)] {
+                if !text.trim().is_empty() {
+                    note.push_str(&format!(" {label}: {}", text.trim()));
+                }
+            }
+            note
+        })
+        .collect()
+}
+
 fn prefix(kind: DeliveryGuideKind) -> &'static str {
     match kind {
         DeliveryGuideKind::Visual => "V",

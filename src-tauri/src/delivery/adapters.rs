@@ -359,6 +359,13 @@ pub fn job_prompt(
         lines.push("Decisions the user made for this task (follow them):".to_string());
         lines.extend(job.decisions.iter().map(|note| format!("- {note}")));
     }
+    if !job.guide_rules.is_empty() {
+        lines.push(
+            "Rules the repo's reviewers keep asking for (follow each where it applies):"
+                .to_string(),
+        );
+        lines.extend(job.guide_rules.iter().map(|rule| format!("- {rule}")));
+    }
     lines.push(
         "Do not commit, push, open pull requests or change issue trackers: Tinto asks the user for those steps."
             .to_string(),
@@ -2258,6 +2265,7 @@ pub(crate) mod tests {
             reverted: Vec::new(),
             task_checks: Vec::new(),
             round: Vec::new(),
+            guide_rules: Vec::new(),
             needs_environment: false,
             waits_environment: None,
             reasoning: None,

@@ -1801,6 +1801,12 @@ impl DeliveryService {
             String::new()
         };
         let qa_stack = settings.qa_stack.clone().filter(|_| qa_browser);
+        // Checks and setup run commands, not an agent: no rules to follow.
+        let guide_rules = if matches!(role.as_str(), CHECKS_ROLE | SETUP_ROLE) {
+            Vec::new()
+        } else {
+            super::guides::rule_notes(&store.guide(&task.repo)?.rules, &role)
+        };
         // Each check and setup command counts its own attempts.
         let attempt = store
             .task_jobs(&task.id)?
@@ -1858,6 +1864,7 @@ impl DeliveryService {
             reverted: Vec::new(),
             task_checks: Vec::new(),
             round,
+            guide_rules,
             needs_environment: request.needs_environment || qa,
             waits_environment: None,
             reasoning,

@@ -405,6 +405,10 @@ pub struct DeliveryJob {
     /// came back and what to address, as the job's instructions state them.
     #[serde(default)]
     pub round: Vec<String>,
+    /// The repo's approved guide rules for the job's stage when it was
+    /// dispatched, as its instructions state them.
+    #[serde(default)]
+    pub guide_rules: Vec<String>,
     /// It needs the repo's environment (Docker, the probes' services): it
     /// waits queued while the "Entorno" check fails instead of failing.
     #[serde(default)]
