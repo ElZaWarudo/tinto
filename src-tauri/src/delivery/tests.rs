@@ -9173,6 +9173,36 @@ fn a_checks_round_closes_once_its_checks_pass_again_with_nothing_to_publish() {
 }
 
 #[test]
+fn retrying_a_check_that_failed_at_once_with_nothing_changed_warns() {
+    let h = harness();
+    let task = h.task("R-12");
+    let at = super::now_ms() + 10;
+    let check: DeliveryJob = serde_json::from_value(json!({
+        "id": "c1", "task_id": task.id, "role": "checks", "attempt": 1, "agent": "shell",
+        "access": "workspace", "prompt": "cargo check", "contract_version": 1,
+        "writes": false, "timeout_minutes": 60, "status": "failed",
+        "error": "failed to read vendor/plugin/Cargo.toml",
+        "created_at_ms": at, "started_at_ms": at, "ended_at_ms": at + 200,
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_job(&check).unwrap();
+    let warning = h.service.futile_retry(&check).unwrap().expect("a warning");
+    assert!(warning.contains("fallará igual"), "{warning}");
+    // One that took its time failed for another reason.
+    let mut slow = check.clone();
+    slow.ended_at_ms = Some(at + 5_000);
+    assert_eq!(h.service.futile_retry(&slow).unwrap(), None);
+
+    // A setup step ran since: the retry may pass.
+    let mut setup = check.clone();
+    setup.id = "s1".into();
+    setup.role = "setup".into();
+    setup.created_at_ms = at + 300;
+    h.service.store().unwrap().put_job(&setup).unwrap();
+    assert_eq!(h.service.futile_retry(&check).unwrap(), None);
+}
+
+#[test]
 fn a_round_whose_stages_pass_without_changes_has_nothing_to_publish() {
     let h = harness();
     set_repo_qa(&h, true);

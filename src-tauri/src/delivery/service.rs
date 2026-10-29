@@ -2166,6 +2166,41 @@ impl DeliveryService {
         self.dispatch(assignment)
     }
 
+    /// Why retrying `job` will fail the same way, if it will: a check that
+    /// failed in under a second (a missing file, a submodule never checked
+    /// out) with no code, setup or task settings changed since it started.
+    pub fn futile_retry(&self, job: &DeliveryJob) -> Result<Option<String>, DeliveryError> {
+        let fast = matches!(
+            (job.started_at_ms, job.ended_at_ms),
+            (Some(start), Some(end)) if end.saturating_sub(start) < 1_000
+        );
+        if job.agent != DeliveryAgent::Shell
+            || job.role != CHECKS_ROLE
+            || job.status != DeliveryJobStatus::Failed
+            || !fast
+        {
+            return Ok(None);
+        }
+        let since = job.started_at_ms.unwrap_or(job.created_at_ms);
+        if self.task(&job.task_id)?.updated_at_ms > since {
+            return Ok(None);
+        }
+        let changed = self.store()?.task_jobs(&job.task_id)?.iter().any(|other| {
+            other.created_at_ms > job.created_at_ms
+                && (other.role == SETUP_ROLE
+                    || (other.agent != DeliveryAgent::Shell
+                        && other.undone_at_ms.is_none()
+                        && !other.changes.is_empty()))
+        });
+        Ok((!changed).then(|| {
+            format!(
+                "`{}` falló en menos de un segundo ({}) y desde entonces no cambió el código, el setup ni los ajustes de la tarea: el reintento fallará igual. Arregla antes la causa (una dependencia o un submódulo que falta, un setup nuevo con set_task_state o propose_settings).",
+                job.prompt,
+                job.error.as_deref().unwrap_or("sin mensaje")
+            )
+        }))
+    }
+
     /// Goes on with a job that ran out of time or that a restart cut off, in
     /// its agent session: the agent is told why it stopped and keeps what it
     /// left in the worktree. With another time limit if given.
