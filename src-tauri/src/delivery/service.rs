@@ -909,6 +909,7 @@ impl DeliveryService {
                 .and_then(|slot| slot.clone()),
             coordinators,
             queued,
+            quotas: super::queue::quotas(&store)?,
             tasks,
         })
     }
@@ -2815,6 +2816,9 @@ impl DeliveryService {
                         session_recorded = true;
                         self.record_session_id(&job.id, id);
                     }
+                }
+                if let Some(quota) = adapters::rate_limit(agent, &line) {
+                    self.record_quota(quota);
                 }
                 if !model_recorded {
                     if let Some(model) = adapters::claude_init_model(&line) {

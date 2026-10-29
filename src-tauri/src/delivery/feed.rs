@@ -238,6 +238,7 @@ impl DeliveryService {
                     "idle": idle,
                     "open_jobs": open_jobs,
                     "spare_capacity": self.spare_capacity()?,
+                    "quotas": super::queue::quotas(&*self.store()?)?,
                 });
                 if nudge && events_is_empty(&reply) {
                     reply["note"] = json!("Not waiting: these tasks of the batch wait on you. Handle them (dispatch their next stage, ask for or record their step), then wait again; pass idle_ok only for tasks that wait on something outside Tinto.");

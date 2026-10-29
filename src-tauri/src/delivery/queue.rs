@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use super::job_process;
 use super::model::{
     DeliveryAgent, DeliveryJob, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
-    DeliveryLeaseWaiter, DeliveryQueueWait, DeliveryTask,
+    DeliveryLeaseWaiter, DeliveryQueueWait, DeliveryQuota, DeliveryTask, QUOTA_STOP_PERCENT,
 };
 use super::phase::current_setup;
 use super::service::{
@@ -33,6 +33,14 @@ fn is_setup(job: &DeliveryJob) -> bool {
     job.agent == DeliveryAgent::Shell && job.role == SETUP_ROLE
 }
 
+/// Where the agents' quotas are kept, so a restart still knows them.
+const QUOTAS_SETTING: &str = "agent_quotas";
+
+/// The latest quota each agent's jobs reported.
+pub(super) fn quotas(store: &DeliveryStore) -> Result<Vec<DeliveryQuota>, DeliveryError> {
+    Ok(store.setting(QUOTAS_SETTING)?.unwrap_or_default())
+}
+
 /// What holds a queued job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Hold {
@@ -52,6 +60,8 @@ pub(super) enum Hold {
     CheckRunning(String),
     /// Its exclusive resource is held, or others asked for it first.
     Lease(String),
+    /// Its agent's account is near its usage limit.
+    Quota(DeliveryQuota),
 }
 
 /// Everything the scheduler reads.
@@ -66,6 +76,7 @@ pub(super) struct Queue {
     /// Tasks of a paused batch.
     held: HashSet<String>,
     environments: HashMap<PathBuf, RepoEnvironment>,
+    quotas: Vec<DeliveryQuota>,
 }
 
 impl Queue {
@@ -105,6 +116,7 @@ impl Queue {
             .map(|task| task.id.clone())
             .collect();
         Ok(Self {
+            quotas: quotas(store)?,
             leases: store.leases()?,
             tasks,
             jobs,
@@ -188,6 +200,15 @@ impl Queue {
         }
         if self.unprepared.contains(&job.task_id) && !setup {
             return Some(Hold::Setup);
+        }
+        // Jobs already running go on; no new one starts that could fail
+        // mid-stage when the account runs out.
+        if let Some(quota) = self
+            .quotas
+            .iter()
+            .find(|quota| quota.agent == job.agent && quota.stops(now))
+        {
+            return Some(Hold::Quota(quota.clone()));
         }
         if job.needs_environment {
             let state = self.environment_of(job);
@@ -327,6 +348,16 @@ impl Queue {
                 )
             }
             Hold::BatchPaused => ("el lote está en pausa".into(), None),
+            Hold::Quota(quota) => (
+                format!(
+                    "la cuenta de {} lleva el {}% de su límite ({}): no empieza trabajos nuevos hasta que se renueve, en {} min",
+                    super::service::agent_name(quota.agent),
+                    quota.utilization,
+                    quota.window,
+                    quota.resets_at_ms.saturating_sub(now).div_ceil(60_000)
+                ),
+                None,
+            ),
             Hold::Setup => {
                 let task_jobs: Vec<&DeliveryJob> = self
                     .jobs
@@ -464,6 +495,43 @@ impl Queue {
 }
 
 impl DeliveryService {
+    /// Keeps the latest quota an agent's job reported.
+    pub(super) fn record_quota(&self, mut quota: DeliveryQuota) {
+        let Ok(store) = self.store() else { return };
+        let Ok(mut all) = quotas(&store) else { return };
+        if let Some(at) = all.iter().position(|known| known.agent == quota.agent) {
+            let known = &all[at];
+            if known.utilization == quota.utilization && known.resets_at_ms == quota.resets_at_ms {
+                return;
+            }
+            all.remove(at);
+        }
+        quota.seen_at_ms = super::now_ms();
+        all.push(quota);
+        if let Err(error) = store.set_setting(QUOTAS_SETTING, &all) {
+            eprintln!("tinto: delivery could not record an agent's quota: {error}");
+        }
+        drop(store);
+        self.notify();
+    }
+
+    /// Forgets the quotas that held jobs and have renewed since, and starts
+    /// what they held: nothing else would, with every agent job waiting.
+    pub(super) fn release_renewed_quotas(&self) -> Result<(), DeliveryError> {
+        let store = self.store()?;
+        let now = super::now_ms();
+        let (renewed, kept): (Vec<DeliveryQuota>, Vec<DeliveryQuota>) = quotas(&store)?
+            .into_iter()
+            .partition(|quota| quota.utilization >= QUOTA_STOP_PERCENT && !quota.stops(now));
+        if renewed.is_empty() {
+            return Ok(());
+        }
+        store.set_setting(QUOTAS_SETTING, &kept)?;
+        drop(store);
+        self.tick();
+        Ok(())
+    }
+
     /// Why each queued job has not started, by the scheduler's own rules.
     pub fn queue_waits(&self) -> Result<BTreeMap<String, DeliveryQueueWait>, DeliveryError> {
         let queue = Queue::read(&*self.store()?, self.environments())?;
@@ -488,5 +556,67 @@ impl DeliveryService {
             );
         }
         Ok(waits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::delivery::adapters::tests::{sample_job, sample_task};
+
+    #[test]
+    fn an_agent_near_its_limit_starts_no_new_job_until_it_renews() {
+        let job = |id: &str, task: &str, agent| {
+            let mut job = sample_job(agent);
+            job.id = id.into();
+            job.task_id = task.into();
+            job
+        };
+        let task = |id: &str| {
+            let mut task = sample_task();
+            task.id = id.into();
+            task
+        };
+        let quota = |utilization| DeliveryQuota {
+            agent: DeliveryAgent::Claude,
+            window: "five_hour".into(),
+            utilization,
+            resets_at_ms: 10 * 60_000,
+            seen_at_ms: 0,
+        };
+        let queue = |quota: DeliveryQuota| Queue {
+            tasks: vec![task("t1"), task("t2"), task("t3")],
+            jobs: vec![
+                job("claude", "t1", DeliveryAgent::Claude),
+                job("codex", "t2", DeliveryAgent::Codex),
+                job("check", "t3", DeliveryAgent::Shell),
+            ],
+            leases: Vec::new(),
+            capacity: 8,
+            unprepared: HashSet::new(),
+            held: HashSet::new(),
+            environments: HashMap::new(),
+            quotas: vec![quota],
+        };
+        let held = |queue: &Queue, now| -> Vec<String> {
+            queue
+                .plan(now)
+                .0
+                .into_iter()
+                .filter(|(_, hold)| hold.is_some())
+                .map(|(id, _)| id)
+                .collect()
+        };
+        // At 96% only Claude's job waits, and says until when.
+        let near = queue(quota(96));
+        assert_eq!(held(&near, 0), ["claude"]);
+        let (reason, _) = near.explain(&near.jobs[0], &Hold::Quota(quota(96)), 0);
+        assert_eq!(
+            reason,
+            "la cuenta de Claude Code lleva el 96% de su límite (five_hour): no empieza trabajos nuevos hasta que se renueve, en 10 min"
+        );
+        // Below the threshold, or once the window renewed, it starts.
+        assert!(held(&queue(quota(94)), 0).is_empty());
+        assert!(held(&near, 10 * 60_000).is_empty());
     }
 }

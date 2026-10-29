@@ -14,8 +14,8 @@ use serde_json::Value;
 
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry,
-    DeliveryPlanItem, DeliveryPlatform, DeliverySlowCommand, DeliveryTask, DeliveryTiming,
-    DeliveryUsage,
+    DeliveryPlanItem, DeliveryPlatform, DeliveryQuota, DeliverySlowCommand, DeliveryTask,
+    DeliveryTiming, DeliveryUsage,
 };
 use super::service::{style_check, QA_CLI_LEASE, QA_ROLE};
 use super::tasks::{git, plain_path, Place};
@@ -2025,6 +2025,33 @@ pub fn observe(agent: DeliveryAgent, line: &str) -> Observation {
     }
 }
 
+/// The use of its account's limit a Claude Code `rate_limit_event` reports:
+/// the window nearest its limit (five hours, seven days…), with when it
+/// renews. `None` for any other line.
+pub fn rate_limit(agent: DeliveryAgent, line: &str) -> Option<DeliveryQuota> {
+    if agent != DeliveryAgent::Claude || !line.contains("\"rate_limit_event\"") {
+        return None;
+    }
+    let value: Value = serde_json::from_str(line).ok()?;
+    let info = &value["rate_limit_info"];
+    let windows: Vec<(String, &Value)> = match info["unifiedWindows"].as_object() {
+        Some(windows) => windows.iter().map(|(name, window)| (name.clone(), window)).collect(),
+        None => vec![(info["rateLimitType"].as_str()?.to_string(), info)],
+    };
+    windows
+        .into_iter()
+        .filter_map(|(window, values)| {
+            Some(DeliveryQuota {
+                agent,
+                window,
+                utilization: (values["utilization"].as_f64()? * 100.0).round() as u32,
+                resets_at_ms: values["resetsAt"].as_u64()? * 1000,
+                seen_at_ms: 0,
+            })
+        })
+        .max_by_key(|quota| quota.utilization)
+}
+
 /// Claude Code's Bash stops waiting for a command after 10 minutes.
 const CLAUDE_BASH_CEILING_MS: u64 = 600_000;
 
@@ -3306,6 +3333,23 @@ pub(crate) mod tests {
             prompt.contains("You may also read and list these folders outside the worktree, without changing them: C:/repo/docs."),
             "{prompt}"
         );
+    }
+
+    #[test]
+    fn a_claude_rate_limit_event_gives_the_window_nearest_its_limit() {
+        // As the DPP batch's jobs reported it.
+        let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1793271600,"rateLimitType":"five_hour","utilization":0.94,"overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false,"surpassedThreshold":0.9,"unifiedWindows":{"five_hour":{"utilization":0.94,"resetsAt":1793271600,"status":"allowed_warning","surpassedThreshold":0.9},"seven_day":{"utilization":0.37,"resetsAt":1793610000,"status":"allowed"}}},"session_id":"4b90393f"}"#;
+        assert_eq!(
+            rate_limit(DeliveryAgent::Claude, line),
+            Some(DeliveryQuota {
+                agent: DeliveryAgent::Claude,
+                window: "five_hour".into(),
+                utilization: 94,
+                resets_at_ms: 1_793_271_600_000,
+                seen_at_ms: 0,
+            })
+        );
+        assert_eq!(rate_limit(DeliveryAgent::Claude, CLAUDE_OK.lines().next().unwrap()), None);
     }
 
     #[test]
