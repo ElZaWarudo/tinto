@@ -1130,7 +1130,7 @@ impl DeliveryService {
         if request.rung == DeliveryRung::Commit && request.requested_by != "user" {
             let jobs = self.store()?.task_jobs(&task.id)?;
             let jobs: Vec<&super::model::DeliveryJob> = jobs.iter().collect();
-            if let Some(why) = super::phase::commit_blocker(&jobs) {
+            if let Some(why) = super::phase::commit_blocker(&task.checks, &jobs) {
                 return Err(DeliveryError::new(
                     "stages_unsettled",
                     format!(

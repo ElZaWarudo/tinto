@@ -8375,7 +8375,7 @@ fn a_stage_runs_again_only_the_checks_its_changes_reach() {
     ended_checks(&h, &task, 5);
     let jobs = h.service.store().unwrap().task_jobs(&task.id).unwrap();
     let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
-    let current = super::phase::current_checks(&jobs);
+    let current = super::phase::current_checks(&[web.to_string(), api.to_string()], &jobs);
     assert_eq!(current.len(), 2);
     assert!(current
         .iter()
@@ -9089,6 +9089,44 @@ fn a_failing_check_opens_a_round_the_fix_is_told_about() {
         (2, "implementation")
     );
     assert_eq!(h.service.overview().unwrap().rounds.len(), 1);
+}
+
+#[test]
+fn resolve_job_accepts_a_failing_check_and_says_why_it_refuses() {
+    let h = harness();
+    set_repo_checks(&h, &["exit=1"]);
+    let task = h.task("R-9");
+    h.service
+        .set_task_checks(&task.id, vec!["exit=1".into()])
+        .unwrap();
+    let implementation = h.dispatch(&task, "implementation", "events=codex-ok touch=code.txt");
+    h.wait(&implementation.id);
+    let check = ended_checks(&h, &task, 1)[0].clone();
+    assert!(round_now(&h, &task).is_some());
+    let refused = |job_id: &str| {
+        h.service
+            .resolve(job_id, "nota", "coordinator")
+            .unwrap_err()
+            .category
+    };
+    assert_eq!(refused(&implementation.id), "already_passed");
+
+    h.service
+        .resolve(
+            &check.id,
+            "Solo falla sin la base de datos local",
+            "coordinator",
+        )
+        .unwrap();
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert!(phase.failing_checks.is_empty());
+    assert_ne!(phase.next_stage.as_deref(), Some("implementation"));
+    assert!(round_now(&h, &task).is_none(), "its round is accepted");
+    assert_eq!(
+        h.service.overview().unwrap().rounds[0].outcome.as_deref(),
+        Some("aceptados")
+    );
+    assert_eq!(refused(&check.id), "already_passed");
 }
 
 #[test]

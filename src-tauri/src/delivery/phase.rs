@@ -193,6 +193,10 @@ pub struct DeliveryTaskPhase {
     /// again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round: Option<CurrentRound>,
+    /// Tinto's checks that fail on its current code, by command: why
+    /// next_stage is implementation when no round says so.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failing_checks: Vec<String>,
 }
 
 /// A task's open round and where it is in it.
@@ -310,10 +314,24 @@ pub fn has_open_findings(job: &DeliveryJob) -> bool {
     job.status == DeliveryJobStatus::Finished && result_is(job, "findings") && !is_resolved(job)
 }
 
+/// A check run that failed and nobody accepted (see `resolve_job`).
+pub fn check_fails(job: &DeliveryJob) -> bool {
+    job.status == DeliveryJobStatus::Failed && !is_resolved(job)
+}
+
+/// The task's checks that fail on its current code, as commands.
+pub fn failing_checks(checks: &[String], jobs: &[&DeliveryJob]) -> Vec<String> {
+    current_checks(checks, jobs)
+        .iter()
+        .filter(|check| check_fails(check))
+        .map(|check| check.prompt.clone())
+        .collect()
+}
+
 /// Why the task's code cannot be committed yet: its latest stage's findings
 /// were neither answered by a later stage nor accepted, or one of Tinto's
 /// checks fails on it.
-pub fn commit_blocker(jobs: &[&DeliveryJob]) -> Option<String> {
+pub fn commit_blocker(checks: &[String], jobs: &[&DeliveryJob]) -> Option<String> {
     let agent_jobs: Vec<&DeliveryJob> = jobs
         .iter()
         .filter(|job| job.agent != DeliveryAgent::Shell && is_live(job))
@@ -332,10 +350,9 @@ pub fn commit_blocker(jobs: &[&DeliveryJob]) -> Option<String> {
             ));
         }
     }
-    let failed: Vec<String> = current_checks(jobs)
+    let failed: Vec<String> = failing_checks(checks, jobs)
         .iter()
-        .filter(|check| check.status == DeliveryJobStatus::Failed)
-        .map(|check| format!("`{}`", check.prompt))
+        .map(|command| format!("`{command}`"))
         .collect();
     (!failed.is_empty()).then(|| format!("fallan comprobaciones de Tinto: {}", failed.join(", ")))
 }
@@ -379,12 +396,16 @@ pub fn touches(check: &str, scopes: &[String], change: &DeliveryJob) -> bool {
 }
 
 /// Tinto's checks of the code the latest change left: the latest run of
-/// each check since the latest change that reached it (see `touches`),
-/// oldest first.
-pub fn current_checks<'a>(jobs: &[&'a DeliveryJob]) -> Vec<&'a DeliveryJob> {
+/// each of the task's `checks` since the latest change that reached it (see
+/// `touches`), oldest first. A command no longer among them counts no more.
+pub fn current_checks<'a>(checks: &[String], jobs: &[&'a DeliveryJob]) -> Vec<&'a DeliveryJob> {
     let runs: Vec<&DeliveryJob> = jobs
         .iter()
-        .filter(|job| job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE)
+        .filter(|job| {
+            job.agent == DeliveryAgent::Shell
+                && job.role == CHECKS_ROLE
+                && checks.contains(&job.prompt)
+        })
         .copied()
         .collect();
     let scopes: Vec<String> = runs
@@ -480,11 +501,12 @@ pub fn merge_resolved(checks: &[String], jobs: &[&DeliveryJob], sync: &DeliveryA
     let reviewed = agent[fix + 1..]
         .last()
         .is_some_and(|job| job.role == "review" && is_passed(job));
-    let current = current_checks(jobs);
+    let current = current_checks(checks, jobs);
     let checked = checks.iter().all(|command| {
-        current
-            .iter()
-            .any(|check| &check.prompt == command && check.status == DeliveryJobStatus::Finished)
+        current.iter().any(|check| {
+            &check.prompt == command
+                && (check.status == DeliveryJobStatus::Finished || is_resolved(check))
+        })
     });
     reviewed && checked
 }
@@ -624,6 +646,7 @@ fn stage_of(approval: &DeliveryApproval) -> Option<String> {
 /// stage without a passing (or answered) attempt that still stands.
 pub fn next_stage(
     setup: &[String],
+    checks: &[String],
     jobs: &[&DeliveryJob],
     approvals: &[&DeliveryApproval],
 ) -> Option<String> {
@@ -641,7 +664,7 @@ pub fn next_stage(
         .filter(|job| job.agent != DeliveryAgent::Shell && is_live(job))
         .copied()
         .collect();
-    let checks = current_checks(jobs);
+    let checks = current_checks(checks, jobs);
     if agent_jobs.iter().chain(&checks).any(|job| is_open(job)) {
         return None;
     }
@@ -676,10 +699,7 @@ pub fn next_stage(
             return Some("implementation".into());
         }
     }
-    if checks
-        .iter()
-        .any(|job| job.status == DeliveryJobStatus::Failed)
-    {
+    if checks.iter().any(|job| check_fails(job)) {
         return Some("implementation".into());
     }
     STAGES
@@ -866,7 +886,7 @@ fn phase_in_round(
         .iter()
         .any(|run| Some(&run.id) == task.run_id.as_ref() && run.unattended);
     let merge = open_merge(&approvals, facts.merging.contains(&task.id));
-    let mut next = next_stage(&task.setup, &jobs, &approvals);
+    let mut next = next_stage(&task.setup, &task.checks, &jobs, &approvals);
     // While a merge is in progress only the stages resolving it run, and
     // none once they passed: the merge is committed first.
     if let Some(sync) = merge {
@@ -892,6 +912,7 @@ fn phase_in_round(
     let warning = jobs
         .iter()
         .find_map(|job| facts.queued.get(&job.id)?.warning.clone());
+    let failing = failing_checks(&task.checks, &jobs);
     let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
         phase,
         waits_on,
@@ -899,6 +920,7 @@ fn phase_in_round(
         steps: steps.clone(),
         round: None,
         warning: warning.clone(),
+        failing_checks: failing.clone(),
     };
 
     let decisions = facts
@@ -1280,6 +1302,7 @@ mod tests {
         merging: HashSet<String>,
         releasable_runs: HashSet<String>,
         review_optional: HashSet<String>,
+        checks: Vec<String>,
     }
 
     impl World {
@@ -1296,12 +1319,15 @@ mod tests {
                 merging: HashSet::new(),
                 releasable_runs: HashSet::new(),
                 review_optional: HashSet::new(),
+                checks: Vec::new(),
             }
         }
 
         fn phase(&self) -> DeliveryTaskPhase {
+            let mut task = sample_task();
+            task.checks = self.checks.clone();
             task_phase(
-                &sample_task(),
+                &task,
                 &Facts {
                     runs: &self.runs,
                     jobs: &self.jobs,
@@ -1775,5 +1801,42 @@ mod tests {
         let phase = world.phase();
         assert_eq!(phase.phase, Phase::Delivered);
         assert_eq!(phase.waits_on, Waiter::Nobody);
+    }
+
+    fn check(id: &str, command: &str, status: DeliveryJobStatus) -> DeliveryJob {
+        let mut check = job(id, CHECKS_ROLE, status, None);
+        check.agent = DeliveryAgent::Shell;
+        check.prompt = command.into();
+        check.result = None;
+        check
+    }
+
+    #[test]
+    fn only_the_checks_configured_now_hold_the_task_and_say_which() {
+        let old = "cargo test -p host";
+        let mut world = World::new(vec![
+            job("j0", "tests", Finished, Some("pass")),
+            changed(job("j1", "implementation", Finished, Some("pass"))),
+            check("j2", old, DeliveryJobStatus::Failed),
+            job("j3", "review", Finished, Some("pass")),
+        ]);
+        world.checks = vec![old.into()];
+        let phase = world.phase();
+        assert_eq!(phase.next_stage.as_deref(), Some("implementation"));
+        assert_eq!(phase.failing_checks, [old]);
+        let jobs: Vec<&DeliveryJob> = world.jobs.iter().collect();
+        assert!(commit_blocker(&world.checks, &jobs).is_some());
+
+        // Replaced in the settings: its old failure counts no more.
+        world.checks = vec![format!("{old} -- --skip slow")];
+        let phase = world.phase();
+        assert_eq!(phase.next_stage.as_deref(), Some("qa"));
+        assert!(phase.failing_checks.is_empty());
+        assert_eq!(commit_blocker(&world.checks, &jobs), None);
+
+        // Accepted with resolve_job: it no longer fails either.
+        world.checks = vec![old.into()];
+        world.jobs[2].resolved_at_ms = Some(9);
+        assert_eq!(world.phase().next_stage.as_deref(), Some("qa"));
     }
 }

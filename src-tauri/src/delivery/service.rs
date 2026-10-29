@@ -26,7 +26,9 @@ use super::model::{
     DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
     NewBlocker,
 };
-use super::phase::{current_checks, current_setup, has_open_findings, is_broken, last_change};
+use super::phase::{
+    check_fails, current_checks, current_setup, has_open_findings, is_broken, last_change,
+};
 use super::prs::{self, GitHub};
 use super::queue::Queue;
 use super::store::DeliveryStore;
@@ -66,6 +68,18 @@ const USAGE_LIMIT_WAIT: Duration = if cfg!(test) {
 } else {
     Duration::from_secs(60 * 60)
 };
+
+/// A resolution's note in one line, up to 300 characters.
+fn resolve_note(note: &str) -> Result<String, DeliveryError> {
+    let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
+    if note.is_empty() || note.chars().count() > 300 {
+        return Err(DeliveryError::new(
+            "invalid_note",
+            "di en una línea (hasta 300 caracteres) cómo quedó resuelto",
+        ));
+    }
+    Ok(note)
+}
 
 fn refused_model(agent: DeliveryAgent, model: &str) -> String {
     format!("{}:{}", agent_name(agent).to_lowercase(), model.trim())
@@ -2369,39 +2383,80 @@ impl DeliveryService {
 
     /// Settles the task's broken stage without running it again, because
     /// its work was done another way (another session finished it, the
-    /// coordinator fixed it outside Tinto). The note, one line, says how;
-    /// the attempt then counts as passed, and a newer one replaces it as
-    /// usual. `by` is `user` or `coordinator`.
+    /// coordinator fixed it outside Tinto), or accepts a failing check of
+    /// Tinto on the current code. The note, one line, says how; the attempt
+    /// then counts as passed, and a newer one replaces it as usual. `by` is
+    /// `user` or `coordinator`.
     pub fn resolve(
         &self,
         job_id: &str,
         note: &str,
         by: &str,
     ) -> Result<DeliveryJob, DeliveryError> {
-        let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
-        if note.is_empty() || note.chars().count() > 300 {
-            return Err(DeliveryError::new(
-                "invalid_note",
-                "di en una línea (hasta 300 caracteres) cómo quedó resuelta la etapa",
-            ));
-        }
+        let note = resolve_note(note)?;
         let store = self.store()?;
         let mut job = store
             .job(job_id)?
             .ok_or_else(|| DeliveryError::not_found("el trabajo", job_id))?;
         let jobs = store.task_jobs(&job.task_id)?;
-        let latest = jobs.iter().rev().find(|other| {
-            other.agent != DeliveryAgent::Shell
-                && other.result_state != Some(DeliveryResultState::Stale)
-                && other.undone_at_ms.is_none()
-        });
-        let open = jobs.iter().any(|other| other.status.is_open());
-        // A stage that broke, or one whose findings are accepted as they are.
-        let settleable = is_broken(&job) || has_open_findings(&job);
-        if open || !settleable || latest.map(|latest| &latest.id) != Some(&job.id) {
+        let job_refs: Vec<&DeliveryJob> = jobs.iter().collect();
+        if job.agent == DeliveryAgent::Shell {
+            if job.role != CHECKS_ROLE {
+                return Err(DeliveryError::new(
+                    "not_resolvable_role",
+                    "solo se dan por resueltas las etapas de agente y las comprobaciones de Tinto; un comando de setup se arregla y se reintenta con retry_job",
+                ));
+            }
+            if !check_fails(&job) {
+                return Err(DeliveryError::new(
+                    "already_passed",
+                    "la comprobación no falló o ya está resuelta: no hay nada que aceptar",
+                ));
+            }
+            let checks = store
+                .task(&job.task_id)?
+                .map(|task| task.checks)
+                .unwrap_or_default();
+            if !current_checks(&checks, &job_refs)
+                .iter()
+                .any(|check| check.id == job.id)
+            {
+                return Err(DeliveryError::new(
+                    "not_latest",
+                    "no es la última ejecución de esa comprobación sobre el código actual, o la comprobación ya no está entre las de la tarea (entonces no bloquea nada)",
+                ));
+            }
+        } else {
+            // A stage that broke, or one whose findings are accepted as
+            // they are.
+            if !(is_broken(&job) || has_open_findings(&job)) {
+                return Err(DeliveryError::new(
+                    "already_passed",
+                    "la etapa pasó o ya está resuelta: solo se resuelve una que falló, se bloqueó, se interrumpió o dejó hallazgos",
+                ));
+            }
+            let latest = jobs.iter().rev().find(|other| {
+                other.agent != DeliveryAgent::Shell
+                    && other.result_state != Some(DeliveryResultState::Stale)
+                    && other.undone_at_ms.is_none()
+            });
+            if let Some(latest) = latest.filter(|latest| latest.id != job.id) {
+                return Err(DeliveryError::new(
+                    "not_latest",
+                    format!(
+                        "no es la última etapa de la tarea: la última es {} ({})",
+                        latest.role, latest.id
+                    ),
+                ));
+            }
+        }
+        if let Some(open) = jobs.iter().find(|other| other.status.is_open()) {
             return Err(DeliveryError::new(
-                "resolve_unavailable",
-                "solo se da por resuelta la última etapa de la tarea cuando falló, se bloqueó, se interrumpió o dejó hallazgos, y no hay trabajos abiertos",
+                "jobs_open",
+                format!(
+                    "esta tarea tiene un trabajo abierto, {} ({}): espera a que termine o cancélalo",
+                    open.role, open.id
+                ),
             ));
         }
         job.resolved_at_ms = Some(now_ms());
@@ -2416,6 +2471,53 @@ impl DeliveryService {
         drop(store);
         self.notify();
         Ok(job)
+    }
+
+    /// Closes the task's open round without more work: what it had to
+    /// address was settled another way (answered with a reply, a check that
+    /// passed when run again with nothing to publish). The note, one line,
+    /// is its outcome.
+    pub fn resolve_round(
+        &self,
+        task_id: &str,
+        note: &str,
+        by: &str,
+    ) -> Result<super::model::DeliveryRound, DeliveryError> {
+        let note = resolve_note(note)?;
+        let store = self.store()?;
+        let mut round = super::rounds::open_of(&store, task_id)?.ok_or_else(|| {
+            DeliveryError::new("no_open_round", "la tarea no tiene una ronda abierta")
+        })?;
+        if let Some(open) = store
+            .task_jobs(task_id)?
+            .into_iter()
+            .find(|job| job.status.is_open())
+        {
+            return Err(DeliveryError::new(
+                "jobs_open",
+                format!(
+                    "esta tarea tiene un trabajo abierto, {} ({}): espera a que termine o cancélalo",
+                    open.role, open.id
+                ),
+            ));
+        }
+        round.closed_at_ms = Some(now_ms());
+        round.outcome = Some(format!("resuelta por {by}: {note}"));
+        store.put_round(&round)?;
+        store.record_event(
+            now_ms(),
+            "round_closed",
+            Some(task_id),
+            None,
+            &format!(
+                "{} — {}",
+                super::rounds::round_text(&round),
+                round.outcome.as_deref().unwrap_or_default()
+            ),
+        )?;
+        drop(store);
+        self.notify();
+        Ok(round)
     }
 
     pub fn job_log(&self, job_id: &str, from_line: usize) -> Result<DeliveryJobLog, DeliveryError> {
@@ -3477,14 +3579,11 @@ impl DeliveryService {
         let same_code = last_change(&jobs).is_some_and(|change| {
             change.end_candidate.is_some() && change.end_candidate == job.start_candidate
         });
-        let checks = current_checks(&jobs);
+        let checks = current_checks(&task.checks, &jobs);
         if !same_code || checks.is_empty() {
             return Ok(lines);
         }
-        let failed: Vec<&&DeliveryJob> = checks
-            .iter()
-            .filter(|check| check.status == DeliveryJobStatus::Failed)
-            .collect();
+        let failed: Vec<&&DeliveryJob> = checks.iter().filter(|check| check_fails(check)).collect();
         if failed.is_empty() {
             if checks
                 .iter()
@@ -3665,7 +3764,7 @@ impl DeliveryService {
             let jobs = store.task_jobs(&task.id)?;
             let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
             let (wanted, current) = if job.role == CHECKS_ROLE {
-                (&task.checks, current_checks(&jobs))
+                (&task.checks, current_checks(&task.checks, &jobs))
             } else {
                 (&task.setup, current_setup(&task.setup, &jobs))
             };
