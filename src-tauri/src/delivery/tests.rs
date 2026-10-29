@@ -10877,6 +10877,12 @@ fn guides_turn_their_reviewers_comments_into_rules_the_user_approves() {
     assert_eq!(read["through"], 3);
     let stale = coordinator.write("propose_guide", json!({"through": 9, "rules": []}));
     assert_eq!(stale["isError"], true, "{stale}");
+    // A stage no job has would leave the rule out of every job.
+    let unknown = coordinator.write(
+        "propose_guide",
+        json!({"through": 3, "rules": [{"kind": "visual", "rule": "x", "stages": ["QA"]}]}),
+    );
+    assert_eq!(unknown["isError"], true, "{unknown}");
     coordinator.write(
         "propose_guide",
         json!({"through": 3, "note": "Primeras reglas", "rules": [

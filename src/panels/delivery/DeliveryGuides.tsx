@@ -10,6 +10,7 @@ import {
   getDeliveryGuide,
   getDeliveryGuideCandidates,
   getDeliveryRepoSettings,
+  onDeliveryChanged,
   requestDeliveryGuide,
   setDeliveryRepoSettings,
 } from "../../delivery/client";
@@ -60,6 +61,20 @@ export function GuidesPage({ repo, onBack }: { repo: RepoChoice; onBack: () => v
   const [roles, setRoles] = useState<Record<string, Role> | null>(null);
   const [status, setStatus] = useState("");
 
+  // A coordinator's proposal shows as soon as it arrives.
+  useEffect(() => {
+    let live = true;
+    const reload = () =>
+      getDeliveryGuide(repo.path).then(
+        (found) => live && setView(found),
+        () => undefined,
+      );
+    const unlisten = onDeliveryChanged(() => void reload());
+    return () => {
+      live = false;
+      void unlisten.then((stop) => stop());
+    };
+  }, [repo.path]);
   useEffect(() => {
     let live = true;
     getDeliveryGuide(repo.path).then(

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DeliveryGuideRule, DeliveryGuideView } from "../../delivery/types";
 import { GuidesPage } from "./DeliveryGuides";
@@ -12,6 +12,7 @@ const client = vi.hoisted(() => ({
   collectDeliveryGuideComments: vi.fn(),
   requestDeliveryGuide: vi.fn(),
   decideDeliveryGuide: vi.fn(),
+  onDeliveryChanged: vi.fn(),
 }));
 vi.mock("../../delivery/client", () => client);
 
@@ -45,7 +46,14 @@ beforeEach(() => {
   client.getDeliveryGuideCandidates.mockResolvedValue(["ana", "luis"]);
   client.getDeliveryRepoSettings.mockResolvedValue({ checks: ["npm test"] });
   client.setDeliveryRepoSettings.mockResolvedValue({});
+  client.onDeliveryChanged.mockImplementation((callback: () => void) => {
+    changed = callback;
+    return Promise.resolve(() => {});
+  });
 });
+
+/** Delivery's change event, as a coordinator's proposal fires it. */
+let changed = () => {};
 
 describe("GuidesPage", () => {
   it("makes reviewers guides and keeps the rest of the repo's settings", async () => {
@@ -67,9 +75,10 @@ describe("GuidesPage", () => {
     });
   });
 
-  it("shows what a proposal adds, changes and retires, for the user to approve", async () => {
+  it("shows a proposal as it arrives: what it adds, changes and retires, to approve", async () => {
     const user = userEvent.setup();
-    client.getDeliveryGuide.mockResolvedValue(
+    const before = view({ rules: [rule("V-1", "Espaciado de 4px"), rule("V-2", "Sin sombras")] });
+    client.getDeliveryGuide.mockResolvedValueOnce(before).mockResolvedValue(
       view({
         rules: [rule("V-1", "Espaciado de 4px"), rule("V-2", "Sin sombras")],
         proposal: {
@@ -88,6 +97,10 @@ describe("GuidesPage", () => {
       view({ rules: [rule("V-1", "Espaciado de 4px", { seen: 3 })] }),
     );
     render(<GuidesPage repo={repo} onBack={() => {}} />);
+    expect(await screen.findByText("Sin sombras")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Reglas propuestas" })).toBeNull();
+    // The coordinator proposes while the page is open.
+    await act(async () => changed());
     const proposal = await screen.findByRole("group", { name: "Reglas propuestas" });
     const marks = within(proposal)
       .getAllByRole("listitem")

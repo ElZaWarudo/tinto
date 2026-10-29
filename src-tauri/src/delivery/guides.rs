@@ -371,6 +371,18 @@ impl DeliveryService {
         if rules.iter().any(|rule| rule.rule.trim().is_empty()) {
             return Err(invalid("cada regla necesita su texto en `rule`"));
         }
+        // A stage named otherwise would match no job: the rule reaches none.
+        let stages = super::phase::STAGES;
+        if let Some(stage) = rules
+            .iter()
+            .flat_map(|rule| &rule.stages)
+            .find(|stage| !stages.contains(&stage.as_str()))
+        {
+            return Err(invalid(format!(
+                "la etapa «{stage}» no existe: `stages` toma {}",
+                stages.join(", ")
+            )));
+        }
         let store = self.store()?;
         let mut guide = store.guide(&run.repo)?;
         let newest = guide.comments.last().map_or(0, |comment| comment.id);
@@ -397,6 +409,9 @@ impl DeliveryService {
             None,
             &plain_path(&run.repo),
         )?;
+        drop(store);
+        // The Guías page shows it as soon as it is proposed.
+        self.notify();
         Ok(proposal)
     }
 
