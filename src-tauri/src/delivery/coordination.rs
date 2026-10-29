@@ -1239,6 +1239,20 @@ impl DeliveryService {
             }
             _ => {}
         }
+        // A repo whose pushes start no CI: the messages Tinto writes say so,
+        // in the exact text the user approves.
+        if matches!(
+            request.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Merge
+        ) {
+            let settings = self.store()?.repo_settings(&task.repo)?;
+            for commit in &mut commits {
+                commit.message = settings.ci_message(&commit.message);
+            }
+            if request.rung != DeliveryRung::Commit {
+                body = settings.ci_message(&body).trim_start().to_string();
+            }
+        }
         let approval = DeliveryApproval {
             merge_method: request
                 .merge_method
@@ -2583,13 +2597,39 @@ impl DeliveryService {
         task: &DeliveryTask,
         pr: &super::prs::DeliveryPr,
     ) -> Option<String> {
-        let place = Place::of(task.distro.as_deref());
         if pr.checks.state() == super::prs::CiState::NotRun
-            && (task.skip_ci || !super::prs::has_ci(place, &task.worktree))
+            && self.ci_not_needed(task, pr).is_some()
         {
             return None;
         }
+        let place = Place::of(task.distro.as_deref());
         pr.ci_refusal(super::prs::ci_label(place, &task.worktree).as_deref())
+    }
+
+    /// Why CI that never ran is not needed on the task's PR: the
+    /// coordinator said so, the repo has no workflows, its pushes skip CI
+    /// (`ci_on_push: skip`), or no workflow runs for the files it changes.
+    pub(super) fn ci_not_needed(
+        &self,
+        task: &DeliveryTask,
+        pr: &super::prs::DeliveryPr,
+    ) -> Option<String> {
+        let place = Place::of(task.distro.as_deref());
+        if task.skip_ci {
+            return Some("la tarea no necesita CI (needs_ci: false)".to_string());
+        }
+        if !super::prs::has_ci(place, &task.worktree) {
+            return Some("el repositorio no tiene workflows de CI".to_string());
+        }
+        let skips = self
+            .store()
+            .and_then(|store| store.repo_settings(&task.repo))
+            .is_ok_and(|settings| settings.ci_on_push == super::model::DeliveryCiOnPush::Skip);
+        if skips {
+            return Some("los push de Tinto saltan la CI (ci_on_push: skip)".to_string());
+        }
+        let base = pr.base.clone().unwrap_or_else(|| task.base_ref.clone());
+        super::prs::ci_skipped_by_paths(place, &task.worktree, &base, &task.branch)
     }
 
     /// Runs a Jira step on the task's issue: links its PR once it is open
@@ -2625,15 +2665,23 @@ impl DeliveryService {
         let pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
             DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
         })?;
+        // Merged without CI having run: the outcome says why it was not needed.
+        let no_ci = (pr.checks.state() == super::prs::CiState::NotRun)
+            .then(|| self.ci_not_needed(&task, &pr))
+            .flatten();
         self.github_client()
             .merge(&pr.url, method, &approval.title, &approval.body)?;
-        Ok(format!(
+        let mut outcome = format!(
             "PR #{} fusionado ({method}) y rama {} borrada en GitHub",
             pr.number,
             self.task(&approval.task_id)
                 .map(|task| task.branch)
                 .unwrap_or_default()
-        ))
+        );
+        if let Some(why) = no_ci {
+            outcome.push_str(&format!("; sin CI: {why}"));
+        }
+        Ok(outcome)
     }
 
     pub(super) fn save_approval(

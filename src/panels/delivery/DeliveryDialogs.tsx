@@ -879,6 +879,7 @@ function RepoSettings({
   const [stages, setStages] = useState<Record<string, DeliveryStageAgent>>({});
   const [retryOnRestart, setRetryOnRestart] = useState(false);
   const [prWithoutReviewer, setPrWithoutReviewer] = useState(false);
+  const [skipCiOnPush, setSkipCiOnPush] = useState(false);
   const [probes, setProbes] = useState<string[]>([]);
   const [jiraHost, setJiraHost] = useState("");
   const [jiraProject, setJiraProject] = useState("");
@@ -929,6 +930,7 @@ function RepoSettings({
         setStages(settings.stages ?? {});
         setRetryOnRestart(settings.retry_on_restart ?? false);
         setPrWithoutReviewer(settings.pr_without_reviewer ?? false);
+        setSkipCiOnPush(settings.ci_on_push === "skip");
         setAutonomy({ ...DEFAULT_AUTONOMY, ...settings.autonomy });
         setProbes(settings.environment_probes ?? []);
         setJiraHost(settings.jira?.host ?? "");
@@ -1017,6 +1019,7 @@ function RepoSettings({
                 stages,
                 retry_on_restart: retryOnRestart,
                 pr_without_reviewer: prWithoutReviewer,
+                ci_on_push: skipCiOnPush ? "skip" : "run",
                 autonomy,
                 environment_probes: probes,
                 jira: jiraHost.trim()
@@ -1320,6 +1323,21 @@ function RepoSettings({
               Puedes aprobar el paso PR sin elegir revisor y fusionarlo sin una revisión aprobada,
               para repositorios donde nadie más revisa. Sigue haciendo falta la CI en verde, la
               aprobación de los revisores que elijas y que nadie haya pedido cambios.
+            </small>
+          </span>
+        </label>
+        <label className="delivery-check">
+          <input
+            type="checkbox"
+            checked={skipCiOnPush}
+            onChange={(event) => setSkipCiOnPush(event.target.checked)}
+          />
+          <span>
+            Push sin CI
+            <small>
+              Tinto termina con [skip ci] los mensajes de commit, sincronización y fusión que
+              escribe, así que sus push y fusiones no lanzan la CI, y el PR se fusiona sin esperar
+              una CI que no corrió.
             </small>
           </span>
         </label>

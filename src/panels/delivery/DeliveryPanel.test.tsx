@@ -2578,6 +2578,7 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("Cambios sin guardar.")).toBeInTheDocument();
     await user.click(within(settings).getByRole("checkbox", { name: /^Reintentar al reiniciar/ }));
     await user.click(within(settings).getByRole("checkbox", { name: /^PR sin revisor/ }));
+    await user.click(within(settings).getByRole("checkbox", { name: /^Push sin CI/ }));
     await user.click(within(settings).getByRole("checkbox", { name: "pg_isready -h localhost" }));
     expect(within(settings).getByRole("checkbox", { name: "npm test" })).not.toBeChecked();
     await user.type(
@@ -2591,6 +2592,7 @@ describe("DeliveryPanel", () => {
         expect.objectContaining({
           retry_on_restart: true,
           pr_without_reviewer: true,
+          ci_on_push: "skip",
           autonomy: expect.objectContaining({ merge: true, push: false, commit: true }),
           environment_probes: ["pg_isready -h localhost"],
           setup: ["npm --prefix frontend ci", "npm run bindings"],

@@ -638,6 +638,8 @@ export interface DeliveryRepoSettings {
   retry_on_restart?: boolean;
   /** "PR sin revisor": the PR opens without a reviewer and merges without a review. */
   pr_without_reviewer?: boolean;
+  /** "Push sin CI" (`skip`): Tinto's commit, sync and merge messages end with `[skip ci]`. */
+  ci_on_push?: "run" | "skip";
   /** Which steps Tinto takes on its own past the brainstorm. */
   autonomy?: DeliveryAutonomy;
   /** The checks the user marked as environment probes, run by the "Entorno" check. */

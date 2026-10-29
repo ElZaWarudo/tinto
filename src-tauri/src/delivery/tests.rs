@@ -3830,6 +3830,24 @@ fn write_files(task: &DeliveryTask, names: &[&str]) {
 }
 
 #[test]
+fn a_repo_whose_pushes_skip_ci_gets_skip_ci_in_the_messages_tinto_writes() {
+    let h = harness();
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(h.repo.path()).unwrap();
+    settings.ci_on_push = super::model::DeliveryCiOnPush::Skip;
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+    drop(store);
+    let task = h.task("C-9");
+    write_files(&task, &["a.txt"]);
+    let step = h
+        .service
+        .request_approval(commit_plan(&task, vec![commit("feat: a", &["a.txt"])], &[]))
+        .unwrap();
+    assert_eq!(step.commits[0].message, "feat: a\n\n[skip ci]");
+    assert_eq!(step.title, "feat: a");
+}
+
+#[test]
 fn a_commit_plan_is_refused_unless_every_changed_file_has_one_place() {
     let h = harness();
     let task = h.task("C-1");
