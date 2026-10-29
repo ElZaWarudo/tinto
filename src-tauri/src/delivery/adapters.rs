@@ -969,7 +969,10 @@ fn opencode_launch(
     } else {
         plain_path(&task.worktree)
     };
-    let mut args: Vec<String> = ["run", "--format", "json"]
+    // OpenCode takes its project from `PWD`, not from the folder it starts
+    // in: Tinto's own would make every job work on the checkout Tinto was
+    // started from, with the worktree out of its reach.
+    let mut args: Vec<String> = ["run", "--format", "json", "--dir", &worktree]
         .into_iter()
         .map(str::to_string)
         .collect();
@@ -990,13 +993,16 @@ fn opencode_launch(
         (Some(program), _) => Ok(JobLaunch {
             program,
             args,
-            cwd: Some(PathBuf::from(worktree)),
+            cwd: Some(PathBuf::from(&worktree)),
             stdin: prompt,
             provider_session_id: resume.map(str::to_string),
             wsl_job: None,
             note: None,
             files: Vec::new(),
-            env: vec![(OPENCODE_CONFIG_ENV.to_string(), config)],
+            env: vec![
+                (OPENCODE_CONFIG_ENV.to_string(), config),
+                ("PWD".to_string(), worktree),
+            ],
         }),
         (None, Some(distro)) => {
             let script = format!(
@@ -1106,6 +1112,11 @@ fn opencode_permissions(
             .map(|command| command.to_string())
             .chain(job.allowed_commands.iter().cloned())
         {
+            // Also as `git -C <worktree> …`, as agents often write it.
+            if let Some(rest) = command.strip_prefix("git ") {
+                rule(&mut bash, format!("git -C {worktree} {rest} *"), "allow");
+                rule(&mut bash, format!("git -C {worktree} {rest}"), "allow");
+            }
             rule(&mut bash, format!("{command} *"), "allow");
             rule(&mut bash, command, "allow");
         }
@@ -2808,11 +2819,18 @@ pub(crate) mod tests {
                 "run",
                 "--format",
                 "json",
+                "--dir",
+                "/repo-wt/K-1",
                 "--model",
                 "opencode/big-pickle",
                 "--variant",
                 "high"
             ]
+        );
+        // Its project is the worktree, whatever folder Tinto started in.
+        assert_eq!(
+            launch.env[1],
+            ("PWD".to_string(), "/repo-wt/K-1".to_string())
         );
         assert!(launch.stdin.contains("Write the failing test."));
         assert!(launch
@@ -2834,6 +2852,7 @@ pub(crate) mod tests {
         assert_eq!(review["bash"]["*"], "deny");
         assert_eq!(review["bash"]["npm test *"], "allow");
         assert_eq!(review["bash"]["git diff *"], "allow");
+        assert_eq!(review["bash"]["git -C /repo-wt/K-1 diff *"], "allow");
         assert_eq!(review["bash"]["git commit *"], "deny");
         assert_eq!(review["external_directory"]["/repo/.agent/K-1/**"], "allow");
         assert_eq!(review["edit"]["../../repo/.agent/K-1/**"], "deny");
