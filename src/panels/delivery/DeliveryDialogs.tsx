@@ -1247,7 +1247,7 @@ function RepoSettings({
         </Field>
         <Field
           label="Variables de entorno de verificación y QA"
-          hint="Una por línea, NOMBRE=valor. Los trabajos corren con ellas los comandos de verificación y de QA; por ejemplo, la base de datos de pruebas. {task} en un valor se cambia por la clave de la tarea (AGOS-474 → agos_474), así cada tarea tiene la suya. Son ajustes de prueba, no secretos: se ven tal cual."
+          hint="Una por línea, NOMBRE=valor. Los trabajos corren con ellas los comandos de verificación y de QA; por ejemplo, la base de datos de pruebas. {task} en un valor se cambia por la clave de la tarea (AGOS-474 → agos_474), así cada tarea tiene la suya; {job}, por el identificador corto del trabajo, así cada comprobación y cada sesión de agente tiene la suya. Son ajustes de prueba, no secretos: se ven tal cual."
         >
           <GrowingTextarea
             value={checkEnv}

@@ -1819,12 +1819,18 @@ impl DeliveryService {
                 )?);
             }
         }
-        // `{task}` gives each task its own value, such as a test database.
+        // `{task}` gives each task its own value, such as a test database,
+        // and `{job}` each job (a check run, an agent's session): two of
+        // the task's jobs running at once never share it.
+        let id = uuid::Uuid::new_v4().to_string();
         let slug = task_slug(&task.key);
         let check_env = settings
             .check_env
             .into_iter()
-            .map(|(name, value)| (name, value.replace("{task}", &slug)))
+            .map(|(name, value)| {
+                let value = value.replace("{task}", &slug).replace("{job}", &id[..8]);
+                (name, value)
+            })
             .collect();
         let mut decision_notes: Vec<String> = decisions
             .iter()
@@ -1878,7 +1884,7 @@ impl DeliveryService {
             + 1;
         let now = now_ms();
         let job = DeliveryJob {
-            id: uuid::Uuid::new_v4().to_string(),
+            id,
             task_id: task.id.clone(),
             role,
             attempt,

@@ -1830,6 +1830,9 @@ fn jobs_run_with_the_repos_environment_for_checks() {
     settings
         .check_env
         .insert("TEST_DB_NAME".into(), "tinto_test".into());
+    settings
+        .check_env
+        .insert("TEST_DB_RUN".into(), "agos{task}_{job}".into());
     h.service
         .store()
         .unwrap()
@@ -1843,6 +1846,11 @@ fn jobs_run_with_the_repos_environment_for_checks() {
         "mongodb://localhost:27017/agosagos_474"
     );
     assert_eq!(job.check_env["TEST_DB_NAME"], "tinto_test");
+    // `{job}` gives each job its own: a check and an agent never share it.
+    assert_eq!(
+        job.check_env["TEST_DB_RUN"],
+        format!("agosagos_474_{}", &job.id[..8])
+    );
     h.wait(&job.id);
     let seen = std::fs::read_to_string(task.worktree.join("env.txt")).unwrap();
     assert_eq!(seen.trim(), "mongodb://localhost:27017/agosagos_474");
