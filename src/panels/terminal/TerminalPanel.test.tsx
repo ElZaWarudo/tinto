@@ -873,6 +873,48 @@ describe("TerminalPanel", () => {
     ).toBeNull();
   });
 
+  it("shows a Claude Code permission request, which comes without an ACP runtime", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        agent_type: "claude",
+        turn_status: "working",
+        acp_runtime: null,
+        acp_permissions: [
+          {
+            id: "claude-1",
+            generation: 0,
+            provider_session_id: "provider-session",
+            turn_id: "",
+            tool_call_id: "tool-1",
+            title: "Bash: jq -c '.tasks[]' overview.json",
+            options: [
+              { id: "allow", label: "Permitir", kind: "allow_once" },
+              { id: "deny", label: "Rechazar", kind: "reject_once" },
+            ],
+            state: "pending",
+            reason: null,
+            expires_at_ms: Number.MAX_SAFE_INTEGER,
+          },
+        ],
+      }),
+    ]);
+    const user = userEvent.setup();
+    render(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "claude" })} />,
+    );
+
+    const request = await screen.findByRole("article", {
+      name: "Bash: jq -c '.tasks[]' overview.json",
+    });
+    await user.click(within(request).getByRole("button", { name: "Permitir" }));
+    expect(respondAgentSessionAcpPermissionMock).toHaveBeenCalledWith(
+      "sess-1",
+      "claude-1",
+      "allow",
+      false,
+    );
+  });
+
   it("confirms a completed turn only when its checkpoint is ready", async () => {
     const completionLabel = "Turno completado · punto de control listo";
     listAgentSessionsMock.mockResolvedValueOnce([

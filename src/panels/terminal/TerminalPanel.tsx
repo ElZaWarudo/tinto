@@ -2233,7 +2233,8 @@ También se desharán los cambios hechos después en este repo, incluidos los de
         </div>
       )}
 
-      {acpRuntime && (
+      {/* Claude asks its permissions without an ACP runtime: they show all the same. */}
+      {(acpRuntime || (session?.acp_permissions ?? []).length > 0) && (
         <AgentAcpPanel
           agentType={agentType}
           onConfigOption={(configId, valueId) => void onSetAcpConfigOption(configId, valueId)}
@@ -2871,16 +2872,16 @@ function AgentAcpPanel({
   permissions: AgentSessionAcpPermission[];
   respondingPermissionId: string | null;
   retrying: boolean;
-  runtime: AgentSessionAcpRuntime;
+  runtime: AgentSessionAcpRuntime | null;
   settingConfigId: string | null;
   turnIdle: boolean;
 }) {
   const panelRef = useRef<HTMLElement | null>(null);
   const focusedPermissionId = useRef<string | null>(null);
   const provider = agentLabel(agentType);
-  const copy = agentAcpRuntimeCopy(runtime, provider);
+  const copy = runtime && agentAcpRuntimeCopy(runtime, provider);
   const permissionAnnouncement = agentAcpPermissionAnnouncement(permissions);
-  const configOptions = runtime.config_options ?? [];
+  const configOptions = runtime?.config_options ?? [];
   useEffect(() => {
     const focused = focusedPermissionId.current;
     if (!focused) return;
@@ -2894,41 +2895,48 @@ function AgentAcpPanel({
   }, [permissions]);
   return (
     <section
-      aria-label={`Estado ACP de ${provider}`}
+      aria-label={runtime ? `Estado ACP de ${provider}` : `Permisos de ${provider}`}
       className="agent-panel__acp"
-      data-state={runtime.state}
+      data-state={runtime?.state}
       ref={panelRef}
       tabIndex={-1}
     >
-      <div
-        aria-label={`Estado ACP de ${provider}: ${copy.title}`}
-        aria-live="polite"
-        className="agent-panel__acp-status"
-        role="status"
-      >
-        <div>
-          <strong>{copy.title}</strong>
-          {copy.detail && <span>{copy.detail}</span>}
-          {runtime.lost_capabilities && runtime.lost_capabilities.length > 0 && (
-            <small>Sin: {runtime.lost_capabilities.join(", ")}.</small>
+      {!runtime && (
+        <span aria-live="polite" className="sr-only" role="status">
+          {permissionAnnouncement}
+        </span>
+      )}
+      {runtime && copy && (
+        <div
+          aria-label={`Estado ACP de ${provider}: ${copy.title}`}
+          aria-live="polite"
+          className="agent-panel__acp-status"
+          role="status"
+        >
+          <div>
+            <strong>{copy.title}</strong>
+            {copy.detail && <span>{copy.detail}</span>}
+            {runtime.lost_capabilities && runtime.lost_capabilities.length > 0 && (
+              <small>Sin: {runtime.lost_capabilities.join(", ")}.</small>
+            )}
+            <span className="sr-only">{permissionAnnouncement}</span>
+          </div>
+          {runtime.retry_available && (
+            <button
+              disabled={retrying || !turnIdle}
+              onClick={onRetry}
+              title={
+                turnIdle
+                  ? "Reintentar la conexión ACP"
+                  : "Espera a que termine el turno antes de cambiar de transporte"
+              }
+              type="button"
+            >
+              {retrying ? "Reintentando ACP…" : "Reintentar ACP"}
+            </button>
           )}
-          <span className="sr-only">{permissionAnnouncement}</span>
         </div>
-        {runtime.retry_available && (
-          <button
-            disabled={retrying || !turnIdle}
-            onClick={onRetry}
-            title={
-              turnIdle
-                ? "Reintentar la conexión ACP"
-                : "Espera a que termine el turno antes de cambiar de transporte"
-            }
-            type="button"
-          >
-            {retrying ? "Reintentando ACP…" : "Reintentar ACP"}
-          </button>
-        )}
-      </div>
+      )}
       {configOptions.length > 0 && (
         <div aria-label={`Configuración ACP de ${provider}`} className="agent-panel__acp-config">
           {configOptions.map((option) => (
@@ -2936,7 +2944,7 @@ function AgentAcpPanel({
               <span>{option.label}</span>
               <select
                 aria-label={`${option.label} de ${provider}`}
-                disabled={runtime.state !== "acp_ready" || !turnIdle || settingConfigId !== null}
+                disabled={runtime?.state !== "acp_ready" || !turnIdle || settingConfigId !== null}
                 onChange={(event) => onConfigOption(option.id, event.currentTarget.value)}
                 value={option.current_value}
               >
@@ -2951,7 +2959,10 @@ function AgentAcpPanel({
         </div>
       )}
       {permissions.length > 0 && (
-        <div aria-label="Permisos ACP" className="agent-panel__acp-permissions">
+        <div
+          aria-label={runtime ? "Permisos ACP" : "Permisos"}
+          className="agent-panel__acp-permissions"
+        >
           {permissions.map((permission) => {
             const pending = permission.state === "pending";
             const submitting = respondingPermissionId === permission.id;
