@@ -37,8 +37,9 @@ published as a GitHub Release, and installed Tinto updates itself.
 ### Delivery
 
 - A batch of issues, each in its own worktree and branch, taken through tests,
-  implementation, review and QA by background jobs, and coordinated by an
-  agent over the `tinto-delivery` MCP server.
+  implementation, review and QA by background Codex, Claude Code, Muse Code or
+  OpenCode jobs, and coordinated by an agent over the `tinto-delivery` MCP
+  server.
 - Decisions, permissions and QA problems wait for you in Tinto; commit, push,
   PR, merge and Jira steps show exactly what they will publish, and each repo
   chooses which of them Tinto takes on its own.
