@@ -37,6 +37,7 @@ import {
   detachConsolesPanelFromWorkspaceDrop,
 } from "./workspace/detachConsoles";
 import { MenuBar } from "./workbench/MenuBar";
+import { UpdateNotice } from "./workbench/UpdateNotice";
 import { CompactWindowBar } from "./workbench/WindowChrome";
 import { BrowserReviewHome } from "./workbench/BrowserReviewHome";
 import { AddRepoDialog } from "./workbench/AddRepoDialog";
@@ -302,6 +303,7 @@ function NativeApp() {
         <NotificationWatcher />
         <DeliveryNotificationWatcher />
         <MenuBar />
+        <UpdateNotice />
         {connectionErrors.length > 0 && (
           <div
             aria-atomic="true"

@@ -69,6 +69,10 @@ flate2 = "1"
 tar = "0.4"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+# Updates from the GitHub release's latest.json, signed with Tinto's own key
+# (see RELEASING.md), and the restart that installs them.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(unix)'.dependencies]
 # Saber si un agente ya lee teclas (modo raw de su terminal); portable-pty ya la trae.
