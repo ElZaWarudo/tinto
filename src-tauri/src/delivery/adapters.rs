@@ -1585,6 +1585,18 @@ fn codex_qa_overrides(
         .collect())
 }
 
+/// Where a command job leaves its exit code, in its folder.
+pub const EXIT_FILE: &str = "exit_code";
+
+/// The exit code a command job left in `dir`, once it ended.
+pub fn exit_code_left(dir: &Path) -> Option<i32> {
+    std::fs::read_to_string(dir.join(EXIT_FILE))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 fn shell_launch(
     job: &DeliveryJob,
     task: &DeliveryTask,
@@ -1616,8 +1628,17 @@ fn shell_launch(
     std::fs::write(&script, body).map_err(DeliveryError::io)?;
     #[cfg(target_os = "windows")]
     let args = vec!["/D".to_string(), "/C".to_string(), plain_path(&script)];
+    // A restarted Tinto adopts the command but is not its parent any more:
+    // the command's exit code is left in a file for it. Windows reads it
+    // from the process itself.
     #[cfg(not(target_os = "windows"))]
-    let args = vec![plain_path(&script)];
+    let args = vec![
+        "-c".to_string(),
+        r#"sh "$1"; code=$?; echo "$code" > "$2"; exit "$code""#.to_string(),
+        "tinto-job".to_string(),
+        plain_path(&script),
+        plain_path(&paths.dir.join(EXIT_FILE)),
+    ];
     Ok(JobLaunch {
         program,
         args,
@@ -3835,6 +3856,28 @@ pub(crate) mod tests {
         ));
         assert!(acted(&codex, CODEX_OK));
         assert!(acted(&sample_job(DeliveryAgent::Shell), ""));
+    }
+
+    /// What a restarted Tinto reads, since it is not the command's parent.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_command_leaves_its_exit_code_in_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = JobPaths::in_dir(dir.path().join("job"));
+        std::fs::create_dir_all(&paths.dir).unwrap();
+        let mut task = sample_task();
+        task.worktree = dir.path().to_path_buf();
+        let mut job = sample_job(DeliveryAgent::Shell);
+        job.prompt = "echo running; exit 3".into();
+        let launch = shell_launch(&job, &task, &paths).unwrap();
+        let status = std::process::Command::new(&launch.program)
+            .args(&launch.args)
+            .current_dir(launch.cwd.unwrap())
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(3));
+        assert_eq!(exit_code_left(&paths.dir), Some(3));
     }
 
     #[test]

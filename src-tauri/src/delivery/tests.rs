@@ -1128,6 +1128,62 @@ fn a_job_whose_agent_delivered_while_tinto_was_closed_ends_with_its_result() {
 }
 
 #[test]
+fn a_check_adopted_after_a_restart_ends_with_the_code_it_left_or_runs_again() {
+    for left in [Some("1"), None] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("delivery.sqlite");
+        let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+        let task = h.task("K-23");
+        let mut check = h.new_job(&task, "checks", "sleep=4 exit=0");
+        check.agent = DeliveryAgent::Shell;
+        let job = h.service.dispatch(check).unwrap();
+        h.wait_status(&job.id, DeliveryJobStatus::Started);
+        close_tinto(&h.service);
+        // What the command's launch leaves in its folder as it ends; the
+        // fake launcher's command does not.
+        if let Some(code) = left {
+            let file = h
+                ._jobs
+                .path()
+                .join(&job.id)
+                .join(super::adapters::EXIT_FILE);
+            std::fs::write(file, code).unwrap();
+        }
+
+        let restarted = reopen(&path, &h);
+        restarted.follow_running();
+        let done = wait_on(&restarted, &job.id);
+        let rounds = restarted.store().unwrap().task_rounds(&task.id).unwrap();
+        match left {
+            Some(_) => {
+                assert_eq!(done.status, DeliveryJobStatus::Failed);
+                assert_eq!(done.exit_code, Some(1));
+                assert_eq!(rounds.len(), 1, "a failing check opens its round");
+            }
+            // Its end is unknown: not a failure, it runs again.
+            None => {
+                assert_eq!(
+                    done.status,
+                    DeliveryJobStatus::Interrupted,
+                    "{:?}",
+                    done.error
+                );
+                assert!(rounds.is_empty(), "{rounds:?}");
+                let jobs = restarted.overview().unwrap().jobs;
+                let retry = jobs
+                    .iter()
+                    .find(|again| again.retry_of.as_deref() == Some(job.id.as_str()))
+                    .expect("queued again");
+                assert_eq!(
+                    wait_on(&restarted, &retry.id).status,
+                    DeliveryJobStatus::Finished
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn an_adopted_job_can_be_cancelled() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("delivery.sqlite");

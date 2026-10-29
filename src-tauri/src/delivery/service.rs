@@ -667,12 +667,15 @@ impl DeliveryService {
         let Ok(paths) = (self.inner.paths_for)(&job.id) else {
             return false;
         };
+        // A command that ended meanwhile left its exit code.
+        if job.agent == DeliveryAgent::Shell {
+            return adapters::exit_code_left(&paths.dir).is_some();
+        }
         let events = std::fs::read_to_string(&paths.events).unwrap_or_default();
         let result = std::fs::read_to_string(&paths.result).ok();
-        job.agent != DeliveryAgent::Shell
-            && adapters::read_outcome(job.agent, &events, result.as_deref())
-                .result
-                .is_some()
+        adapters::read_outcome(job.agent, &events, result.as_deref())
+            .result
+            .is_some()
     }
 
     /// Follows, each in its thread, the jobs that outlived the last Tinto.
@@ -2887,6 +2890,23 @@ impl DeliveryService {
         if self.inner.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
+        // A command adopted after a restart left its exit code in its
+        // folder. One that left none (killed while Tinto was closed) did not
+        // fail: it runs again instead of failing the task's checks.
+        let exited = match exited {
+            Some(job_process::Exited { success: None, .. })
+                if agent == DeliveryAgent::Shell && !cancelled && !timed_out =>
+            {
+                match adapters::exit_code_left(&paths.dir) {
+                    Some(code) => Some(job_process::Exited {
+                        code: Some(code),
+                        success: Some(code == 0),
+                    }),
+                    None => return self.interrupt_unknown_end(&job.id, &leftovers),
+                }
+            }
+            exited => exited,
+        };
         let mut last = events.read(&paths.events);
         last.extend(events.rest());
         read_events(last);
@@ -2894,7 +2914,7 @@ impl DeliveryService {
 
         let events = std::fs::read_to_string(&paths.events).unwrap_or_default();
         let result_file = std::fs::read_to_string(&paths.result).ok();
-        let mut outcome = adapters::read_outcome(agent, &events, result_file.as_deref());
+        let outcome = adapters::read_outcome(agent, &events, result_file.as_deref());
         let mut end = match &start {
             Some(start) => {
                 Some(self.snapshot(&task, &format!("job-{}-end", job.id), Some(&start.tree))?)
@@ -2928,12 +2948,6 @@ impl DeliveryService {
             Some(exited) => exited.success.unwrap_or(agent != DeliveryAgent::Shell),
             None => false,
         };
-        if exited.is_some_and(|exited| exited.success.is_none()) && agent == DeliveryAgent::Shell {
-            outcome.error = Some(
-                "Tinto se reinició mientras corría y no pudo saber cómo terminó; lánzalo de nuevo."
-                    .to_string(),
-            );
-        }
         let ending = Ending {
             exit_ok,
             exit_code: exited.and_then(|exited| exited.code),
@@ -3793,6 +3807,37 @@ impl DeliveryService {
         }
         let store = self.store()?;
         super::rounds::after_job(&store, &job)
+    }
+
+    /// A command Tinto adopted after a restart whose end it cannot learn:
+    /// interrupted, as if the restart had cut it off, and queued again.
+    fn interrupt_unknown_end(
+        &self,
+        job_id: &str,
+        leftovers: &[String],
+    ) -> Result<(), DeliveryError> {
+        {
+            let store = self.store()?;
+            let mut job = store
+                .job(job_id)?
+                .ok_or_else(|| DeliveryError::not_found("el trabajo", job_id))?;
+            job.status = DeliveryJobStatus::Interrupted;
+            job.ended_at_ms = Some(now_ms());
+            job.current_command = None;
+            job.current_command_at_ms = None;
+            job.error =
+                Some("Tinto se reinició mientras corría y no pudo saber cómo terminó.".to_string());
+            store.put_job(&job)?;
+            settle_lease(&store, &job, true, leftovers)?;
+            store.record_event(
+                now_ms(),
+                "job_interrupted",
+                Some(&job.task_id),
+                Some(&job.id),
+                "",
+            )?;
+        }
+        self.retry_after_restart(job_id, "tras reiniciar Tinto")
     }
 
     /// A job that failed outside its process (snapshot, launch, store). If
