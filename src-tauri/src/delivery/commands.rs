@@ -505,6 +505,7 @@ pub fn delivery_set_repo_settings(
     let settings = DeliveryRepoSettings {
         retry_on_restart: settings.retry_on_restart,
         pr_without_reviewer: settings.pr_without_reviewer,
+        ci_on_push: settings.ci_on_push,
         autonomy: settings.autonomy,
         environment_probes,
         // A person with no kind left guides nothing.

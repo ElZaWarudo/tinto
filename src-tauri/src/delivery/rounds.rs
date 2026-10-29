@@ -11,7 +11,8 @@ use super::model::{
     DeliveryQaProblem, DeliveryResultState, DeliveryRound, DeliveryRung, DeliveryTask,
 };
 use super::phase::{
-    current_checks, has_open_findings, next_stage, open_merge, resolves_merge, round_step,
+    check_fails, current_checks, failing_checks, has_open_findings, next_stage, open_merge,
+    resolves_merge, round_step, skips_qa,
 };
 use super::prs::DeliveryPr;
 use super::service::{CHECKS_ROLE, QA_ROLE};
@@ -111,16 +112,13 @@ fn checks_round(task: &DeliveryTask, job: &DeliveryJob, jobs: &[DeliveryJob]) ->
         return None;
     }
     let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
-    let checks = current_checks(&jobs);
+    let checks = current_checks(&task.checks, &jobs);
     let ended = task.checks.iter().all(|command| {
         checks
             .iter()
             .any(|check| &check.prompt == command && !check.status.is_open())
     });
-    let failed: Vec<&&DeliveryJob> = checks
-        .iter()
-        .filter(|check| check.status == DeliveryJobStatus::Failed)
-        .collect();
+    let failed: Vec<&&DeliveryJob> = checks.iter().filter(|check| check_fails(check)).collect();
     if !ended || failed.is_empty() || checks.iter().any(|check| check.status.is_open()) {
         return None;
     }
@@ -310,6 +308,14 @@ pub(super) fn open_round(
         // it already had to address.
         let refines = open.kind == "qa" && new.kind == "qa_problems";
         if !worked {
+            // The same news again (opened as it arrived, then a stage
+            // dispatched on it): nothing changes.
+            let same = open.kind == new.kind
+                && open.cause == new.cause
+                && items.iter().all(|item| open.items.contains(item));
+            if same {
+                return Ok(());
+            }
             if refines {
                 open.items = items;
             } else {
@@ -398,10 +404,6 @@ pub(super) fn settle_round(store: &DeliveryStore, task_id: &str) -> Result<(), D
     let approvals = task_approvals(store, task_id)?;
     let job_refs: Vec<&DeliveryJob> = jobs.iter().collect();
     let approval_refs: Vec<&DeliveryApproval> = approvals.iter().collect();
-    let accepted = round.source.as_deref().is_some_and(|source| {
-        jobs.iter()
-            .any(|job| job.id == source && job.resolved_at_ms.is_some())
-    });
     // The round's own stages, Tinto's checks aside.
     let worked: Vec<&DeliveryJob> = jobs
         .iter()
@@ -412,8 +414,29 @@ pub(super) fn settle_round(store: &DeliveryStore, task_id: &str) -> Result<(), D
                 && job.result_state != Some(DeliveryResultState::Stale)
         })
         .collect();
+    // Its source accepted, or, for failing checks, each one still failing
+    // accepted since it opened and no stage of it changed the code.
+    let accepted = round.source.as_deref().is_some_and(|source| {
+        jobs.iter()
+            .any(|job| job.id == source && job.resolved_at_ms.is_some())
+    }) || (round.kind == "checks"
+        && worked.iter().all(|job| job.changes.is_empty())
+        && failing_checks(&task.checks, &job_refs).is_empty()
+        && jobs.iter().any(|job| {
+            job.role == CHECKS_ROLE
+                && job
+                    .resolved_at_ms
+                    .is_some_and(|at| at >= round.opened_at_ms)
+        }));
     let settled = !jobs.iter().any(|job| job.status.is_open())
-        && next_stage(&task.setup, &job_refs, &approval_refs).is_none();
+        && next_stage(
+            &task.setup,
+            &task.checks,
+            skips_qa(store.repo_settings(&task.repo)?.has_qa(), &job_refs),
+            &job_refs,
+            &approval_refs,
+        )
+        .is_none();
     let unchanged = settled
         && worked.iter().all(|job| job.changes.is_empty())
         && worked.last().is_some_and(|job| {

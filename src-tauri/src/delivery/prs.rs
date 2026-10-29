@@ -445,6 +445,189 @@ pub fn ci_label(place: Place<'_>, worktree: &std::path::Path) -> Option<String> 
     })
 }
 
+/// Why CI is not required on the task's PR: every workflow of the repo
+/// filters by paths (`on.pull_request.paths`, `paths-ignore`, and the
+/// branches and paths of `push`) that the PR's changed files never reach,
+/// so GitHub runs none and reports no check. `None` when one may run or
+/// the files cannot be read.
+pub fn ci_skipped_by_paths(
+    place: Place<'_>,
+    worktree: &std::path::Path,
+    base: &str,
+    branch: &str,
+) -> Option<String> {
+    let workflows: Vec<String> = workflow_files(place, worktree)
+        .iter()
+        .filter_map(|path| tasks::git(place, worktree, &["show", &format!("HEAD:{path}")]).ok())
+        .collect();
+    let base = format!("origin/{}", base.trim_start_matches("origin/"));
+    let range = format!("{base}...HEAD");
+    let files: Vec<String> = tasks::git(place, worktree, &["diff", "--name-only", &range])
+        .ok()?
+        .lines()
+        .map(str::to_string)
+        .collect();
+    (!workflows.is_empty()
+        && !files.is_empty()
+        && workflows
+            .iter()
+            .all(|workflow| !workflow_runs(workflow, &files, branch)))
+    .then(|| {
+        "ningún workflow de la CI se ejecuta para los archivos que cambia el PR (todos filtran por paths o ramas): la CI no hace falta".to_string()
+    })
+}
+
+/// A YAML line without its comment, with its indentation.
+fn yaml_lines(text: &str) -> Vec<(usize, &str)> {
+    text.lines()
+        .filter_map(|line| {
+            let content = match line.find(" #") {
+                Some(at) => &line[..at],
+                None => line,
+            };
+            let trimmed = content.trim();
+            (!trimmed.is_empty() && !trimmed.starts_with('#'))
+                .then(|| (content.len() - content.trim_start().len(), trimmed))
+        })
+        .collect()
+}
+
+fn unquote(text: &str) -> String {
+    text.trim()
+        .trim_matches(|c| c == '\'' || c == '"')
+        .to_string()
+}
+
+/// `key: value` of a mapping line, the key unquoted.
+fn yaml_entry(line: &str) -> Option<(String, &str)> {
+    let (key, value) = line.split_once(':')?;
+    Some((unquote(key), value.trim()))
+}
+
+/// The lines under the one at `at`: those indented deeper than it.
+fn yaml_block<'a>(lines: &[(usize, &'a str)], at: usize) -> Vec<(usize, &'a str)> {
+    let indent = lines[at].0;
+    lines[at + 1..]
+        .iter()
+        .take_while(|(deeper, _)| *deeper > indent)
+        .copied()
+        .collect()
+}
+
+/// A list given inline (`[a, b]`, `a`) or as `- a` lines under its key.
+fn yaml_list(inline: &str, block: &[(usize, &str)]) -> Vec<String> {
+    if !inline.is_empty() {
+        return inline
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .map(unquote)
+            .filter(|item| !item.is_empty())
+            .collect();
+    }
+    block
+        .iter()
+        .filter_map(|(_, line)| line.strip_prefix("- ").or(line.strip_prefix('-')))
+        .map(unquote)
+        .collect()
+}
+
+/// A mapping key with its inline value and the lines under it.
+type YamlKey<'a> = (String, &'a str, Vec<(usize, &'a str)>);
+
+/// The mapping's own keys (shallowest lines) with their value and block.
+fn yaml_keys<'a>(lines: &[(usize, &'a str)]) -> Vec<YamlKey<'a>> {
+    let Some(top) = lines.iter().map(|(indent, _)| *indent).min() else {
+        return Vec::new();
+    };
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, (indent, _))| *indent == top)
+        .map(|(at, (_, line))| {
+            let line = line.strip_prefix("- ").unwrap_or(line);
+            let (key, value) = yaml_entry(line).unwrap_or((unquote(line), ""));
+            (key, value, yaml_block(lines, at))
+        })
+        .collect()
+}
+
+/// Whether a GitHub filter list (globs, `!` excluding) takes `item`: the
+/// last pattern that matches decides.
+fn filter_takes(patterns: &[String], item: &str) -> bool {
+    let mut taken = false;
+    for pattern in patterns {
+        let (negated, glob) = match pattern.strip_prefix('!') {
+            Some(glob) => (true, glob),
+            None => (false, pattern.as_str()),
+        };
+        let matches = globset::GlobBuilder::new(glob)
+            .literal_separator(true)
+            .build()
+            .map(|glob| glob.compile_matcher().is_match(item))
+            // A pattern Tinto cannot read may take anything.
+            .unwrap_or(true);
+        if matches {
+            taken = !negated;
+        }
+    }
+    taken
+}
+
+/// Whether a workflow may run for a PR of `branch` that changes `files`.
+/// Anything Tinto does not understand counts as running.
+pub fn workflow_runs(text: &str, files: &[String], branch: &str) -> bool {
+    let lines = yaml_lines(text);
+    let Some(on) = lines.iter().position(|(indent, line)| {
+        *indent == 0 && yaml_entry(line).is_some_and(|(key, _)| key == "on" || key == "true")
+    }) else {
+        return true;
+    };
+    let inline = yaml_entry(lines[on].1).map_or("", |(_, value)| value);
+    let events: Vec<YamlKey> = if inline.is_empty() {
+        yaml_keys(&yaml_block(&lines, on))
+    } else {
+        yaml_list(inline, &[])
+            .into_iter()
+            .map(|event| (event, "", Vec::new()))
+            .collect()
+    };
+    events.iter().any(|(event, _, block)| {
+        if !matches!(
+            event.as_str(),
+            "pull_request" | "pull_request_target" | "push"
+        ) {
+            return false;
+        }
+        let filters = yaml_keys(block);
+        let list = |name: &str| {
+            filters
+                .iter()
+                .find(|(key, _, _)| key == name)
+                .map(|(_, inline, block)| yaml_list(inline, block))
+        };
+        if event == "push" {
+            if let Some(branches) = list("branches") {
+                if !filter_takes(&branches, branch) {
+                    return false;
+                }
+            }
+            if list("branches-ignore").is_some_and(|ignored| filter_takes(&ignored, branch)) {
+                return false;
+            }
+            // Only tags: no push of the branch runs it.
+            if list("tags").is_some() && list("branches").is_none() {
+                return false;
+            }
+        }
+        match (list("paths"), list("paths-ignore")) {
+            (Some(paths), _) => files.iter().any(|file| filter_takes(&paths, file)),
+            (None, Some(ignored)) => files.iter().any(|file| !filter_takes(&ignored, file)),
+            (None, None) => true,
+        }
+    })
+}
+
 fn check_state(check: &Value) -> &'static str {
     // Check runs carry status + conclusion; commit statuses carry state.
     let upper = |key: &str| check[key].as_str().unwrap_or_default().to_ascii_uppercase();
@@ -460,7 +643,10 @@ fn check_state(check: &Value) -> &'static str {
         return "pending";
     }
     match upper("conclusion").as_str() {
-        "FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failing",
+        // A run cancelled (by Tinto, the coordinator or a newer push) did
+        // not test the head: it never ran, it did not fail.
+        "CANCELLED" => "not_run",
+        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failing",
         "SKIPPED" | "NEUTRAL" => "skipped",
         _ => "passing",
     }
@@ -1720,7 +1906,8 @@ impl DeliveryService {
             return Ok(Some(pr));
         }
         let task = self.task(task_id)?;
-        let place = Place::of(task.distro.as_deref());
+        // Whether CI that never ran is still awaited (see `ci_not_needed`).
+        let ci_needed = self.ci_not_needed(&task, &pr).is_none();
         let github = self.github();
         let read = github
             .pr(&pr.url)
@@ -1739,8 +1926,7 @@ impl DeliveryService {
             }
             pr.checked_at_ms = Some(now_ms());
             let state = pr.checks.state();
-            pr.ci = (state != CiState::NotRun || (!task.skip_ci && has_ci(place, &task.worktree)))
-                .then_some(state);
+            pr.ci = (state != CiState::NotRun || ci_needed).then_some(state);
             let asked =
                 |pr: &DeliveryPr| pr.review_decision.as_deref() == Some("changes_requested");
             if asked(&pr) && !asked(&before) {
@@ -1749,6 +1935,11 @@ impl DeliveryService {
             store.put_pr(&pr)?;
             if let Some(news) = pr_news(&before, &pr) {
                 store.record_event(now_ms(), "pr_changed", Some(task_id), None, &news)?;
+            }
+            // Changes asked send the work back as they arrive, whatever the
+            // push's state: the round is there before any stage answers it.
+            if asked(&pr) && !asked(&before) {
+                super::rounds::for_pr(&store, task_id)?;
             }
             (before, pr)
         };
@@ -2985,6 +3176,14 @@ mod tests {
                 CiState::NotRun,
                 vec!["e2e"],
             ),
+            // Cancelled tested nothing: not run, not failing.
+            (
+                "cancelled",
+                json!([run("build", "COMPLETED", "CANCELLED")]),
+                json!([]),
+                CiState::NotRun,
+                vec!["build"],
+            ),
         ];
         for (case, rollup, required, state, not_run) in cases {
             let checks =
@@ -2992,6 +3191,43 @@ mod tests {
             assert_eq!(checks.state(), state, "{case}");
             assert_eq!(checks.not_run, not_run, "{case}");
         }
+    }
+
+    #[test]
+    fn a_workflow_runs_only_for_the_paths_and_branches_it_filters_on() {
+        let backend = "name: Backend\non:\n  push:\n    branches: [main]\n  pull_request:\n    paths:\n      - 'web-application/backend/**' # API\n      - \"!**/*.md\"\njobs: {}\n";
+        let docs_ignored = "on:\n  pull_request:\n    paths-ignore: ['docs/**', '**.md']\n";
+        let every = "on: [push, pull_request]\n";
+        let manual = "on:\n  workflow_dispatch:\n  schedule:\n    - cron: '0 0 * * *'\n";
+        let files =
+            |names: &[&str]| -> Vec<String> { names.iter().map(|name| name.to_string()).collect() };
+        let dpp = files(&["web-application/Dockerfile", "docs/adr/0007.md"]);
+        let api = files(&["web-application/backend/src/app.ts"]);
+        let branch = "delivery/dpp-199";
+        for (case, workflow, changed, runs) in [
+            ("paths none match", backend, &dpp, false),
+            ("paths match", backend, &api, true),
+            (
+                "negated path",
+                backend,
+                &files(&["web-application/backend/README.md"]),
+                false,
+            ),
+            (
+                "all ignored",
+                docs_ignored,
+                &files(&["docs/a.md", "README.md"]),
+                false,
+            ),
+            ("one not ignored", docs_ignored, &dpp, true),
+            ("no filter", every, &dpp, true),
+            ("no pr or push", manual, &dpp, false),
+        ] {
+            assert_eq!(workflow_runs(workflow, changed, branch), runs, "{case}");
+        }
+        // A push to any branch runs it whatever the paths.
+        let push = "on:\n  push:\n  pull_request:\n    paths: ['src/**']\n";
+        assert!(workflow_runs(push, &dpp, branch));
     }
 
     #[test]

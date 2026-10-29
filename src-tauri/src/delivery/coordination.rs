@@ -1132,7 +1132,7 @@ impl DeliveryService {
         if request.rung == DeliveryRung::Commit && request.requested_by != "user" {
             let jobs = self.store()?.task_jobs(&task.id)?;
             let jobs: Vec<&super::model::DeliveryJob> = jobs.iter().collect();
-            if let Some(why) = super::phase::commit_blocker(&jobs) {
+            if let Some(why) = super::phase::commit_blocker(&task.checks, &jobs) {
                 return Err(DeliveryError::new(
                     "stages_unsettled",
                     format!(
@@ -1258,6 +1258,20 @@ impl DeliveryService {
                 fix_commits = self.fix_commits(&task, comment_url.as_deref(), thread.as_ref());
             }
             _ => {}
+        }
+        // A repo whose pushes start no CI: the messages Tinto writes say so,
+        // in the exact text the user approves.
+        if matches!(
+            request.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Merge
+        ) {
+            let settings = self.store()?.repo_settings(&task.repo)?;
+            for commit in &mut commits {
+                commit.message = settings.ci_message(&commit.message);
+            }
+            if request.rung != DeliveryRung::Commit {
+                body = settings.ci_message(&body).trim_start().to_string();
+            }
         }
         let approval = DeliveryApproval {
             merge_method: request
@@ -2673,11 +2687,73 @@ impl DeliveryService {
             }
             // A sync's merge committed by hand, its round still open.
             let store = self.store()?;
-            if super::rounds::open_of(&store, &task.id)?.is_some() {
+            if let Some(round) = super::rounds::open_of(&store, &task.id)? {
                 drop(store);
                 self.record_merge_concluded_outside(&task)?;
+                self.settle_rerun_checks(&task, round)?;
             }
         }
+        Ok(())
+    }
+
+    /// Closes a checks round whose failing checks passed when run again
+    /// (after a setup step, say) while no stage of it changed the code, once
+    /// the worktree is clean and, when the branch was published before it
+    /// opened, equal to what was published: there is nothing to commit or
+    /// push, and the task goes back to its PR.
+    fn settle_rerun_checks(
+        &self,
+        task: &DeliveryTask,
+        mut round: super::model::DeliveryRound,
+    ) -> Result<(), DeliveryError> {
+        if round.kind != "checks" || round.waits_merge_commit || task.checks.is_empty() {
+            return Ok(());
+        }
+        {
+            let jobs = self.store()?.task_jobs(&task.id)?;
+            let changed = jobs.iter().any(|job| {
+                job.agent != super::model::DeliveryAgent::Shell
+                    && job.created_at_ms >= round.opened_at_ms
+                    && job.undone_at_ms.is_none()
+                    && !job.changes.is_empty()
+            });
+            let refs: Vec<&super::model::DeliveryJob> = jobs.iter().collect();
+            let current = super::phase::current_checks(&task.checks, &refs);
+            let passed = task.checks.iter().all(|command| {
+                current.iter().any(|check| {
+                    &check.prompt == command
+                        && check.status == super::model::DeliveryJobStatus::Finished
+                })
+            });
+            if changed || !passed || jobs.iter().any(|job| job.status.is_open()) {
+                return Ok(());
+            }
+        }
+        let place = Place::of(task.distro.as_deref());
+        let Ok(state) = tasks::worktree_state(place, &task.worktree, &task.base_commit) else {
+            return Ok(());
+        };
+        let published = !round.after_push || (state.has_upstream && state.unpublished == 0);
+        if state.dirty || !published || tasks::merge_head(place, &task.worktree).is_some() {
+            return Ok(());
+        }
+        let store = self.store()?;
+        // Another reader may have closed it first.
+        if super::rounds::open_of(&store, &task.id)?.map(|open| open.id) != Some(round.id.clone()) {
+            return Ok(());
+        }
+        round.closed_at_ms = Some(now_ms());
+        round.outcome = Some("pasaron al repetirlas; nada que publicar".to_string());
+        store.put_round(&round)?;
+        store.record_event(
+            now_ms(),
+            "round_closed",
+            Some(&task.id),
+            None,
+            &super::rounds::round_text(&round),
+        )?;
+        drop(store);
+        self.notify();
         Ok(())
     }
 
@@ -2769,13 +2845,39 @@ impl DeliveryService {
         task: &DeliveryTask,
         pr: &super::prs::DeliveryPr,
     ) -> Option<String> {
-        let place = Place::of(task.distro.as_deref());
         if pr.checks.state() == super::prs::CiState::NotRun
-            && (task.skip_ci || !super::prs::has_ci(place, &task.worktree))
+            && self.ci_not_needed(task, pr).is_some()
         {
             return None;
         }
+        let place = Place::of(task.distro.as_deref());
         pr.ci_refusal(super::prs::ci_label(place, &task.worktree).as_deref())
+    }
+
+    /// Why CI that never ran is not needed on the task's PR: the
+    /// coordinator said so, the repo has no workflows, its pushes skip CI
+    /// (`ci_on_push: skip`), or no workflow runs for the files it changes.
+    pub(super) fn ci_not_needed(
+        &self,
+        task: &DeliveryTask,
+        pr: &super::prs::DeliveryPr,
+    ) -> Option<String> {
+        let place = Place::of(task.distro.as_deref());
+        if task.skip_ci {
+            return Some("la tarea no necesita CI (needs_ci: false)".to_string());
+        }
+        if !super::prs::has_ci(place, &task.worktree) {
+            return Some("el repositorio no tiene workflows de CI".to_string());
+        }
+        let skips = self
+            .store()
+            .and_then(|store| store.repo_settings(&task.repo))
+            .is_ok_and(|settings| settings.ci_on_push == super::model::DeliveryCiOnPush::Skip);
+        if skips {
+            return Some("los push de Tinto saltan la CI (ci_on_push: skip)".to_string());
+        }
+        let base = pr.base.clone().unwrap_or_else(|| task.base_ref.clone());
+        super::prs::ci_skipped_by_paths(place, &task.worktree, &base, &task.branch)
     }
 
     /// Runs a Jira step on the task's issue: links its PR once it is open
@@ -2811,12 +2913,16 @@ impl DeliveryService {
         let pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
             DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
         })?;
+        // Merged without CI having run: the outcome says why it was not needed.
+        let no_ci = (pr.checks.state() == super::prs::CiState::NotRun)
+            .then(|| self.ci_not_needed(&task, &pr))
+            .flatten();
         // GitHub closes the PRs that go into a branch it deletes: those are
         // pointed at the merge target first (`delete_merged_branch`).
         let stacked = !self.stacked_prs(&task)?.is_empty();
         self.github_client()
             .merge(&pr.url, method, &approval.title, &approval.body, !stacked)?;
-        Ok(match stacked {
+        let mut outcome = match stacked {
             false => format!(
                 "PR #{} fusionado ({method}) y rama {} borrada en GitHub",
                 pr.number, task.branch
@@ -2827,7 +2933,11 @@ impl DeliveryService {
                 task.branch,
                 pr.base.as_deref().unwrap_or(&task.base_ref)
             ),
-        })
+        };
+        if let Some(why) = no_ci {
+            outcome.push_str(&format!("; sin CI: {why}"));
+        }
+        Ok(outcome)
     }
 
     /// The open PRs of the batch that go into the task's branch.

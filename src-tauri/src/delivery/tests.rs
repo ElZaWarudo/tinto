@@ -1134,6 +1134,10 @@ fn a_check_adopted_after_a_restart_ends_with_the_code_it_left_or_runs_again() {
         let path = dir.path().join("delivery.sqlite");
         let h = harness_with_store(DeliveryStore::open(&path).unwrap());
         let task = h.task("K-23");
+        set_repo_checks(&h, &["sleep=4 exit=0"]);
+        h.service
+            .set_task_checks(&task.id, vec!["sleep=4 exit=0".into()])
+            .unwrap();
         let mut check = h.new_job(&task, "checks", "sleep=4 exit=0");
         check.agent = DeliveryAgent::Shell;
         let job = h.service.dispatch(check).unwrap();
@@ -3891,6 +3895,24 @@ fn write_files(task: &DeliveryTask, names: &[&str]) {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, format!("{name}\n")).unwrap();
     }
+}
+
+#[test]
+fn a_repo_whose_pushes_skip_ci_gets_skip_ci_in_the_messages_tinto_writes() {
+    let h = harness();
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(h.repo.path()).unwrap();
+    settings.ci_on_push = super::model::DeliveryCiOnPush::Skip;
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+    drop(store);
+    let task = h.task("C-9");
+    write_files(&task, &["a.txt"]);
+    let step = h
+        .service
+        .request_approval(commit_plan(&task, vec![commit("feat: a", &["a.txt"])], &[]))
+        .unwrap();
+    assert_eq!(step.commits[0].message, "feat: a\n\n[skip ci]");
+    assert_eq!(step.title, "feat: a");
 }
 
 #[test]
@@ -8388,6 +8410,14 @@ fn set_repo_checks(h: &Harness, checks: &[&str]) {
     store.set_repo_settings(h.repo.path(), &settings).unwrap();
 }
 
+/// Whether the repo has QA to run (a browser) or none.
+fn set_repo_qa(h: &Harness, browser: bool) {
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(h.repo.path()).unwrap();
+    settings.qa_browser = browser;
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+}
+
 /// The task's check jobs, once there are `count` and all ended.
 fn ended_checks(h: &Harness, task: &DeliveryTask, count: usize) -> Vec<DeliveryJob> {
     ended_jobs(h, task, "checks", count)
@@ -8517,7 +8547,7 @@ fn a_stage_runs_again_only_the_checks_its_changes_reach() {
     ended_checks(&h, &task, 5);
     let jobs = h.service.store().unwrap().task_jobs(&task.id).unwrap();
     let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
-    let current = super::phase::current_checks(&jobs);
+    let current = super::phase::current_checks(&[web.to_string(), api.to_string()], &jobs);
     assert_eq!(current.len(), 2);
     assert!(current
         .iter()
@@ -9234,8 +9264,112 @@ fn a_failing_check_opens_a_round_the_fix_is_told_about() {
 }
 
 #[test]
+fn resolve_job_accepts_a_failing_check_and_says_why_it_refuses() {
+    let h = harness();
+    set_repo_checks(&h, &["exit=1"]);
+    let task = h.task("R-9");
+    h.service
+        .set_task_checks(&task.id, vec!["exit=1".into()])
+        .unwrap();
+    let implementation = h.dispatch(&task, "implementation", "events=codex-ok touch=code.txt");
+    h.wait(&implementation.id);
+    let check = ended_checks(&h, &task, 1)[0].clone();
+    assert!(round_now(&h, &task).is_some());
+    let refused = |job_id: &str| {
+        h.service
+            .resolve(job_id, "nota", "coordinator")
+            .unwrap_err()
+            .category
+    };
+    assert_eq!(refused(&implementation.id), "already_passed");
+
+    h.service
+        .resolve(
+            &check.id,
+            "Solo falla sin la base de datos local",
+            "coordinator",
+        )
+        .unwrap();
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert!(phase.failing_checks.is_empty());
+    assert_ne!(phase.next_stage.as_deref(), Some("implementation"));
+    assert!(round_now(&h, &task).is_none(), "its round is accepted");
+    assert_eq!(
+        h.service.overview().unwrap().rounds[0].outcome.as_deref(),
+        Some("aceptados")
+    );
+    assert_eq!(refused(&check.id), "already_passed");
+}
+
+#[test]
+fn a_checks_round_closes_once_its_checks_pass_again_with_nothing_to_publish() {
+    let h = harness();
+    set_repo_checks(&h, &["cargo check"]);
+    let task = h.task("R-10");
+    h.service
+        .set_task_checks(&task.id, vec!["cargo check".into()])
+        .unwrap();
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    let check = |id: &str, status: &str| {
+        std::thread::sleep(Duration::from_millis(5));
+        let at = super::now_ms();
+        let job: DeliveryJob = serde_json::from_value(json!({
+            "id": id, "task_id": task.id, "role": "checks", "attempt": 1, "agent": "shell",
+            "access": "workspace", "prompt": "cargo check", "contract_version": 1,
+            "writes": false, "timeout_minutes": 60, "status": status,
+            "created_at_ms": at - 1, "started_at_ms": at - 1, "ended_at_ms": at,
+        }))
+        .unwrap();
+        let store = h.service.store().unwrap();
+        store.put_job(&job).unwrap();
+        super::rounds::after_job(&store, &job).unwrap();
+    };
+    check("c1", "failed");
+    assert_eq!(round_now(&h, &task).unwrap().round.kind, "checks");
+    // A setup step later, the same check passes on the same code: the
+    // worktree is clean, so the round has nothing left to commit.
+    check("c2", "finished");
+    assert!(round_now(&h, &task).is_none());
+    assert_eq!(
+        h.service.overview().unwrap().rounds[0].outcome.as_deref(),
+        Some("pasaron al repetirlas; nada que publicar")
+    );
+}
+
+#[test]
+fn retrying_a_check_that_failed_at_once_with_nothing_changed_warns() {
+    let h = harness();
+    let task = h.task("R-12");
+    let at = super::now_ms() + 10;
+    let check: DeliveryJob = serde_json::from_value(json!({
+        "id": "c1", "task_id": task.id, "role": "checks", "attempt": 1, "agent": "shell",
+        "access": "workspace", "prompt": "cargo check", "contract_version": 1,
+        "writes": false, "timeout_minutes": 60, "status": "failed",
+        "error": "failed to read vendor/plugin/Cargo.toml",
+        "created_at_ms": at, "started_at_ms": at, "ended_at_ms": at + 200,
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_job(&check).unwrap();
+    let warning = h.service.futile_retry(&check).unwrap().expect("a warning");
+    assert!(warning.contains("fallará igual"), "{warning}");
+    // One that took its time failed for another reason.
+    let mut slow = check.clone();
+    slow.ended_at_ms = Some(at + 5_000);
+    assert_eq!(h.service.futile_retry(&slow).unwrap(), None);
+
+    // A setup step ran since: the retry may pass.
+    let mut setup = check.clone();
+    setup.id = "s1".into();
+    setup.role = "setup".into();
+    setup.created_at_ms = at + 300;
+    h.service.store().unwrap().put_job(&setup).unwrap();
+    assert_eq!(h.service.futile_retry(&check).unwrap(), None);
+}
+
+#[test]
 fn a_round_whose_stages_pass_without_changes_has_nothing_to_publish() {
     let h = harness();
+    set_repo_qa(&h, true);
     let task = h.task("R-8");
     put_stage(&h, &task, "t1", "tests", "pass", &[], true);
     put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
@@ -9352,6 +9486,64 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
     let again = h.dispatch(&task, "tests", "events=codex-ok");
     h.wait(&again.id);
     assert_eq!(h.service.overview().unwrap().rounds.len(), 1);
+}
+
+#[test]
+fn changes_asked_open_their_round_as_they_arrive_even_with_the_push_drifted() {
+    use super::phase::Phase;
+    let h = harness();
+    let task = h.task("R-11");
+    for (rung, id) in [("commit", "c0"), ("pr", "pr0")] {
+        put_step(&h, &task, id, rung, "executed", "hecho");
+    }
+    put_step(&h, &task, "p0", "push", "drifted", "hecho");
+    put_stage(&h, &task, "t1", "tests", "pass", &[], true);
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(&h, &task, "r1", "review", "pass", &[], false);
+    put_stage(&h, &task, "q1", "qa", "pass", &[], false);
+    let snapshot = |decision: &str| {
+        json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": decision,
+            "statusCheckRollup": [], "comments": [],
+            "reviews": [{"author": {"login": "dvald"}, "state": decision, "submittedAt": "2026-10-29T10:00:00Z", "body": "Renombra el campo"}],
+        })
+    };
+    let github = FakeGitHub::new(snapshot("COMMENTED"), json!([]));
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/199").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert!(round_now(&h, &task).is_none());
+
+    *github.snapshot.lock().unwrap() = snapshot("CHANGES_REQUESTED");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert!(matches!(
+        phase.phase,
+        Phase::Drifted {
+            rung: DeliveryRung::Push,
+            ..
+        }
+    ));
+    let round = phase.round.expect("the changes asked open a round");
+    assert_eq!(round.round.kind, "pr");
+    assert_eq!(phase.next_stage.as_deref(), Some("implementation"));
+
+    // Settled another way (answered on the PR): resolve_job with the task
+    // closes it with the note.
+    let closed = h
+        .service
+        .resolve_round(
+            &task.id,
+            "Respondido en el PR: el nombre se queda",
+            "coordinator",
+        )
+        .unwrap();
+    assert_eq!(
+        closed.outcome.as_deref(),
+        Some("resuelta por coordinator: Respondido en el PR: el nombre se queda")
+    );
+    assert!(round_now(&h, &task).is_none());
 }
 
 #[test]

@@ -1368,6 +1368,11 @@ pub struct DeliveryRepoSettings {
     /// reviewer, for repos where nobody else reviews.
     #[serde(default)]
     pub pr_without_reviewer: bool,
+    /// "Push sin CI" (`skip`): the commit, sync and merge messages Tinto
+    /// writes end with `[skip ci]`, so its pushes and merges start no CI,
+    /// and a PR merges without waiting for CI that never ran.
+    #[serde(default)]
+    pub ci_on_push: DeliveryCiOnPush,
     /// The verification commands (`checks`) the user marked as environment
     /// probes: the "Entorno" check runs them (e.g. a database ping).
     #[serde(default)]
@@ -1379,6 +1384,36 @@ pub struct DeliveryRepoSettings {
     /// brainstorm, and which still wait for the user.
     #[serde(default)]
     pub autonomy: DeliveryAutonomy,
+}
+
+/// Whether Tinto's pushes and merges start the repo's CI.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryCiOnPush {
+    #[default]
+    Run,
+    Skip,
+}
+
+/// GitHub's marker that keeps a commit's push from starting CI.
+pub const SKIP_CI: &str = "[skip ci]";
+
+impl DeliveryRepoSettings {
+    /// `message` as Tinto writes it in this repo: with `[skip ci]` at its
+    /// end when its pushes start no CI.
+    pub fn ci_message(&self, message: &str) -> String {
+        if self.ci_on_push == DeliveryCiOnPush::Skip && !message.contains(SKIP_CI) {
+            format!("{}\n\n{SKIP_CI}", message.trim_end())
+        } else {
+            message.to_string()
+        }
+    }
+
+    /// Whether QA has something to run here beyond reading the code: a
+    /// browser, its own commands or a stack to start.
+    pub fn has_qa(&self) -> bool {
+        self.qa_browser || !self.qa_commands.is_empty() || self.qa_stack.is_some()
+    }
 }
 
 /// Per step, `true` when Tinto takes it on its own past the brainstorm (a
