@@ -3898,6 +3898,19 @@ fn a_commit_plan_creates_its_commits_in_order_and_can_be_undone() {
     assert_eq!(asked.requested_by, "coord");
     assert_eq!(asked.commits[0].paths, ["cli/a.ts", "README.md"]);
     assert_eq!(asked.left_out, ["scratch.log"]);
+    // The user may reword a message before approving: Tinto uses theirs.
+    h.service
+        .set_step_text(
+            &asked.id,
+            None,
+            None,
+            Some(vec![
+                "feat(cli): add the a command".into(),
+                "test(cli): cover a".into(),
+                body.into(),
+            ]),
+        )
+        .unwrap();
 
     let done = h.service.decide_approval(&asked.id, true, None).unwrap();
     assert_eq!(
@@ -3912,7 +3925,7 @@ fn a_commit_plan_creates_its_commits_in_order_and_can_be_undone() {
     // Those commits, in that order, with those exact texts and files.
     assert_eq!(
         in_worktree(&task, &["log", "--format=%s", &format!("{base}..HEAD")]),
-        "docs(cli): explain a - C-2\ntest(cli): cover a\nfeat(cli): add a"
+        "docs(cli): explain a - C-2\ntest(cli): cover a\nfeat(cli): add the a command"
     );
     assert_eq!(in_worktree(&task, &["log", "-1", "--format=%B"]), body);
     assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), done.created[2]);
@@ -4987,6 +5000,10 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         .unwrap();
     let asked = h.service.request_approval(merge(Some("squash"))).unwrap();
     assert_eq!(asked.merge_method.as_deref(), Some("squash"));
+    // The user may reword the merge commit before approving.
+    h.service
+        .set_step_text(&asked.id, Some("P-2: paginate (#5)".into()), None, None)
+        .unwrap();
     let done = h.service.decide_approval(&asked.id, true, None).unwrap();
     assert_eq!(
         done.status,
@@ -4997,7 +5014,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     assert!(done.outcome.unwrap().contains("fusionado (squash)"));
     assert_eq!(
         github.merged.lock().unwrap().as_slice(),
-        ["https://github.com/o/r/pull/5 squash P-2: paginar (#5)".to_string()]
+        ["https://github.com/o/r/pull/5 squash P-2: paginate (#5)".to_string()]
     );
     assert_eq!(
         h.service.task_pr(&task.id).unwrap().unwrap().state,

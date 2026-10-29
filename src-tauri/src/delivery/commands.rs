@@ -683,17 +683,24 @@ pub async fn delivery_decide_approval(
     note: Option<String>,
     // A PR step: who the user chose to review it.
     reviewers: Option<Vec<String>>,
-    // A reply step: the text as the user edited it.
+    // A reply step: the text as the user edited it; a PR or merge step: its
+    // body, with `title`.
     body: Option<String>,
     // A reply step: the QA screenshots shown after the text.
     images: Option<Vec<super::model::DeliveryReplyImage>>,
+    // A PR or merge step: the title as the user edited it.
+    title: Option<String>,
+    // A commit step: each commit's message as the user edited it, in order.
+    messages: Option<Vec<String>>,
 ) -> Result<DeliveryApproval, CommandError> {
     let service = service.inner().clone();
     blocking(move || {
         if let Some(reviewers) = reviewers.filter(|_| approve) {
             service.set_pr_reviewers(&approval_id, reviewers)?;
         }
-        if let Some(body) = body.filter(|_| approve) {
+        if approve && (title.is_some() || messages.is_some()) {
+            service.set_step_text(&approval_id, title, body, messages)?;
+        } else if let Some(body) = body.filter(|_| approve) {
             service.set_reply_body(&approval_id, &body)?;
         }
         if let Some(images) = images.filter(|_| approve) {

@@ -767,6 +767,24 @@
   font-size: 12px;
 }
 
+.delivery-step-text {
+  display: grid;
+  gap: 6px;
+}
+.delivery-step-text input,
+.delivery-step-text textarea,
+.delivery-commit-plan textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  resize: vertical;
+}
+
 /* ---------- Pull request ---------- */
 .delivery-pr__body {
   display: grid;

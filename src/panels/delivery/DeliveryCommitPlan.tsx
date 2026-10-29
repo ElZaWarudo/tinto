@@ -19,8 +19,17 @@ function fileCount(count: number): string {
   return count === 1 ? "1 archivo" : `${count} archivos`;
 }
 
-/** The plan of a commit approval, exactly as Tinto will run it. */
-export function CommitPlanView({ approval }: { approval: DeliveryApproval }) {
+/** The plan of a commit approval, exactly as Tinto will run it. With
+ *  `onMessages`, each commit's message is a box the user can edit. */
+export function CommitPlanView({
+  approval,
+  messages,
+  onMessages,
+}: {
+  approval: DeliveryApproval;
+  messages?: string[];
+  onMessages?: (messages: string[]) => void;
+}) {
   const commits = approval.commits ?? [];
   const leftOut = approval.left_out ?? [];
   if (commits.length === 0) {
@@ -43,7 +52,21 @@ export function CommitPlanView({ approval }: { approval: DeliveryApproval }) {
       <ol className="delivery-commit-plan" aria-label="Plan de commits">
         {commits.map((commit, index) => (
           <li key={index}>
-            <pre className="delivery-banner__text">{commit.message}</pre>
+            {onMessages ? (
+              <GrowingTextarea
+                aria-label={`Mensaje del commit ${index + 1}`}
+                value={messages?.[index] ?? commit.message}
+                onChange={(event) =>
+                  onMessages(
+                    commits.map((other, at) =>
+                      at === index ? event.target.value : (messages?.[at] ?? other.message),
+                    ),
+                  )
+                }
+              />
+            ) : (
+              <pre className="delivery-banner__text">{commit.message}</pre>
+            )}
             <details
               className="delivery-commit-plan__files"
               open={commit.paths.length <= FILES_SHOWN}

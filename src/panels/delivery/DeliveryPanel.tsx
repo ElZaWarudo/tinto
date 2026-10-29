@@ -4001,6 +4001,20 @@ function ApprovalBanner({
     !reviewerOptional &&
     (candidates?.length ?? 0) > 0 &&
     reviewers.length === 0;
+  // A commit, PR or merge step's texts are the user's to edit before approving.
+  const planned = approval.rung === "commit" && (approval.commits ?? []).length > 0;
+  const editsText = pending && ["commit", "pr", "merge"].includes(approval.rung);
+  const [title, setTitle] = useState(approval.title);
+  const [body, setBody] = useState(approval.body);
+  const [messages, setMessages] = useState<string[] | undefined>(undefined);
+  const edited =
+    !editsText
+      ? undefined
+      : planned
+        ? messages && { messages }
+        : title !== approval.title || body !== approval.body
+          ? { title, body }
+          : undefined;
   // The PR's description can show the task's QA screenshots.
   const [images, setImages] = useState<DeliveryReplyImage[]>(approval.images ?? []);
   const [shots, setShots] = useState<DeliveryQaScreenshot[]>([]);
@@ -4069,9 +4083,27 @@ function ApprovalBanner({
           </span>
         </div>
       )}
-      {approval.rung === "commit" ? (
+      {editsText && !planned ? (
+        <div className="delivery-step-text">
+          <input
+            aria-label="Título"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+          <GrowingTextarea
+            aria-label="Cuerpo"
+            rows={3}
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+          />
+        </div>
+      ) : approval.rung === "commit" ? (
         <>
-          <CommitPlanView approval={approval} />
+          <CommitPlanView
+            approval={approval}
+            messages={messages}
+            onMessages={editsText ? setMessages : undefined}
+          />
           {approval.single_commit_reason && (
             <p className="delivery-job__note">
               Un solo commit porque: {approval.single_commit_reason}
@@ -4143,8 +4175,19 @@ function ApprovalBanner({
                       reviewers,
                       undefined,
                       images,
+                      ...(edited ? [edited] : []),
                     )
-                  : decideDeliveryApproval(approval.id, true)
+                  : edited
+                    ? decideDeliveryApproval(
+                        approval.id,
+                        true,
+                        undefined,
+                        undefined,
+                        undefined,
+                        undefined,
+                        edited,
+                      )
+                    : decideDeliveryApproval(approval.id, true)
               }
             >
               {approval.rung === "commit"

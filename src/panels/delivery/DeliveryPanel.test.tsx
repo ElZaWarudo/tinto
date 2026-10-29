@@ -1274,7 +1274,7 @@ describe("DeliveryPanel", () => {
     localStorage.removeItem("tinto.agents.lastRuntimeCatalog");
   });
 
-  it("shows the exact text of a pending approval and approves it", async () => {
+  it("shows the exact text of a pending approval and approves it as the user edited it", async () => {
     const user = userEvent.setup();
     const approval: DeliveryApproval = {
       id: "a1",
@@ -1298,15 +1298,30 @@ describe("DeliveryPanel", () => {
     client.decideDeliveryApproval.mockResolvedValue({ ...approval, status: "executed" });
     renderPanel();
     const group = await openStep("Revisar commit", "commit");
-    expect(within(group).getByText(/Parser now rejects empty input\./)).toBeInTheDocument();
+    expect(within(group).getByRole("textbox", { name: "Cuerpo" })).toHaveValue(
+      "Parser now rejects empty input.",
+    );
     expect(within(group).getByText(/preparado por/)).toHaveTextContent("el coordinador coord");
     expect(within(group).getByText(/No publica nada/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1 tarea te necesita" })).toBeInTheDocument();
     expect(
       within(screen.getByRole("region", { name: "Te necesitan" })).getByText("Aprobar commit"),
     ).toBeInTheDocument();
+    const title = within(group).getByRole("textbox", { name: "Título" });
+    await user.clear(title);
+    await user.type(title, "AGOS-501: Reject empty input");
     await user.click(within(group).getByRole("button", { name: "Aprobar y hacer commit" }));
-    await waitFor(() => expect(client.decideDeliveryApproval).toHaveBeenCalledWith("a1", true));
+    await waitFor(() =>
+      expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
+        "a1",
+        true,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { title: "AGOS-501: Reject empty input", body: "Parser now rejects empty input." },
+      ),
+    );
   });
 
   const commitStep = (over: Partial<DeliveryApproval>): DeliveryApproval => ({

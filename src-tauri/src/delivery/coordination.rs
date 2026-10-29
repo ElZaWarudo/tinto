@@ -1304,6 +1304,60 @@ impl DeliveryService {
             .ok_or_else(|| DeliveryError::not_found("la aprobación", approval_id))
     }
 
+    /// The texts of a commit, PR or merge step as the user edited them
+    /// before approving: a commit plan's messages in order, else its title
+    /// and body. They are the ones Tinto uses.
+    pub fn set_step_text(
+        &self,
+        approval_id: &str,
+        title: Option<String>,
+        body: Option<String>,
+        messages: Option<Vec<String>>,
+    ) -> Result<DeliveryApproval, DeliveryError> {
+        let mut approval = self.approval(approval_id)?;
+        let editable = matches!(
+            approval.rung,
+            DeliveryRung::Commit | DeliveryRung::Pr | DeliveryRung::Merge
+        );
+        if !editable || approval.status != DeliveryApprovalStatus::Pending {
+            return Err(DeliveryError::new(
+                "invalid_approval",
+                "solo se editan los textos de un commit, PR o fusión que aún no se aprobó",
+            ));
+        }
+        let empty = |text: &str| {
+            DeliveryError::new("invalid_approval", format!("{text} no puede quedar vacío"))
+        };
+        if let Some(messages) = messages {
+            if messages.len() != approval.commits.len() {
+                return Err(DeliveryError::new(
+                    "invalid_approval",
+                    "hay que dar un mensaje por cada commit del plan",
+                ));
+            }
+            if messages.iter().any(|message| message.trim().is_empty()) {
+                return Err(empty("el mensaje de un commit"));
+            }
+            for (commit, message) in approval.commits.iter_mut().zip(messages) {
+                commit.message = message.trim().to_string();
+            }
+            if let [only] = approval.commits.as_slice() {
+                approval.title = subject(&only.message).to_string();
+            }
+        }
+        if let Some(title) = title {
+            if title.trim().is_empty() {
+                return Err(empty("el título"));
+            }
+            approval.title = title.trim().to_string();
+        }
+        if let Some(body) = body {
+            approval.body = body.trim().to_string();
+        }
+        self.save_approval(&approval, "step_text_edited")?;
+        Ok(approval)
+    }
+
     /// The user's decision. An approved commit or push runs right away.
     pub fn decide_approval(
         &self,

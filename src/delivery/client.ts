@@ -294,14 +294,18 @@ export const decideDeliveryApproval = (
   body?: string,
   /** A reply step: the QA screenshots shown after the text. */
   images?: DeliveryReplyImage[],
+  /** A commit, PR or merge step: its texts as the user edited them. */
+  text?: { title?: string; body?: string; messages?: string[] },
 ) =>
   invoke<DeliveryApproval>("delivery_decide_approval", {
     approvalId,
     approve,
     note: note ?? null,
     reviewers: reviewers ?? null,
-    body: body ?? null,
+    body: text?.body ?? body ?? null,
     images: images ?? null,
+    title: text?.title ?? null,
+    messages: text?.messages ?? null,
   });
 
 /** The screenshots of the task's QA jobs, newest QA first, for a reply to show. */
