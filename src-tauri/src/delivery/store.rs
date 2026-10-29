@@ -379,10 +379,15 @@ impl DeliveryStore {
     }
 
     pub fn task_qa_problems(&self, task_id: &str) -> Result<Vec<DeliveryQaProblem>, DeliveryError> {
-        self.all(
+        let problems: Vec<DeliveryQaProblem> = self.all(
             "SELECT data FROM qa_problems WHERE task_id = ?1 ORDER BY rowid",
             [task_id],
-        )
+        )?;
+        // Records read before Tinto knew "None beyond P1." is no problem.
+        Ok(problems
+            .into_iter()
+            .filter(|problem| !super::qa_problems::empty(&problem.text))
+            .collect())
     }
 
     // ---- rounds ----

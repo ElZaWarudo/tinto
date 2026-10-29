@@ -49,9 +49,20 @@ pub struct QaProblemUpdate {
     pub note: String,
 }
 
-fn empty(text: &str) -> bool {
-    let text = text.trim().trim_matches('.').to_ascii_lowercase();
-    text.is_empty() || matches!(text.as_str(), "none" | "ninguno" | "ninguna" | "n/a" | "-")
+/// No problem at all: "None", and the sentences that start with it ("None
+/// beyond P1.", "None introduced by this change.").
+pub(super) fn empty(text: &str) -> bool {
+    let text = text.trim().trim_matches('.').to_lowercase();
+    let first = text
+        .split(|c: char| !c.is_alphanumeric() && c != '/')
+        .next()
+        .unwrap_or_default();
+    text.is_empty()
+        || text == "-"
+        || matches!(
+            first,
+            "none" | "ninguno" | "ninguna" | "nothing" | "nada" | "n/a"
+        )
 }
 
 /// The items of a labelled paragraph: its list items, or the paragraph.
@@ -173,6 +184,14 @@ pub fn parse_record(record: &str) -> Vec<RecordProblem> {
             _ => {}
         }
     }
+    // An unlabelled problem is numbered after the record's own labels.
+    let mut next = sections
+        .iter()
+        .flat_map(|section| items(&section.problems))
+        .filter_map(|item| labelled(&item))
+        .filter_map(|(label, _)| label[1..].parse::<usize>().ok())
+        .max()
+        .unwrap_or(0);
     let mut problems: Vec<RecordProblem> = Vec::new();
     for section in sections {
         let suggestions: Vec<(Option<String>, String)> = items(&section.suggestions)
@@ -183,8 +202,10 @@ pub fn parse_record(record: &str) -> Vec<RecordProblem> {
             })
             .collect();
         for item in items(&section.problems) {
-            let (label, text) = labelled(&item)
-                .unwrap_or_else(|| (format!("P{}", problems.len() + 1), item.clone()));
+            let (label, text) = labelled(&item).unwrap_or_else(|| {
+                next += 1;
+                (format!("P{next}"), item.clone())
+            });
             // Suggestions for this problem; unlabelled ones are the change's.
             let mine: Vec<String> = suggestions
                 .iter()
@@ -660,7 +681,7 @@ impl DeliveryService {
 mod tests {
     use super::*;
 
-    const RECORD: &str = "# K-1 — Visual changes: errors\n\n## 1. Error toast\n\n| | |\n| --- | --- |\n| Where | Run panel → Retry |\n| Behaviour | A toast says it |\n\n**Mobile — error**\n\n![](K-1-1-error-mobile.png)\n\n**Observations:** fine on desktop\n\n**Problems:**\n- P1: The toast covers the Retry button on mobile.\n- P2: The toast stays 8 s.\n\n**Suggested solutions:**\n- P1: Move the toast to the top on narrow screens.\n- P1: Keep the error in the panel instead.\n- P2: Shorten it to 3 s.\n\n## 2. Header\n\n| | |\n| --- | --- |\n| Where | npm test output |\n\n**Problems:** The header does not say which services are mocked.\n\n**Suggested solutions:** Add (mock) next to each one.\n\n## 3. Docs\n\n**Problems:** None\n\n**Suggested solutions:** None\n";
+    const RECORD: &str = "# K-1 — Visual changes: errors\n\n## 1. Error toast\n\n| | |\n| --- | --- |\n| Where | Run panel → Retry |\n| Behaviour | A toast says it |\n\n**Mobile — error**\n\n![](K-1-1-error-mobile.png)\n\n**Observations:** fine on desktop\n\n**Problems:**\n- P1: The toast covers the Retry button on mobile.\n- P2: The toast stays 8 s.\n\n**Suggested solutions:**\n- P1: Move the toast to the top on narrow screens.\n- P1: Keep the error in the panel instead.\n- P2: Shorten it to 3 s.\n\n## 2. Header\n\n| | |\n| --- | --- |\n| Where | npm test output |\n\n**Problems:** The header does not say which services are mocked.\n\n**Suggested solutions:** Add (mock) next to each one.\n\n## 3. Docs\n\n**Problems:** None\n\n**Suggested solutions:** None\n\n## 4. Delete\n\n**Problems:** None beyond P1.\n\n## 5. Spanish\n\n**Problems:** None introduced by this change.\n";
 
     #[test]
     fn a_record_gives_each_problem_with_its_own_suggestions() {
@@ -681,7 +702,8 @@ mod tests {
             ]
         );
         assert_eq!(problems[1].suggestions, ["Shorten it to 3 s."]);
-        // Unlabelled: numbered on, with the change's suggestion.
+        // Unlabelled: numbered after the record's labels, with the change's
+        // suggestion; "None beyond P1." and the like are no problem.
         assert_eq!(problems[2].label, "P3");
         assert_eq!(
             problems[2].text,
