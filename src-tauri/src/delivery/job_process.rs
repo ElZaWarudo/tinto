@@ -70,6 +70,7 @@ impl JobProcess {
         {
             use std::os::unix::process::CommandExt;
             let _ = job_id;
+            without_appimage_env(command);
             let child = command.process_group(0).spawn()?;
             Ok(Self {
                 pid: child.id(),
@@ -244,6 +245,71 @@ impl JobProcess {
     }
 }
 
+/// What the AppImage's runtime sets for Tinto itself: a job's `python3`
+/// fails on its PYTHONHOME, and so on.
+#[cfg(not(target_os = "windows"))]
+const APPIMAGE_VARS: &[&str] = &[
+    "APPDIR",
+    "APPIMAGE",
+    "ARGV0",
+    "OWD",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PERLLIB",
+    "GSETTINGS_SCHEMA_DIR",
+    "GDK_PIXBUF_MODULEDIR",
+    "GDK_PIXBUF_MODULE_FILE",
+    "GIO_MODULE_DIR",
+    "QT_PLUGIN_PATH",
+];
+
+/// Under an AppImage, gives `command` the environment Tinto was started
+/// with: without the runtime's variables and its mount in the search
+/// paths, and with what the runtime saved as `*_ORIG` back in place.
+#[cfg(not(target_os = "windows"))]
+fn without_appimage_env(command: &mut Command) {
+    use std::collections::HashMap;
+    use std::ffi::{OsStr, OsString};
+    let mut env: HashMap<OsString, OsString> = std::env::vars_os().collect();
+    for (name, value) in command.get_envs() {
+        match value {
+            Some(value) => env.insert(name.to_os_string(), value.to_os_string()),
+            None => env.remove(name),
+        };
+    }
+    if !env.contains_key(OsStr::new("APPIMAGE")) && !env.contains_key(OsStr::new("APPDIR")) {
+        return;
+    }
+    for name in env.keys() {
+        let text = name.to_string_lossy();
+        if APPIMAGE_VARS.contains(&text.as_ref()) || text.starts_with("GST_PLUGIN_") {
+            command.env_remove(name);
+        }
+    }
+    for name in ["PATH", "LD_LIBRARY_PATH", "XDG_DATA_DIRS"] {
+        let Some(value) = env.get(OsStr::new(name)) else {
+            continue;
+        };
+        let kept: Vec<_> = std::env::split_paths(value)
+            .filter(|dir| !dir.to_string_lossy().starts_with("/tmp/.mount_"))
+            .collect();
+        match std::env::join_paths(kept) {
+            Ok(kept) if !kept.is_empty() => command.env(name, kept),
+            _ => command.env_remove(name),
+        };
+    }
+    for (name, value) in &env {
+        let Some(original) = name.to_str().and_then(|name| name.strip_suffix("_ORIG")) else {
+            continue;
+        };
+        command.env_remove(name);
+        match value.is_empty() {
+            true => command.env_remove(original),
+            false => command.env(original, value),
+        };
+    }
+}
+
 /// Whether `pid` is still the process that started at `started`.
 pub(super) fn alive(pid: u32, started: &str) -> bool {
     let Some(mut process) = JobProcess::adopt(pid, started, "") else {
@@ -313,6 +379,53 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "it kept running");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_job_runs_without_the_appimage_runtimes_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = dir.path().join("env.txt");
+        let path = std::env::var("PATH").unwrap_or_default();
+        let mut command = Command::new("env");
+        command
+            .env("APPIMAGE", "/home/me/Tinto.AppImage")
+            .env("APPDIR", "/tmp/.mount_Tinto_gdHjFm")
+            .env("PYTHONHOME", "/tmp/.mount_Tinto_gdHjFm/usr/")
+            .env(
+                "GST_PLUGIN_SYSTEM_PATH",
+                "/tmp/.mount_Tinto_gdHjFm/usr/lib/gst",
+            )
+            .env("PATH", format!("/tmp/.mount_Tinto_gdHjFm/usr/bin:{path}"))
+            .env("LD_LIBRARY_PATH", "/tmp/.mount_Tinto_gdHjFm/usr/lib")
+            .env("PYTHONPATH_ORIG", "/home/me/lib")
+            .env("TEST_DB_NAME", "tinto_test")
+            .stdout(std::fs::File::create(&seen).unwrap());
+        let mut job = JobProcess::spawn(&mut command, "j-appimage").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while job.try_wait().unwrap().is_none() {
+            assert!(std::time::Instant::now() < deadline, "env did not end");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        let value = |name: &str| {
+            seen.lines()
+                .find_map(|line| line.strip_prefix(&format!("{name}=")))
+                .map(str::to_string)
+        };
+        for gone in [
+            "APPIMAGE",
+            "APPDIR",
+            "PYTHONHOME",
+            "GST_PLUGIN_SYSTEM_PATH",
+            "LD_LIBRARY_PATH",
+            "PYTHONPATH_ORIG",
+        ] {
+            assert_eq!(value(gone), None, "{gone} reached the job");
+        }
+        assert_eq!(value("PATH").as_deref(), Some(path.as_str()));
+        assert_eq!(value("PYTHONPATH").as_deref(), Some("/home/me/lib"));
+        assert_eq!(value("TEST_DB_NAME").as_deref(), Some("tinto_test"));
     }
 
     /// A job that starts a server in the background and ends.
