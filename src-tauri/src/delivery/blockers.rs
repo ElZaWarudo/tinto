@@ -315,7 +315,7 @@ impl DeliveryService {
             .any(|label| label == super::coordination::MIXED_SPLIT_NOTE);
         let task = self.save_blockers(task, event, &format!("quitó {}", cleared.join(", ")))?;
         if split {
-            self.queue_task_checks(&task.id)?;
+            self.queue_task_checks(&task.id, None)?;
         }
         Ok(task)
     }

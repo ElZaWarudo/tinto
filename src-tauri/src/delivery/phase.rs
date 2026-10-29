@@ -348,14 +348,64 @@ pub fn last_change<'a>(jobs: &[&'a DeliveryJob]) -> Option<&'a DeliveryJob> {
         .copied()
 }
 
+/// The folder a check verifies, from its `--prefix <dir>` or a leading
+/// `cd <dir> &&`; `None` for one that verifies the whole repo.
+pub fn check_scope(command: &str) -> Option<String> {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let dir = match words.as_slice() {
+        ["cd", dir, "&&", ..] => Some(*dir),
+        _ => words.iter().enumerate().find_map(|(at, word)| match *word {
+            "--prefix" => words.get(at + 1).copied(),
+            _ => word.strip_prefix("--prefix="),
+        }),
+    }?;
+    let dir = dir.replace('\\', "/");
+    let dir = dir.trim_start_matches("./").trim_end_matches('/');
+    (!dir.is_empty() && dir != ".").then(|| dir.to_string())
+}
+
+/// Whether a stage's changes reach what `check` verifies: a file in its
+/// folder, or a file in none of the checks' folders (`scopes`), such as
+/// root config or a shared protocol, which may reach any of them.
+pub fn touches(check: &str, scopes: &[String], change: &DeliveryJob) -> bool {
+    let Some(dir) = check_scope(check) else {
+        return true;
+    };
+    let inside = |path: &str, dir: &str| path == dir || path.starts_with(&format!("{dir}/"));
+    change.changes.iter().any(|changed| {
+        let path = changed.path.replace('\\', "/");
+        inside(&path, &dir) || !scopes.iter().any(|scope| inside(&path, scope))
+    })
+}
+
 /// Tinto's checks of the code the latest change left: the latest run of
-/// each check since that change, oldest first.
+/// each check since the latest change that reached it (see `touches`),
+/// oldest first.
 pub fn current_checks<'a>(jobs: &[&'a DeliveryJob]) -> Vec<&'a DeliveryJob> {
-    let since = last_change(jobs).map_or(0, |job| job.created_at_ms);
+    let runs: Vec<&DeliveryJob> = jobs
+        .iter()
+        .filter(|job| job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE)
+        .copied()
+        .collect();
+    let scopes: Vec<String> = runs
+        .iter()
+        .filter_map(|job| check_scope(&job.prompt))
+        .collect();
+    let changes: Vec<&DeliveryJob> = jobs
+        .iter()
+        .filter(|job| job.agent != DeliveryAgent::Shell && is_live(job) && !job.changes.is_empty())
+        .copied()
+        .collect();
     let mut latest: Vec<&DeliveryJob> = Vec::new();
-    for job in jobs.iter().filter(|job| {
-        job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE && job.created_at_ms > since
-    }) {
+    for job in runs {
+        let since = changes
+            .iter()
+            .rev()
+            .find(|change| touches(&job.prompt, &scopes, change))
+            .map_or(0, |change| change.created_at_ms);
+        if job.created_at_ms <= since {
+            continue;
+        }
         match latest.iter_mut().find(|other| other.prompt == job.prompt) {
             Some(other) => *other = job,
             None => latest.push(job),
@@ -1453,6 +1503,22 @@ mod tests {
             World::new(jobs(undone)).phase().next_stage.as_deref(),
             Some("qa")
         );
+    }
+
+    #[test]
+    fn a_check_verifies_the_folder_its_command_names() {
+        for (command, scope) in [
+            (
+                "npm --prefix services/rag run check-lint",
+                Some("services/rag"),
+            ),
+            ("npm --prefix=./frontend/ test", Some("frontend")),
+            ("cd api && cargo test", Some("api")),
+            ("npm --prefix . test", None),
+            ("cargo clippy --all-targets", None),
+        ] {
+            assert_eq!(check_scope(command).as_deref(), scope, "{command}");
+        }
     }
 
     #[test]

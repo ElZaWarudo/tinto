@@ -1733,11 +1733,13 @@ fn bootstrap_runs_as_a_shell_job_in_new_worktrees() {
         .unwrap()
         .repo_settings(h.repo.path())
         .unwrap();
-    settings.bootstrap = Some(if cfg!(target_os = "windows") {
-        "echo ready>bootstrapped.txt".to_string()
+    let install = if cfg!(target_os = "windows") {
+        "echo ready>bootstrapped.txt"
     } else {
-        "echo ready > bootstrapped.txt".to_string()
-    });
+        "echo ready > bootstrapped.txt"
+    };
+    settings.bootstrap = Some(format!("echo started && {install}"));
+    settings.setup = vec![install.to_string(), "touch=deps.txt".to_string()];
     h.service
         .store()
         .unwrap()
@@ -1755,6 +1757,12 @@ fn bootstrap_runs_as_a_shell_job_in_new_worktrees() {
     assert_eq!(bootstrap.agent, DeliveryAgent::Shell);
     assert_eq!(bootstrap.role, "bootstrap");
     assert_eq!(h.wait(&bootstrap.id).status, DeliveryJobStatus::Finished);
+    // A setup command the bootstrap already ran is not run again.
+    let task = h
+        .service
+        .set_task_setup(&task.id, vec![install.into(), "touch=deps.txt".into()])
+        .unwrap();
+    assert_eq!(task.setup, ["touch=deps.txt"]);
 }
 
 #[test]
@@ -8318,6 +8326,46 @@ fn tinto_runs_the_task_checks_after_a_change_and_sends_a_failure_back_to_impleme
     assert!(note.contains("- `exit=1 events=codex-failed`"), "{note}");
     assert!(note.contains("is not supported when using Codex"), "{note}");
     assert!(!note.contains("- `exit=0`"), "{note}");
+}
+
+#[test]
+fn a_stage_runs_again_only_the_checks_its_changes_reach() {
+    let h = harness();
+    for dir in ["web", "api"] {
+        std::fs::create_dir_all(h.repo.path().join(dir)).unwrap();
+        std::fs::write(h.repo.path().join(dir).join("keep.txt"), "keep\n").unwrap();
+    }
+    git(h.repo.path(), &["add", "--all"]);
+    git(h.repo.path(), &["commit", "-q", "-m", "packages"]);
+    let (web, api) = (
+        "exit=0 npm --prefix web test",
+        "exit=0 npm --prefix api test",
+    );
+    set_repo_checks(&h, &[web, api]);
+    let task = h.task("K-51");
+    h.service
+        .set_task_checks(&task.id, vec![web.into(), api.into()])
+        .unwrap();
+
+    // The first change runs every check once.
+    let first = h.dispatch(&task, "implementation", "events=codex-ok touch=web/a.txt");
+    h.wait(&first.id);
+    ended_checks(&h, &task, 2);
+    // Then a change in one package runs that package's check only…
+    let second = h.dispatch(&task, "implementation", "events=codex-ok touch=web/b.txt");
+    h.wait(&second.id);
+    assert_eq!(ended_checks(&h, &task, 3)[2].prompt, web);
+    // …and one outside every package's folder runs them all.
+    let root = h.dispatch(&task, "implementation", "events=codex-ok touch=root.txt");
+    h.wait(&root.id);
+    ended_checks(&h, &task, 5);
+    let jobs = h.service.store().unwrap().task_jobs(&task.id).unwrap();
+    let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
+    let current = super::phase::current_checks(&jobs);
+    assert_eq!(current.len(), 2);
+    assert!(current
+        .iter()
+        .all(|check| check.created_at_ms > root.created_at_ms));
 }
 
 #[test]

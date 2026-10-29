@@ -1369,7 +1369,9 @@ impl DeliveryService {
     /// The commands that prepare the task's worktree, each one of the repo's
     /// setup commands as the user wrote it: Tinto runs them outside any
     /// agent sandbox. It queues at once, ahead of anything dispatched
-    /// later, each one that has not passed nor is queued or running.
+    /// later, each one that has not passed nor is queued or running. One the
+    /// task's bootstrap runs too (one of its `&&` parts) is left out: the
+    /// worktree has it already, or will.
     pub fn set_task_setup(
         &self,
         task_id: &str,
@@ -1379,7 +1381,7 @@ impl DeliveryService {
         let jobs = {
             let store = self.store()?;
             let allowed = store.repo_settings(&task.repo)?.setup;
-            task.setup = pick_commands(&setup, &allowed).map_err(|command| {
+            let picked = pick_commands(&setup, &allowed).map_err(|command| {
                 DeliveryError::new(
                     "unknown_setup",
                     format!(
@@ -1387,6 +1389,20 @@ impl DeliveryService {
                     ),
                 )
             })?;
+            let bootstrap = store.task_jobs(&task.id)?.into_iter().rev().find(|job| {
+                job.role == "bootstrap"
+                    && (job.status.is_open() || job.status == DeliveryJobStatus::Finished)
+            });
+            let bootstrapped: Vec<String> = bootstrap.map_or(Vec::new(), |job| {
+                job.prompt
+                    .split("&&")
+                    .map(|part| part.trim().to_string())
+                    .collect()
+            });
+            task.setup = picked
+                .into_iter()
+                .filter(|command| !bootstrapped.contains(command))
+                .collect();
             task.updated_at_ms = now_ms();
             store.put_task(&task)?;
             store.record_event(
@@ -3336,7 +3352,7 @@ impl DeliveryService {
     }
 
     /// After a stage that changed the task's code and passed, Tinto runs the
-    /// task's checks on that code, one shell job each, ahead of anything
+    /// task's checks its changes reach, one shell job each, ahead of anything
     /// dispatched later. Not after the tests stage: its new tests are meant
     /// to fail until the implementation.
     fn queue_checks(&self, job_id: &str) -> Result<(), DeliveryError> {
@@ -3354,13 +3370,31 @@ impl DeliveryService {
         {
             return Ok(());
         }
-        self.queue_task_checks(&job.task_id)
+        self.queue_task_checks(&job.task_id, Some(&job))
     }
 
-    /// Queues each of the task's checks as one shell job, ahead of anything
-    /// dispatched later.
-    pub(super) fn queue_task_checks(&self, task_id: &str) -> Result<(), DeliveryError> {
-        for check in self.task(task_id)?.checks {
+    /// Queues the task's checks as one shell job each, ahead of anything
+    /// dispatched later: after a `stage`, those its changes reach (see
+    /// `phase::touches`) and any that never ran on the task; otherwise all.
+    pub(super) fn queue_task_checks(
+        &self,
+        task_id: &str,
+        stage: Option<&DeliveryJob>,
+    ) -> Result<(), DeliveryError> {
+        let task = self.task(task_id)?;
+        let jobs = self.store()?.task_jobs(task_id)?;
+        let scopes: Vec<String> = task
+            .checks
+            .iter()
+            .filter_map(|check| super::phase::check_scope(check))
+            .collect();
+        for check in task.checks.clone() {
+            let ran = jobs.iter().any(|job| {
+                job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE && job.prompt == check
+            });
+            if ran && stage.is_some_and(|stage| !super::phase::touches(&check, &scopes, stage)) {
+                continue;
+            }
             self.dispatch(NewJob {
                 task_id: task_id.to_string(),
                 role: CHECKS_ROLE.to_string(),

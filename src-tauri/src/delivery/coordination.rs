@@ -1525,7 +1525,7 @@ impl DeliveryService {
             && approval.conflicts.is_empty()
             && !approval.created.is_empty()
         {
-            self.queue_task_checks(&approval.task_id)?;
+            self.queue_task_checks(&approval.task_id, None)?;
         }
         if let Some(found) = opened {
             let task = self.task(&approval.task_id)?;
