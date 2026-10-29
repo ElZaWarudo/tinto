@@ -1,0 +1,6 @@
+npm notice run backend@0.0.1 unit-tests
+npm notice run mocha -r ts-node/register --config test/mocha/config.function.json
+
+ Exception during run: test/mocha/model-tests/test-verification-audit-event.ts(39,13): error TS2739: Type '{ lastEventId: string; anchorId: string; proofManifestHash: string; merkleRoot: string; networkId: string; anchorTx: string; }' is missing the following properties from type 'DPPIntegrityEvidence': anchorBlockNumber, anchorBlockTimestamp
+test/mocha/model-tests/test-verification-audit-event.ts(66,13): error TS2739: Type '{ lastEventId: string; anchorId: string; proofManifestHash: string; merkleRoot: string; networkId: string; anchorTx: string; }' is missing the following properties from type 'DPPIntegrityEvidence': anchorBlockNumber, anchorBlockTimestamp
+

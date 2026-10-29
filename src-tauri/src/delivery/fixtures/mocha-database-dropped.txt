@@ -1,0 +1,26 @@
+    1) "before each" hook for "auto-selects the only active tenant membership"
+
+
+  35 passing (3m)
+  1 failing
+
+  1) Auth tenant context
+       "before each" hook for "auto-selects the only active tenant membership":
+     MongoServerError: Cannot create collection test_database.wallets - database is in the process of being dropped.
+      at Connection.onMessage (node_modules/mongodb/src/cmap/connection.ts:409:18)
+      at MessageStream.<anonymous> (node_modules/mongodb/src/cmap/connection.ts:239:56)
+      at MessageStream.emit (node:events:514:20)
+      at processIncomingData (node_modules/mongodb/src/cmap/message_stream.ts:193:12)
+      at MessageStream._write (node_modules/mongodb/src/cmap/message_stream.ts:74:5)
+      at writeOrBuffer (node:internal/streams/writable:574:12)
+      at _write (node:internal/streams/writable:503:10)
+      at MessageStream.Writable.write (node:internal/streams/writable:512:10)
+      at Socket.ondata (node:internal/streams/readable:1093:24)
+      at Socket.emit (node:events:514:20)
+      at addChunk (node:internal/streams/readable:605:12)
+      at readableAddChunkPushByteMode (node:internal/streams/readable:556:3)
+      at Socket.Readable.push (node:internal/streams/readable:436:5)
+      at TCP.onStreamRead (node:internal/stream_base_commons:194:23)
+
+
+

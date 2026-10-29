@@ -12,6 +12,7 @@ pub mod commands;
 pub mod coordination;
 pub mod decisions;
 pub mod environment;
+mod failure_summary;
 pub mod feed;
 pub mod guides;
 pub mod jira;

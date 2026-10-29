@@ -2938,7 +2938,16 @@ impl DeliveryService {
             touched: !cancelled || adapters::acted(&job, &events),
             leftovers,
         };
-        let stderr_text = std::fs::read_to_string(&paths.stderr).unwrap_or_default();
+        // What the output says failed, should the job fail: a command's
+        // stdout is its own output, an agent's is its events.
+        let failure = super::failure_summary::summary(
+            if agent == DeliveryAgent::Shell {
+                &events
+            } else {
+                ""
+            },
+            &std::fs::read_to_string(&paths.stderr).unwrap_or_default(),
+        );
         // QA's visual changes record becomes one page the user opens. Saved
         // before the job ends, so whoever learns it ended (the view, the
         // coordinator, a test) finds the page and its problems with it. A
@@ -2980,15 +2989,7 @@ impl DeliveryService {
                 eprintln!("tinto: delivery could not save a QA record: {error}");
             }
         }
-        self.finish(
-            &job.id,
-            ending,
-            outcome,
-            timing,
-            end,
-            reverted,
-            &stderr_text,
-        )?;
+        self.finish(&job.id, ending, outcome, timing, end, reverted, &failure)?;
         // A task Tinto cannot queue checks on now (blocked, paused) goes on
         // without them.
         let _ = self.queue_checks(&job.id);
@@ -3538,7 +3539,7 @@ impl DeliveryService {
         timing: Option<DeliveryTiming>,
         end: Option<WorktreeSnapshot>,
         reverted: Vec<String>,
-        stderr: &str,
+        failure: &str,
     ) -> Result<(), DeliveryError> {
         let store = self.store()?;
         let mut job = store
@@ -3579,16 +3580,18 @@ impl DeliveryService {
             job.error = Some(format!("{TIMED_OUT} de {} minutos.", job.timeout_minutes));
         } else if !ending.exit_ok {
             job.status = DeliveryJobStatus::Failed;
-            job.error = Some(outcome.error.clone().unwrap_or_else(|| {
-                let tail = stderr.trim().lines().last().unwrap_or_default();
-                match ending.exit_code {
-                    Some(code) if tail.is_empty() => {
-                        format!("El proceso terminó con código {code}.")
-                    }
-                    Some(code) => format!("El proceso terminó con código {code}: {tail}"),
-                    None => "El proceso terminó de forma anormal.".to_string(),
-                }
-            }));
+            job.error = Some(
+                outcome
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| match ending.exit_code {
+                        Some(code) if failure.is_empty() => {
+                            format!("El proceso terminó con código {code}.")
+                        }
+                        Some(code) => format!("El proceso terminó con código {code}: {failure}"),
+                        None => "El proceso terminó de forma anormal.".to_string(),
+                    }),
+            );
         } else if job.agent == DeliveryAgent::Shell {
             job.status = DeliveryJobStatus::Finished;
         } else {

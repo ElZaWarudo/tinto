@@ -1,0 +1,30 @@
+test verifier::tests::verifier_rejects_path_references ... ok
+test prover::continuity_roundtrip_tests::typescript_golden_input_proves_and_verifies_with_the_continuity_guest ... FAILED
+test prover::continuity_roundtrip_tests::v2_nonce_bound_golden_input_proves_with_the_v2_guest_only ... FAILED
+
+failures:
+
+---- verifier::tests::continuity_verifier_requires_version_matched_image_ids stdout ----
+
+thread 'verifier::tests::continuity_verifier_requires_version_matched_image_ids' (265448) panicked at host/src/verifier.rs:251:9:
+assertion failed: validate_abi_image_id("continuity-proof-abi-v1", &v2, &v2).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- prover::continuity_roundtrip_tests::typescript_golden_input_proves_and_verifies_with_the_continuity_guest stdout ----
+
+thread 'prover::continuity_roundtrip_tests::typescript_golden_input_proves_and_verifies_with_the_continuity_guest' (265436) panicked at host/src/prover.rs:1015:71:
+called `Result::unwrap()` on an `Err` value: No such file or directory (os error 2)
+
+---- prover::continuity_roundtrip_tests::v2_nonce_bound_golden_input_proves_with_the_v2_guest_only stdout ----
+
+thread 'prover::continuity_roundtrip_tests::v2_nonce_bound_golden_input_proves_with_the_v2_guest_only' (265437) panicked at host/src/prover.rs:1084:14:
+called `Result::unwrap()` on an `Err` value: No such file or directory (os error 2)
+
+
+failures:
+    prover::continuity_roundtrip_tests::typescript_golden_input_proves_and_verifies_with_the_continuity_guest
+    prover::continuity_roundtrip_tests::v2_nonce_bound_golden_input_proves_with_the_v2_guest_only
+    verifier::tests::continuity_verifier_requires_version_matched_image_ids
+
+test result: FAILED. 15 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,3 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 1.44s
+     Running unittests src/main.rs (target/debug/deps/host-514fbfe11ddd8a2f)
+error: test failed, to rerun pass `-p host --bin host`

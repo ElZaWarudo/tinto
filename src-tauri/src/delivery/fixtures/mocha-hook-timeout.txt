@@ -1,0 +1,13 @@
+
+
+  508 passing (13m)
+  1 pending
+  1 failing
+
+  1) IndustrialIntakeService
+       "before each" hook for "edits disabled guided pipelines but requires an enabled source to enable or reassign":
+     Error: Timeout of 60000ms exceeded. For async tests and hooks, ensure "done()" is called; if returning a Promise, ensure it resolves. (/home/user/digital-product-passport-wt/DPP-235/web-application/backend/test/mocha/function-tests/test-industrial-intake-service.ts)
+      at processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+
+

@@ -1,0 +1,39 @@
+    1) produces the same bytes as v1 for arbitrary JSON without integer-like member names
+
+
+  50 passing (1m)
+  1 failing
+
+  1) Canonical JSON properties (RFC 8785 against the removed v1 serializer)
+       produces the same bytes as v1 for arbitrary JSON without integer-like member names:
+     Error: Property failed after 1140 tests
+{ seed: -21904155, path: "1139:1:0:85", endOnFailure: true }
+Counterexample: [{["__proto__"]:{}}]
+Shrunk 3 time(s)
+
+Hint: Enable verbose mode in order to have the list of all failing values encountered during the run
+      at buildError (node_modules/fast-check/lib/cjs/fast-check.js:2484:16)
+      at throwIfFailed (node_modules/fast-check/lib/cjs/fast-check.js:2491:8)
+      at reportRunDetails (node_modules/fast-check/lib/cjs/fast-check.js:2507:14)
+      at Module.assert (node_modules/fast-check/lib/cjs/fast-check.js:2677:7)
+      at Context.<anonymous> (test/mocha/function-tests/test-canonical-json-properties.ts:97:12)
+      at processImmediate (node:internal/timers:574:21)
+     Caused by: AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + '{"__proto__":{}}'
+  - '{}'
+  
+      at /home/user/digital-product-passport-wt/DPP-216/web-application/backend/test/mocha/function-tests/test-canonical-json-properties.ts:99:20
+      at Property.predicate (node_modules/fast-check/lib/cjs/fast-check.js:1370:99)
+      at Property.run (node_modules/fast-check/lib/cjs/fast-check.js:1339:24)
+      at propertyExecution (node_modules/fast-check/lib/cjs/fast-check.js:2564:23)
+      at run (node_modules/fast-check/lib/cjs/fast-check.js:2654:91)
+      at runIt (node_modules/fast-check/lib/cjs/fast-check.js:2557:15)
+      at check (node_modules/fast-check/lib/cjs/fast-check.js:2670:14)
+      at Module.assert (node_modules/fast-check/lib/cjs/fast-check.js:2675:14)
+      at Context.<anonymous> (test/mocha/function-tests/test-canonical-json-properties.ts:97:12)
+      at processImmediate (node:internal/timers:574:21)
+
+
+
