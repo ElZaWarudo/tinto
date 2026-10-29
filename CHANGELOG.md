@@ -4,10 +4,11 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
-## [1.0.0] - 2026-10-29
+## [1.0.1] - 2026-10-29
 
 The first stable release of Tinto: from now on each version is tagged,
-published as a GitHub Release, and installed Tinto updates itself.
+published as a GitHub Release, and installed Tinto updates itself. (1.0.0 was
+tagged, but its release build failed and it was never published.)
 
 ### Monitoring
 
@@ -54,3 +55,8 @@ published as a GitHub Release, and installed Tinto updates itself.
 
 - Tinto checks for a new release when it starts and installs it on request,
   verifying its signature.
+
+## [1.0.0] - 2026-10-29
+
+Tagged but not published: its release build failed at clippy. Its contents
+shipped in 1.0.1.
