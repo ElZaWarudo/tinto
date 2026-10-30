@@ -22,7 +22,7 @@ pub mod normalize;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -143,12 +143,95 @@ struct MountedRepo {
     classifier: Box<PathClassifier>,
 }
 
+/// Watches del SO, compartidos entre `FsWatcher` (montaje) y el router
+/// (dirs nuevos y rebuild del clasificador). En Linux, inotify cobra un
+/// watch por directorio y el modo recursivo vigila también lo ignorado
+/// (`node_modules`, `target`): se vigila no recursivamente cada dir que
+/// el clasificador no ignora. En macOS/Windows un único handle recursivo
+/// por root es más barato.
+struct Watches {
+    watcher: RecommendedWatcher,
+    /// Dirs vigilados por root (Linux).
+    #[cfg(target_os = "linux")]
+    dirs: HashMap<PathBuf, HashSet<PathBuf>>,
+}
+
+impl Watches {
+    #[cfg(not(target_os = "linux"))]
+    fn mount(&mut self, root: &Path, _classifier: &PathClassifier) -> notify::Result<()> {
+        self.watcher.watch(root, RecursiveMode::Recursive)
+    }
+
+    /// Vigila los dirs del repo según el clasificador y suelta los que
+    /// dejaron de aplicar. Sirve de montaje y de re-sync tras un rebuild.
+    #[cfg(target_os = "linux")]
+    fn mount(&mut self, root: &Path, classifier: &PathClassifier) -> notify::Result<()> {
+        let previous = self.dirs.remove(root).unwrap_or_default();
+        self.add_tree(root, root, classifier)?;
+        let current = &self.dirs[root];
+        for stale in previous.difference(current) {
+            let _ = self.watcher.unwatch(stale);
+        }
+        Ok(())
+    }
+
+    /// Vigila `dir` y sus subdirs no ignorados. Un subdir ilegible o borrado
+    /// a mitad del walk solo pierde su subtree, no el repo.
+    #[cfg(target_os = "linux")]
+    fn add_tree(
+        &mut self,
+        root: &Path,
+        dir: &Path,
+        classifier: &PathClassifier,
+    ) -> notify::Result<()> {
+        let watched = self.dirs.entry(root.to_path_buf()).or_default();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            if !classifier.watches_dir(&dir) {
+                continue;
+            }
+            match self.watcher.watch(&dir, RecursiveMode::NonRecursive) {
+                Ok(()) => {
+                    watched.insert(dir.clone());
+                }
+                Err(e)
+                    if is_permission_denied(&e)
+                        || matches!(e.kind, notify::ErrorKind::PathNotFound) =>
+                {
+                    continue
+                }
+                Err(e) => return Err(e),
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    stack.push(entry.path());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn unmount(&mut self, root: &Path) {
+        // WatchNotFound es esperable (p. ej. root borrado: inotify ya
+        // removió el watch); no es un segundo error.
+        #[cfg(target_os = "linux")]
+        for dir in self.dirs.remove(root).unwrap_or_default() {
+            let _ = self.watcher.unwatch(&dir);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = self.watcher.unwatch(root);
+    }
+}
+
 /// Watcher de FS del workbench activo. Construirlo requiere contexto de
 /// runtime tokio (`tokio::spawn`); en la app, RDM-006 lo crea dentro de
 /// `tauri::async_runtime`. `new()` devuelve el handle y el receiver único
 /// del canal de mensajes.
 pub struct FsWatcher {
-    watcher: RecommendedWatcher,
+    watches: Arc<Mutex<Watches>>,
     router_tx: mpsc::UnboundedSender<RouterInput>,
     /// Roots montados con su `fs_watch`, para diff en `watch_workbench`.
     mounted: HashMap<PathBuf, Vec<String>>,
@@ -185,6 +268,12 @@ impl FsWatcher {
             message: e.to_string(),
         })?;
 
+        let watches = Arc::new(Mutex::new(Watches {
+            watcher,
+            #[cfg(target_os = "linux")]
+            dirs: HashMap::new(),
+        }));
+
         let debounce_handle = tokio::spawn(debounce::run(debounce_rx, batch_tx));
         let router_handle = tokio::spawn(router(
             router_rx,
@@ -193,12 +282,15 @@ impl FsWatcher {
             public_tx.clone(),
             debounce_handle,
             Arc::clone(&dead_roots),
+            // Weak: el callback de notify retiene el puente del router; un
+            // Arc aquí impediría que el shutdown cerrara el canal.
+            Arc::downgrade(&watches),
         ));
         let poll_handle = tokio::spawn(poll_loop(Arc::clone(&poll_roots), router_tx.clone()));
 
         Ok((
             Self {
-                watcher,
+                watches,
                 router_tx,
                 mounted: HashMap::new(),
                 dead_roots,
@@ -258,7 +350,11 @@ impl FsWatcher {
                 .cloned()
                 .collect();
             for root in overlapping {
-                let _ = self.watcher.watch(&root, RecursiveMode::Recursive);
+                if let Ok(classifier) = PathClassifier::new(&root, &self.mounted[&root]) {
+                    if let Ok(mut watches) = self.watches.lock() {
+                        let _ = watches.mount(&root, &classifier);
+                    }
+                }
             }
         }
 
@@ -283,10 +379,14 @@ impl FsWatcher {
                     // canal del router es FIFO, así el primer evento crudo
                     // ya encuentra su clasificador (sin ventana de pérdida
                     // durante el walk de construcción).
-                    if !self.send_classifier(&root, &fs_watch) {
+                    let Some(classifier) = self.send_classifier(&root, &fs_watch) else {
                         continue; // ya reportado por el canal
-                    }
-                    if let Err(e) = self.watcher.watch(&root, RecursiveMode::Recursive) {
+                    };
+                    let mounted = match self.watches.lock() {
+                        Ok(mut watches) => watches.mount(&root, &classifier),
+                        Err(_) => Ok(()),
+                    };
+                    if let Err(e) = mounted {
                         if is_permission_denied(&e) {
                             // Un subdirectorio ilegible (p. ej. el data dir de
                             // un mongo, un path de otro usuario, un `_tmp` de
@@ -302,7 +402,9 @@ impl FsWatcher {
                         // Otro fallo (p. ej. límite de inotify a mitad del
                         // walk) deja watches huérfanos que consumen presupuesto
                         // del kernel: liberarlos.
-                        let _ = self.watcher.unwatch(&root);
+                        if let Ok(mut watches) = self.watches.lock() {
+                            watches.unmount(&root);
+                        }
                         let _ = self
                             .router_tx
                             .send(RouterInput::RemoveRepo { root: root.clone() });
@@ -338,17 +440,18 @@ impl FsWatcher {
         }
     }
 
-    /// Construye y envía el clasificador del repo al router. `false` si la
-    /// construcción falló (ya reportado por el canal).
-    fn send_classifier(&mut self, root: &PathBuf, fs_watch: &[String]) -> bool {
+    /// Construye y envía el clasificador del repo al router; devuelve una
+    /// copia para montar los watches. `None` si la construcción falló (ya
+    /// reportado por el canal).
+    fn send_classifier(&mut self, root: &PathBuf, fs_watch: &[String]) -> Option<PathClassifier> {
         match PathClassifier::new(root, fs_watch) {
             Ok(classifier) => {
                 let _ = self.router_tx.send(RouterInput::AddRepo {
                     root: root.clone(),
                     fs_watch: fs_watch.to_vec(),
-                    classifier: Box::new(classifier),
+                    classifier: Box::new(classifier.clone()),
                 });
-                true
+                Some(classifier)
             }
             Err(source) => {
                 let _ = self.router_tx.send(RouterInput::ReportError {
@@ -358,15 +461,15 @@ impl FsWatcher {
                         source,
                     },
                 });
-                false
+                None
             }
         }
     }
 
     fn unmount(&mut self, root: &PathBuf) {
-        // WatchNotFound es esperable (p. ej. root borrado: inotify ya
-        // removió el watch); no es un segundo error.
-        let _ = self.watcher.unwatch(root);
+        if let Ok(mut watches) = self.watches.lock() {
+            watches.unmount(root);
+        }
         self.mounted.remove(root);
         if let Ok(mut dead) = self.dead_roots.lock() {
             dead.remove(root);
@@ -423,7 +526,10 @@ async fn router(
     public_tx: mpsc::UnboundedSender<WatcherMessage>,
     debounce_handle: JoinHandle<()>,
     dead_roots: Arc<Mutex<HashSet<PathBuf>>>,
+    watches: Weak<Mutex<Watches>>,
 ) {
+    #[cfg(not(target_os = "linux"))]
+    let _ = watches;
     let mut repos: HashMap<PathBuf, MountedRepo> = HashMap::new();
     let mut root_health = tokio::time::interval(Duration::from_millis(200));
 
@@ -433,6 +539,8 @@ async fn router(
                 match maybe {
                     Some(RouterInput::Raw(Ok(event))) => {
                         route_event(&event, &mut repos, &debounce_tx, &public_tx, &dead_roots);
+                        #[cfg(target_os = "linux")]
+                        watch_created_dirs(&event, &repos, &watches);
                     }
                     Some(RouterInput::Raw(Err(_))) => {
                         // Errores globales del backend de notify sin repo
@@ -458,7 +566,17 @@ async fn router(
                 }
             }
             Some(batch) = batches.recv() => {
+                #[cfg(target_os = "linux")]
+                let resync = batch.rebuild_pending.then(|| batch.repo.clone());
                 forward_batch(batch, &mut repos, &debounce_tx, &public_tx);
+                // Reglas nuevas: vigilar lo que dejó de ignorarse y soltar
+                // lo que pasó a ignorarse.
+                #[cfg(target_os = "linux")]
+                if let (Some(root), Some(watches)) = (resync, watches.upgrade()) {
+                    if let (Some(repo), Ok(mut watches)) = (repos.get(&root), watches.lock()) {
+                        let _ = watches.mount(&root, &repo.classifier);
+                    }
+                }
             }
             _ = root_health.tick() => {
                 mark_missing_roots(&mut repos, &debounce_tx, &public_tx, &dead_roots);
@@ -554,6 +672,34 @@ fn route_event(
                         timestamp_ms,
                     },
                 });
+            }
+        }
+    }
+}
+
+/// Linux: vigila los dirs nuevos (creados o movidos dentro del repo) que
+/// el clasificador no ignora, con su subtree; el modo no recursivo no lo
+/// hace solo. Best-effort, como el auto-watch del modo recursivo.
+#[cfg(target_os = "linux")]
+fn watch_created_dirs(
+    event: &notify::Event,
+    repos: &HashMap<PathBuf, MountedRepo>,
+    watches: &Weak<Mutex<Watches>>,
+) {
+    for normalized in normalize::normalize(event) {
+        if normalized.kind != EventType::Created || !normalized.path.is_dir() {
+            continue;
+        }
+        let Some((root, repo)) = repos
+            .iter()
+            .filter(|(root, _)| normalized.path.starts_with(root))
+            .max_by_key(|(root, _)| root.as_os_str().len())
+        else {
+            continue;
+        };
+        if let Some(watches) = watches.upgrade() {
+            if let Ok(mut watches) = watches.lock() {
+                let _ = watches.add_tree(root, &normalized.path, &repo.classifier);
             }
         }
     }
@@ -1079,6 +1225,67 @@ mod tests {
                 "logs/ ya está ignorado tras el rebuild"
             );
         }
+
+        watcher.shutdown().await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn linux_vigila_solo_dirs_no_ignorados_y_sigue_los_nuevos() {
+        let repo = fixture_repo("target/\ndist/\n");
+        fs::create_dir_all(repo.path().join("target/debug")).unwrap();
+        fs::create_dir_all(repo.path().join("dist")).unwrap();
+        let root = repo.path().canonicalize().unwrap();
+        let (mut watcher, mut rx) = FsWatcher::new().unwrap();
+        watcher.watch_workbench(&[entry(&repo, &["dist/**"])]);
+
+        let watched =
+            |w: &FsWatcher, p: &str| w.watches.lock().unwrap().dirs[&root].contains(&root.join(p));
+        assert!(watched(&watcher, "src") && watched(&watcher, ".git"));
+        assert!(!watched(&watcher, "target") && !watched(&watcher, "target/debug"));
+        assert!(
+            watched(&watcher, "dist"),
+            "la watchlist mantiene vigilado dist/"
+        );
+
+        // Dir nuevo (con subdir) tras el montaje: sus eventos llegan.
+        fs::create_dir_all(root.join("src/nuevo/sub")).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        fs::write(root.join("src/nuevo/sub/x.rs"), "x").unwrap();
+        fs::write(root.join("dist/app.js"), "js").unwrap();
+        // Ambos pueden llegar en el mismo lote: se esperan juntos.
+        let mut missing = vec![
+            (Classification::Plane1, "src/nuevo/sub/x.rs"),
+            (Classification::Plane2, "dist/app.js"),
+        ];
+        wait_for(&mut rx, |m| {
+            missing.retain(|(class, suffix)| !batch_has(m, *class, suffix));
+            missing.is_empty()
+        })
+        .await;
+        assert!(missing.is_empty(), "faltan {missing:?}");
+
+        // Rebuild que des-ignora target/: el re-sync lo vigila.
+        fs::write(root.join(".gitignore"), "dist/\n").unwrap();
+        assert!(wait_for(&mut rx, |m| batch_has(
+            m,
+            Classification::Plane1,
+            ".gitignore"
+        ))
+        .await
+        .is_some());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        fs::write(root.join("target/debug/x.o"), "o").unwrap();
+        assert!(
+            wait_for(&mut rx, |m| batch_has(
+                m,
+                Classification::Plane1,
+                "target/debug/x.o"
+            ))
+            .await
+            .is_some(),
+            "tras el rebuild target/ debe vigilarse"
+        );
 
         watcher.shutdown().await;
     }
