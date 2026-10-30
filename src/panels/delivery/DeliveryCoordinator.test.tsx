@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DeliveryOverview, DeliveryRun } from "../../delivery/types";
+import { WorkspaceActionsContext, type WorkspaceActions } from "../../workspace/actions";
 import { CoordinatorDock } from "./DeliveryCoordinator";
 
 const sessions = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
@@ -26,11 +27,36 @@ vi.mock("../terminal/agentRuntimeCatalog", () => ({
   lastRuntimeCatalog: () => catalog.value,
   codexReasoningLabel: (value: string) => value,
 }));
-vi.mock("../terminal/TerminalPanel", () => ({
-  TerminalPanel: ({ params }: { params: { sessionId: string } }) => (
-    <div>Conversación {params.sessionId}</div>
-  ),
-}));
+vi.mock("../terminal/TerminalPanel", async () => {
+  const { useWorkspaceActions } = await import("../../workspace/actions");
+  // Sending to an ended conversation resumes it under a new id, as Agents does.
+  function TerminalPanel({
+    params,
+  }: {
+    params: { sessionId: string; repo: string; mode?: string };
+  }) {
+    const { openAgentTerminal } = useWorkspaceActions();
+    return (
+      <div data-testid="conversation" data-mode={params.mode}>
+        Conversación {params.sessionId}
+        <button
+          type="button"
+          onClick={() =>
+            openAgentTerminal({
+              sessionId: `${params.sessionId}-resumed`,
+              repo: params.repo,
+              agentType: "claude",
+              replaceSessionId: params.sessionId,
+            })
+          }
+        >
+          Retomar
+        </button>
+      </div>
+    );
+  }
+  return { TerminalPanel };
+});
 
 const run = (over: Partial<DeliveryRun> = {}): DeliveryRun => ({
   id: "r1",
@@ -104,17 +130,49 @@ describe("CoordinatorDock", () => {
     expect(screen.getByText("Conversación s1")).toBeInTheDocument();
   });
 
-  it("offers a new coordinator once the batch's conversation ended", async () => {
-    const user = userEvent.setup();
-    sessions.value = { s1: { ...session("s1", "waiting"), status: "exited" } };
-    render(<Dock runs={[run({ coordinator_session: "s1", owner: "claude-1" })]} />);
-    expect(
-      screen.getByRole("button", { name: "Coordinador de Lote A: sin coordinador" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Conversación" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Iniciar coordinador" }));
-    expect(bus.startAgentSession).toHaveBeenCalled();
-  });
+  it.each([
+    ["failed", { s1: { ...session("s1", "waiting"), status: "failed" } }],
+    ["not loaded after a restart", {}],
+  ])(
+    "keeps a coordinator whose conversation is %s to resume here, or starts another",
+    async (_, known) => {
+      const user = userEvent.setup();
+      sessions.value = known;
+      const opened = vi.fn();
+      const batch = [run({ coordinator_session: "s1", owner: "claude-1" })];
+      const { rerender } = render(
+        <WorkspaceActionsContext.Provider
+          value={{ openAgentTerminal: opened } as unknown as WorkspaceActions}
+        >
+          <Dock runs={batch} />
+        </WorkspaceActionsContext.Provider>,
+      );
+      expect(
+        screen.getByRole("button", { name: "Coordinador de Lote A: parado" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Iniciar coordinador" })).toBeInTheDocument();
+
+      // Resumed from the drawer, it stays in the drawer, not in an Agents tab.
+      // Opened from the Agents history, which resumes it whether it exited or failed.
+      await user.click(screen.getByRole("button", { name: "Conversación" }));
+      expect(screen.getByTestId("conversation")).toHaveAttribute("data-mode", "journal");
+      await user.click(screen.getByRole("button", { name: "Retomar" }));
+      expect(opened).not.toHaveBeenCalled();
+      sessions.value = { ...known, "s1-resumed": session("s1-resumed", "working") };
+      rerender(
+        <WorkspaceActionsContext.Provider
+          value={{ openAgentTerminal: opened } as unknown as WorkspaceActions}
+        >
+          <Dock runs={batch} />
+        </WorkspaceActionsContext.Provider>,
+      );
+      expect(screen.getByText("Conversación s1-resumed")).toBeInTheDocument();
+      expect(screen.getByTestId("conversation")).toHaveAttribute("data-mode", "live");
+      expect(
+        screen.getByRole("button", { name: "Coordinador de Lote A: trabajando" }),
+      ).toBeInTheDocument();
+    },
+  );
 
   it("starts Codex on the model it shows once its models load after the pick", async () => {
     const user = userEvent.setup();
