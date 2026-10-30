@@ -1743,6 +1743,27 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
     assert_eq!(fixed["model"], "gpt-6-sol");
     assert_eq!(fixed["reasoning"], "high");
     h.wait(fixed["id"].as_str().unwrap());
+    // A stage left unset runs on the implementation's agent.
+    let mut with_implementation = settings.clone();
+    with_implementation.stages.insert(
+        "implementation".into(),
+        DeliveryStageAgent {
+            agent: DeliveryAgent::Codex,
+            model: None,
+            reasoning: None,
+            timeout_minutes: None,
+        },
+    );
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &with_implementation)
+        .unwrap();
+    let mut explore = review.clone();
+    explore["arguments"]["role"] = json!("explore");
+    let explored = call(15, "tools/call", explore)["result"]["structuredContent"].clone();
+    assert_eq!(explored["agent"], "codex", "{explored}");
+    h.wait(explored["id"].as_str().unwrap());
     // A retry follows the stage as the user left it after a model failed,
     // even when the attempt it repeats ran with a model the coordinator chose.
     let set_stage_model = |model: &str| {
@@ -5079,13 +5100,6 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
     assert_eq!(
         h.service
-            .request_approval(merge(None))
-            .unwrap_err()
-            .category,
-        "invalid_approval"
-    );
-    assert_eq!(
-        h.service
             .request_approval(merge(Some("squash")))
             .unwrap_err()
             .category,
@@ -5117,8 +5131,33 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         .unwrap()
         .set_repo_settings(h.repo.path(), &settings)
         .unwrap();
-    let asked = h.service.request_approval(merge(Some("squash"))).unwrap();
-    assert_eq!(asked.merge_method.as_deref(), Some("squash"));
+    // Without a method or text, the repo's last merge through Tinto picks
+    // the method and the PR's approved title, with its number, is the text.
+    let earlier = h.task("P-1");
+    put_step(&h, &earlier, "m-1", "merge", "executed", "PR #4 fusionado");
+    let mut last = h.service.approval("m-1").unwrap();
+    last.merge_method = Some("merge".into());
+    h.service.store().unwrap().put_approval(&last).unwrap();
+    put_step(
+        &h,
+        &task,
+        "p-2",
+        "pr",
+        "executed",
+        "https://github.com/o/r/pull/5",
+    );
+    let mut pr_step = h.service.approval("p-2").unwrap();
+    pr_step.title = "P-2: paginar".into();
+    h.service.store().unwrap().put_approval(&pr_step).unwrap();
+    let asked = h
+        .service
+        .request_approval(NewApproval {
+            title: String::new(),
+            ..merge(None)
+        })
+        .unwrap();
+    assert_eq!(asked.merge_method.as_deref(), Some("merge"));
+    assert_eq!(asked.title, "P-2: paginar (#5)");
     // The user may reword the merge commit before approving.
     h.service
         .set_step_text(&asked.id, Some("P-2: paginate (#5)".into()), None, None)
@@ -5130,10 +5169,10 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         "{:?}",
         done.outcome
     );
-    assert!(done.outcome.unwrap().contains("fusionado (squash)"));
+    assert!(done.outcome.unwrap().contains("fusionado (merge)"));
     assert_eq!(
         github.merged.lock().unwrap().as_slice(),
-        ["https://github.com/o/r/pull/5 squash P-2: paginate (#5)".to_string()]
+        ["https://github.com/o/r/pull/5 merge P-2: paginate (#5)".to_string()]
     );
     assert_eq!(
         h.service.task_pr(&task.id).unwrap().unwrap().state,
@@ -5706,7 +5745,7 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
     assert!(
         refused
             .message
-            .contains("le falta la aprobación de ana, Luis"),
+            .contains("le falta la aprobación de ana (revisión pedida desde Tinto"),
         "{}",
         refused.message
     );
@@ -7019,6 +7058,30 @@ fn wait_run_wakes_on_the_users_decision_even_with_no_job_running() {
     );
     assert_eq!(quiet["structuredContent"]["events"], json!([]));
     assert_eq!(quiet["structuredContent"]["waited"], true);
+
+    // Changes moments apart come in one reply.
+    let (other_id, _) = coordinator.task("F-2");
+    let other = h.service.task(&other_id).unwrap();
+    put_step(&h, &task, "b-push", "push", "pending", "");
+    put_step(&h, &other, "c-push", "push", "pending", "");
+    let cursor = quiet["structuredContent"]["cursor"].as_u64().unwrap();
+    let service = h.service.clone();
+    let user = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        service.decide_approval("b-push", false, None).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        service.decide_approval("c-push", false, None).unwrap();
+    });
+    let burst = coordinator.write(
+        "wait_run",
+        json!({"cursor": cursor, "timeout_seconds": 20, "idle_ok": true}),
+    );
+    user.join().unwrap();
+    let events = burst["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(events.len(), 2, "{burst}");
 }
 
 #[test]
@@ -7308,6 +7371,23 @@ fn a_coordinator_the_user_asks_takes_the_batch_and_the_old_one_is_told() {
         .any(|event| event["text"] == "otro coordinador tomó el lote"));
     let refused = old.write("wait_run", json!({}));
     assert!(error_text(&refused).contains("deja este lote"));
+
+    // Resumed under another id, the batch follows its conversation.
+    h.service
+        .rebind_coordinator("new-session", "resumed")
+        .unwrap();
+    assert!(h.service.coordinates("resumed").unwrap());
+    // Taken from outside Agents: no conversation here holds it any more.
+    let outside = old.call(
+        "takeover_run",
+        json!({"run_id": old.run_id, "owner": "cli"}),
+    );
+    assert_eq!(
+        outside["structuredContent"]["coordinator_session"],
+        serde_json::Value::Null,
+        "{outside}"
+    );
+    assert!(!h.service.coordinates("resumed").unwrap());
 }
 
 #[test]
@@ -7765,6 +7845,22 @@ fn qa_problems_wait_for_the_user_and_reach_the_coordinator_and_the_next_qa() {
         .map(|problem| (problem.number, problem.text.as_str()))
         .collect();
     assert_eq!(open, [(4, "The toast covers Retry on mobile.")]);
+    // What was sent to fix is settled by that record: found again or not.
+    let status = |id: &str| {
+        after
+            .iter()
+            .find(|problem| problem.id == id)
+            .unwrap()
+            .status
+    };
+    assert_eq!(
+        status(&problems[0].id),
+        super::model::DeliveryQaProblemStatus::StillFailing
+    );
+    assert_eq!(
+        status(&own.id),
+        super::model::DeliveryQaProblemStatus::Verified
+    );
 }
 
 #[test]
@@ -7797,9 +7893,10 @@ fn past_the_brainstorm_qa_problems_go_to_the_coordinator_with_qas_fix() {
 }
 
 #[test]
-fn past_the_brainstorm_the_jira_steps_tinto_runs_go_through() {
+fn past_the_brainstorm_the_jira_steps_go_through() {
     let h = harness();
     let coordinator = Coordinator::start(&h);
+    let (manual_id, _) = coordinator.task("AGOS-454");
     let (task_id, _) = coordinator.task("AGOS-455");
     let jira = Arc::new(FakeJira {
         status: std::sync::Mutex::new("Por hacer".into()),
@@ -7808,7 +7905,7 @@ fn past_the_brainstorm_the_jira_steps_tinto_runs_go_through() {
     });
     h.service.set_jira(jira.clone());
     h.service.end_brainstorm(&coordinator.run_id).unwrap();
-    let ask = || {
+    let ask = |task_id: &str| {
         coordinator.write(
             "request_approval",
             json!({"task_id": task_id, "rung": "jira", "stage": "after_pr", "title": "AGOS-455"}),
@@ -7816,12 +7913,9 @@ fn past_the_brainstorm_the_jira_steps_tinto_runs_go_through() {
             .clone()
     };
 
-    // Without Jira in Tinto the coordinator runs it, so the user approves it.
-    let manual = ask();
-    assert_eq!(manual["status"], "pending", "{manual}");
-    h.service
-        .withdraw_approval(manual["id"].as_str().unwrap(), "Jira set")
-        .unwrap();
+    // Without Jira in Tinto it is approved for the coordinator to run.
+    let manual = ask(&manual_id);
+    assert_eq!(manual["status"], "approved", "{manual}");
 
     let mut settings = h
         .service
@@ -7845,7 +7939,7 @@ fn past_the_brainstorm_the_jira_steps_tinto_runs_go_through() {
     let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/279").unwrap();
     h.service.link_pr(&task_id, &reference).unwrap();
 
-    let done = ask();
+    let done = ask(&task_id);
     assert_eq!(done["status"], "executed", "{done}");
     assert_eq!(*jira.status.lock().unwrap(), "In Review");
 }
@@ -8145,7 +8239,10 @@ fn the_coordinator_reads_a_compact_overview_and_jobs_without_their_instructions(
     let tasks = busy_batch(&h);
     let (delivered, active) = (&tasks[0], &tasks[6]);
     let full = mcp_tool(&h, "delivery_overview", json!({"compact": false}));
-    let compact = mcp_tool(&h, "delivery_overview", json!({}));
+    // Every part, named: an overview asked without `fields` is capped apart.
+    let mut parts: Vec<String> = full.as_object().unwrap().keys().cloned().collect();
+    parts.push("older_jobs".into());
+    let compact = mcp_tool(&h, "delivery_overview", json!({"fields": parts}));
     let (full_size, compact_size) = (full.to_string().len(), compact.to_string().len());
     println!("delivery_overview: {full_size} bytes in full, {compact_size} compact");
     assert!(
@@ -11046,10 +11143,110 @@ fn a_pr_merges_only_once_every_chosen_reviewer_approved_or_was_removed() {
     let phase = h.service.overview().unwrap().phases[&task.id].clone();
     assert_eq!(phase.waits_on, super::phase::Waiter::Reviewers);
 
-    // The user takes him off: what was asked is approved.
+    // The user takes him off: what was asked is approved, even while GitHub
+    // still lists him.
     h.service
         .change_pr_reviewers(&task.id, Vec::new(), vec!["luis".into()])
         .unwrap();
+    github.snapshot.lock().unwrap()["reviewRequests"] = json!([{"login": "luis"}]);
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert!(h.service.request_approval(merge_step(&task)).is_ok());
+}
+
+/// DPP-204 (PR #201): the author took a chosen reviewer's request back on
+/// GitHub before Tinto read the PR, and the other one approved.
+#[test]
+fn the_reviewers_a_merge_waits_for_follow_github_once_the_pr_is_open() {
+    let h = harness();
+    let task = h.task("RV-2");
+    let event = |event: &str, at: &str, reviewer: &str| json!({"event": event, "created_at": at, "actor": "author", "reviewer": reviewer});
+    let requested = |at: &str, reviewer: &str| event("review_requested", at, reviewer);
+    let removed = |at: &str, reviewer: &str| event("review_request_removed", at, reviewer);
+    let github = FakeGitHub::new(
+        json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
+            "statusCheckRollup": [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            "reviews": [{"author": {"login": "ana"}, "state": "APPROVED", "submittedAt": "2026-10-29T11:00:00Z"}],
+            "comments": [],
+            "reviewRequests": [{"login": "luis"}],
+            "reviewRequestEvents": [requested("2026-10-29T10:24:58Z", "ana"), requested("2026-10-29T10:24:58Z", "luis")]
+        }),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/15").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    h.service
+        .change_pr_reviewers(&task.id, vec!["ana".into(), "luis".into()], Vec::new())
+        .unwrap();
+    let refused = |h: &Harness| {
+        let refused = h.service.request_approval(merge_step(&task)).unwrap_err();
+        assert_eq!(refused.category, "pr_not_ready");
+        refused.message
+    };
+    // The refusal says where each missing approval comes from.
+    let message = refused(&h);
+    assert!(
+        message.contains("luis (revisión pedida desde Tinto, GitHub aún la solicita)"),
+        "{message}"
+    );
+
+    // On GitHub the author takes luis off and asks eva: the merge waits for
+    // eva, not luis, and the task's history says why.
+    {
+        let mut snapshot = github.snapshot.lock().unwrap();
+        snapshot["reviewRequests"] = json!([{"login": "eva"}]);
+        let events = snapshot["reviewRequestEvents"].as_array_mut().unwrap();
+        events.push(removed("2026-10-29T10:25:37Z", "luis"));
+        events.push(requested("2026-10-29T10:25:37Z", "eva"));
+    }
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let message = refused(&h);
+    assert!(
+        message.contains(
+            "le falta la aprobación de eva (revisión pedida en GitHub, GitHub aún la solicita)"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("luis"), "{message}");
+    let history: Vec<String> = h
+        .service
+        .store()
+        .unwrap()
+        .events_after(0)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "pr_changed")
+        .map(|event| event.detail)
+        .collect();
+    assert!(
+        history.iter().any(|detail| detail
+            .contains("se quitó en GitHub la revisión de luis (por author)")
+            && detail.contains("se pidió en GitHub la revisión de eva (por author)")),
+        "{history:?}"
+    );
+
+    // Taken off after asking for changes, eva still holds the merge until
+    // that review is dismissed.
+    {
+        let mut snapshot = github.snapshot.lock().unwrap();
+        snapshot["reviewRequests"] = json!([]);
+        snapshot["reviews"].as_array_mut().unwrap().push(json!({"author": {"login": "eva"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-10-29T12:00:00Z"}));
+        snapshot["reviewRequestEvents"]
+            .as_array_mut()
+            .unwrap()
+            .push(removed("2026-10-29T12:30:00Z", "eva"));
+    }
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let message = refused(&h);
+    assert!(
+        message.contains("eva (revisión pedida en GitHub, pidió cambios)"),
+        "{message}"
+    );
+
+    github.snapshot.lock().unwrap()["reviews"][1]["state"] = json!("DISMISSED");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
     assert!(h.service.request_approval(merge_step(&task)).is_ok());
 }
 
@@ -11846,4 +12043,325 @@ fn a_commit_shows_its_author_and_warns_when_the_base_history_has_another() {
         done.outcome
     );
     assert!(!changed(&task).is_empty());
+}
+
+#[test]
+fn run_checks_queues_the_task_checks_once_on_its_code_as_it_is() {
+    let h = harness();
+    let task = h.task("RC-1");
+    assert_eq!(
+        h.service.run_checks(&task.id).unwrap_err().category,
+        "no_checks"
+    );
+    set_repo_checks(&h, &["sleep=1 exit=0"]);
+    h.service
+        .set_task_checks(&task.id, vec!["sleep=1 exit=0".into()])
+        .unwrap();
+    let queued = h.service.run_checks(&task.id).unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(
+        h.service.run_checks(&task.id).unwrap_err().category,
+        "checks_running"
+    );
+    let ended = ended_checks(&h, &task, 1);
+    assert_eq!(ended[0].status, DeliveryJobStatus::Finished);
+}
+
+#[test]
+fn past_the_brainstorm_tinto_asks_the_push_and_jira_steps_itself() {
+    let h = harness();
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(
+        h.repo.path(),
+        &["remote", "add", "origin", &plain_path(remote.path())],
+    );
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("AGOS-455");
+    let task = h.service.task(&task_id).unwrap();
+    let jira = Arc::new(FakeJira {
+        status: std::sync::Mutex::new("Por hacer".into()),
+        workflow: vec![("Por hacer", "151", "Submit for Review", "In Review")],
+        writes: std::sync::Mutex::new(Vec::new()),
+    });
+    h.service.set_jira(jira.clone());
+    let steps = |rung: DeliveryRung| -> Vec<super::model::DeliveryApproval> {
+        h.service
+            .store()
+            .unwrap()
+            .approvals()
+            .unwrap()
+            .into_iter()
+            .filter(|approval| approval.task_id == task_id && approval.rung == rung)
+            .collect()
+    };
+    std::fs::write(
+        PathBuf::from(plain_path(&task.worktree)).join("feature.txt"),
+        "x",
+    )
+    .unwrap();
+    let commit = h
+        .service
+        .request_approval(NewApproval {
+            task_id: task_id.clone(),
+            rung: DeliveryRung::Commit,
+            title: "Add feature".into(),
+            body: String::new(),
+            requested_by: "user".into(),
+            commits: Vec::new(),
+            leave_out: Vec::new(),
+            single_commit_reason: None,
+            merge_method: None,
+            stage: None,
+            jira_statuses: Vec::new(),
+            comment_url: None,
+            resolve_thread: false,
+        })
+        .unwrap();
+    h.service.decide_approval(&commit.id, true, None).unwrap();
+
+    // During the brainstorm the coordinator asks.
+    h.service.advance_ladders().unwrap();
+    assert!(steps(DeliveryRung::Push).is_empty());
+
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    // A push that failed when Tinto took it is the coordinator's.
+    put_step(&h, &task, "p-failed", "push", "failed", "sin red");
+    h.service.advance_ladders().unwrap();
+    assert_eq!(steps(DeliveryRung::Push).len(), 1);
+    h.service
+        .store()
+        .unwrap()
+        .delete_approval("p-failed")
+        .unwrap();
+    h.service.advance_ladders().unwrap();
+    let [push] = steps(DeliveryRung::Push).try_into().unwrap();
+    assert_eq!(push.requested_by, "auto");
+    assert_eq!(
+        push.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        push.outcome
+    );
+
+    // Once the PR is open, the Jira step only when Tinto's Jira runs it.
+    put_step(
+        &h,
+        &task,
+        "a-pr",
+        "pr",
+        "executed",
+        "https://github.com/o/r/pull/7",
+    );
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/7").unwrap();
+    h.service.link_pr(&task_id, &reference).unwrap();
+    h.service.advance_ladders().unwrap();
+    assert!(steps(DeliveryRung::Jira).is_empty());
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.jira = Some(super::model::DeliveryJiraSettings {
+        host: "https://jira.test".into(),
+        project: "AGOS".into(),
+        after_pr: vec!["In Review".into()],
+        after_merge: vec!["Cerrada".into()],
+        has_token: false,
+    });
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    h.service.set_jira_token(h.repo.path(), "secret").unwrap();
+    h.service.advance_ladders().unwrap();
+    let [step] = steps(DeliveryRung::Jira).try_into().unwrap();
+    assert_eq!(step.stage.as_deref(), Some("after_pr"));
+    assert_eq!(
+        step.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        step.outcome
+    );
+    assert_eq!(*jira.status.lock().unwrap(), "In Review");
+}
+
+#[test]
+fn an_overview_too_large_to_read_keeps_where_each_task_is() {
+    let overview =
+        json!({"phases": {"t": 1}, "rounds": {}, "queued": {}, "jobs": ["x".repeat(200)]});
+    let fitted = super::mcp::fit_overview(overview.clone(), 100);
+    let mut keys: Vec<&String> = fitted.as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(keys, ["note", "phases", "queued", "rounds"]);
+    assert_eq!(super::mcp::fit_overview(overview.clone(), 10_000), overview);
+}
+
+#[test]
+fn past_the_brainstorm_a_failing_checks_round_gets_its_fix_stage_from_tinto() {
+    let h = harness();
+    set_repo_checks(&h, &["cargo check"]);
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("R-20");
+    let task = h.service.task(&task_id).unwrap();
+    h.service
+        .set_task_checks(&task.id, vec!["cargo check".into()])
+        .unwrap();
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.stages.insert(
+        "implementation".into(),
+        DeliveryStageAgent {
+            agent: DeliveryAgent::Codex,
+            model: None,
+            reasoning: None,
+            timeout_minutes: None,
+        },
+    );
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    let at = super::now_ms();
+    let check: DeliveryJob = serde_json::from_value(json!({
+        "id": "c1", "task_id": task.id, "role": "checks", "attempt": 1, "agent": "shell",
+        "access": "workspace", "prompt": "cargo check", "contract_version": 1,
+        "writes": false, "timeout_minutes": 60, "status": "failed",
+        "created_at_ms": at - 1, "started_at_ms": at - 1, "ended_at_ms": at,
+    }))
+    .unwrap();
+    {
+        let store = h.service.store().unwrap();
+        store.put_job(&check).unwrap();
+        super::rounds::after_job(&store, &check).unwrap();
+    }
+    assert_eq!(round_now(&h, &task).unwrap().round.kind, "checks");
+
+    h.service.advance_ladders().unwrap();
+    let fixes: Vec<DeliveryJob> = h
+        .service
+        .store()
+        .unwrap()
+        .task_jobs(&task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|job| job.role == "implementation" && job.id != "i1")
+        .collect();
+    assert_eq!(fixes.len(), 1);
+    assert_eq!(fixes[0].agent, DeliveryAgent::Codex);
+    assert!(
+        fixes[0].prompt.contains("failing checks"),
+        "{}",
+        fixes[0].prompt
+    );
+    // A fix that did not settle the round is not tried again.
+    let mut fix = h.wait(&fixes[0].id);
+    fix.status = DeliveryJobStatus::Failed;
+    fix.ended_at_ms = Some(super::now_ms());
+    h.service.store().unwrap().put_job(&fix).unwrap();
+    h.service.advance_ladders().unwrap();
+    let again = h
+        .service
+        .store()
+        .unwrap()
+        .task_jobs(&task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|job| job.role == "implementation" && job.id != "i1")
+        .count();
+    assert_eq!(again, 1);
+}
+
+#[test]
+fn past_the_brainstorm_the_commit_plan_the_stages_proposed_is_committed() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("CP-1");
+    let task = h.service.task(&task_id).unwrap();
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    std::fs::write(PathBuf::from(plain_path(&task.worktree)).join("a.txt"), "x").unwrap();
+    put_stage(&h, &task, "t1", "tests", "pass", &[], false);
+    let mut implementation = put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(&h, &task, "r1", "review", "pass", &[], false);
+    let commits = || -> Vec<super::model::DeliveryApproval> {
+        h.service
+            .store()
+            .unwrap()
+            .approvals()
+            .unwrap()
+            .into_iter()
+            .filter(|step| step.task_id == task_id && step.rung == DeliveryRung::Commit)
+            .collect()
+    };
+
+    // A stage that changed files without a plan leaves the commit to the coordinator.
+    h.service.advance_ladders().unwrap();
+    assert!(commits().is_empty());
+
+    implementation.result.as_mut().unwrap().commit_plan = vec![commit("feat: add a", &["a.txt"])];
+    h.service.store().unwrap().put_job(&implementation).unwrap();
+    h.service.advance_ladders().unwrap();
+    let [commit] = commits().try_into().unwrap();
+    assert_eq!(commit.requested_by, "auto");
+    assert_eq!(
+        commit.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        commit.outcome
+    );
+    assert_eq!(commit.commits[0].message, "feat: add a");
+}
+
+#[test]
+fn commands_that_start_the_environment_wait_for_the_user_then_run_when_it_fails() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("ENV-1");
+    let task = h.service.task(&task_id).unwrap();
+    // Past the brainstorm, with the repo letting Tinto apply proposals.
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    let up = h.repo.path().join("up.txt");
+    let marker = up.clone();
+    h.service.set_environment_check(Arc::new(move |_, _, _| {
+        vec![super::environment::DeliveryEnvironmentCheck {
+            name: "db".into(),
+            ok: marker.exists(),
+            output: String::new(),
+        }]
+    }));
+    let changes = DeliverySettingsChanges {
+        environment_up_add: vec!["touch up.txt".into()],
+        ..Default::default()
+    };
+    let proposal = h
+        .service
+        .propose_settings(
+            &coordinator.run_id,
+            &task,
+            changes.clone(),
+            "levantar la base",
+            "coord",
+        )
+        .unwrap();
+    assert_eq!(proposal.status, DeliverySettingsProposalStatus::Pending);
+    let failing = h.service.check_environment(h.repo.path(), None).unwrap();
+    assert!(
+        !failing[0].ok && !up.exists(),
+        "nothing runs before the user approves"
+    );
+
+    h.service
+        .approve_settings_proposal(&proposal.id, changes, "user")
+        .unwrap();
+    let started = h.service.check_environment(h.repo.path(), None).unwrap();
+    assert!(started.iter().all(|check| check.ok), "{started:?}");
 }

@@ -44,11 +44,6 @@ pub struct PingResponse {
     pub timestamp_ms: u64,
 }
 
-#[derive(Serialize, Clone, Debug)]
-pub struct TickPayload {
-    pub timestamp_ms: u64,
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -346,20 +341,6 @@ pub fn run() {
                 .data_directory(data_dir)
                 .build()?;
             }
-
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-                loop {
-                    interval.tick().await;
-                    let _ = handle.emit(
-                        "tick",
-                        TickPayload {
-                            timestamp_ms: now_ms(),
-                        },
-                    );
-                }
-            });
 
             // Task del bus: emite vía AppHandle (DeltaSink inyectada).
             let sink_handle = app.handle().clone();

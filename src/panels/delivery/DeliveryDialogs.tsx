@@ -858,6 +858,7 @@ function RepoSettings({
   const [browser, setBrowser] = useState(false);
   const [commands, setCommands] = useState("");
   const [setup, setSetup] = useState("");
+  const [environmentUp, setEnvironmentUp] = useState("");
   // `NAME=value` lines.
   const [checkEnv, setCheckEnv] = useState("");
   const [environment, setEnvironment] = useState("");
@@ -899,6 +900,7 @@ function RepoSettings({
         setBrowser(settings.qa_browser ?? false);
         setCommands((settings.qa_commands ?? []).join("\n"));
         setSetup((settings.setup ?? []).join("\n"));
+        setEnvironmentUp((settings.environment_up ?? []).join("\n"));
         setCheckEnv(
           Object.entries(settings.check_env ?? {})
             .map(([name, value]) => `${name}=${value}`)
@@ -1022,6 +1024,7 @@ function RepoSettings({
                 ci_on_push: skipCiOnPush ? "skip" : "run",
                 autonomy,
                 environment_probes: probes,
+                environment_up: parseChecks(environmentUp),
                 jira: jiraHost.trim()
                   ? {
                       host: jiraHost.trim(),
@@ -1151,6 +1154,17 @@ function RepoSettings({
             entorno responde (por ejemplo, un ping a la base de datos).
           </small>
         </div>
+        <Field
+          label="Levantar el entorno"
+          hint="Uno por línea, en orden: cuando «Entorno» falla, Tinto los corre donde corren los trabajos y lo comprueba otra vez (como mucho una vez cada 10 minutos). Por ejemplo, el docker compose de los servicios que usan las pruebas."
+        >
+          <GrowingTextarea
+            value={environmentUp}
+            onChange={(event) => setEnvironmentUp(event.target.value)}
+            rows={2}
+            placeholder="docker compose -f deploy/test-services.yml up -d"
+          />
+        </Field>
         <h3 data-section="qa">QA</h3>
         <Field
           label="Entorno de QA"
@@ -1636,7 +1650,7 @@ const AUTONOMY_STEPS: { key: keyof DeliveryAutonomy; label: string; hint: string
   { key: "push", label: "Push", hint: "Publicar la rama." },
   { key: "pr", label: "Abrir el PR", hint: "Sin revisores, salvo los que elija el coordinador." },
   { key: "merge", label: "Fusionar", hint: "Cuando la CI y las revisiones lo permiten." },
-  { key: "jira", label: "Jira", hint: "Los pasos que Tinto hace él mismo." },
+  { key: "jira", label: "Jira", hint: "Sus pasos, los haga Tinto o el coordinador." },
   {
     key: "pr_reply",
     label: "Respuestas en el PR",

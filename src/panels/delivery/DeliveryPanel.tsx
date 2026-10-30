@@ -132,6 +132,8 @@ import { JiraIssue } from "./DeliveryIssue";
 import { QaProblems } from "./DeliveryQaProblems";
 import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
 import { CoordinatorDock } from "./DeliveryCoordinator";
+import { Overlay } from "./DeliveryOverlay";
+import { useOneOverlay } from "./useOneOverlay";
 import { coordinatorStalls, type CoordinatorStall } from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
@@ -268,86 +270,46 @@ function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }
   );
 }
 
-/** A button that opens a short list of actions; closes on outside click or Escape.
- *  `floating` draws the list over the whole Delivery panel, for a button in a
- *  strip that would cut it off (the repo tabs'). */
+/** A button that opens a short list of actions in an overlay, pressed while
+ *  it is open. */
 function Menu({
   label,
   trigger,
   disabled,
-  floating,
+  listClassName,
   children,
 }: {
   label?: string;
   trigger: ReactNode;
   disabled?: boolean;
-  floating?: boolean;
+  listClassName?: string;
   children: (close: () => void) => ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLSpanElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const [place, setPlace] = useState<{ host: Element; top: number; right: number } | null>(null);
-  const toggle = () => {
-    const host = floating ? ref.current?.closest(".delivery-panel") : null;
-    if (!open && host && ref.current) {
-      const button = ref.current.getBoundingClientRect();
-      const panel = host.getBoundingClientRect();
-      setPlace({ host, top: button.bottom - panel.top + 2, right: panel.right - button.right });
-    } else {
-      setPlace(null);
-    }
-    setOpen(!open);
-  };
-  useEffect(() => {
-    if (!open) return;
-    (listRef.current ?? ref.current)
-      ?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')
-      ?.focus();
-    const onPointer = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!ref.current?.contains(target) && !listRef.current?.contains(target)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onPointer);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onPointer);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  // The button it opened from, while it is open.
+  const [from, setFrom] = useState<HTMLButtonElement | null>(null);
+  const close = () => setFrom(null);
   return (
-    <span className="delivery-menu" ref={ref}>
+    <span className="delivery-menu">
       <button
         type="button"
         aria-label={label}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={from !== null}
         disabled={disabled}
-        onClick={toggle}
+        onClick={(event) => setFrom(from ? null : event.currentTarget)}
       >
         {trigger}
       </button>
-      {open &&
-        (place ? (
-          createPortal(
-            <div
-              ref={listRef}
-              className="delivery-menu__list"
-              role="menu"
-              style={{ top: place.top, right: place.right }}
-            >
-              {children(() => setOpen(false))}
-            </div>,
-            place.host,
-          )
-        ) : (
-          <div ref={listRef} className="delivery-menu__list" role="menu">
-            {children(() => setOpen(false))}
-          </div>
-        ))}
+      {from && (
+        <Overlay
+          anchor={from}
+          role="menu"
+          className={`delivery-menu__list${listClassName ? ` ${listClassName}` : ""}`}
+          onClose={close}
+        >
+          {children(close)}
+        </Overlay>
+      )}
     </span>
   );
 }
@@ -393,23 +355,16 @@ function ContextMenu({
     setPlace({ left, top });
     list.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
   }, [at]);
+  useOneOverlay(listRef, null, onClose);
   useEffect(() => {
-    const onPointer = (event: MouseEvent) => {
-      if (!listRef.current?.contains(event.target as Node)) onClose();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("mousedown", onPointer);
-    document.addEventListener("keydown", onKey);
     window.addEventListener("blur", onClose);
-    return () => {
-      document.removeEventListener("mousedown", onPointer);
-      document.removeEventListener("keydown", onKey);
-      window.removeEventListener("blur", onClose);
-    };
+    return () => window.removeEventListener("blur", onClose);
   }, [onClose]);
   const move = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      onClose();
+      return;
+    }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
     const entries = [
@@ -781,16 +736,28 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
       if (active) unlisten = dispose;
       else dispose();
     });
-    const clock = setInterval(() => setNow(Date.now()), 1000);
-    const fallback = setInterval(reload, 5000);
+    // Changes arrive as events; this only catches one that got lost.
+    const fallback = setInterval(reload, 30_000);
     return () => {
       active = false;
       unlisten?.();
       if (pending) clearTimeout(pending);
-      clearInterval(clock);
       clearInterval(fallback);
     };
   }, [refresh]);
+
+  // Every second redraws the whole panel: only while a job's clock runs.
+  const ticking =
+    overview?.jobs.some((job) => ["queued", "pending", "started"].includes(job.status)) ?? false;
+  useEffect(() => {
+    const clock = setInterval(
+      () => {
+        if (!document.hidden) setNow(Date.now());
+      },
+      ticking ? 1000 : 30_000,
+    );
+    return () => clearInterval(clock);
+  }, [ticking]);
 
   const repos: RepoChoice[] = useMemo(() => {
     const config = bus.config;
@@ -1172,7 +1139,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
                 theme={themeVisualStudio}
                 components={deliveryDockComponents}
                 tabComponents={deliveryDockTabs}
-                rightHeaderActionsComponent={DeliveryAddRepo}
+                leftHeaderActionsComponent={DeliveryAddRepo}
                 dndStrategy="pointer"
                 onReady={onDockReady}
               />
@@ -1383,7 +1350,6 @@ function CoordinatorStallChip({
             <span className="delivery-stall__count">{unread}</span>
           </>
         }
-        floating
       >
         {(close) => (
           <div className="delivery-stall__card">
@@ -1441,7 +1407,7 @@ function DeliveryAddRepo({ containerApi }: IDockviewHeaderActionsProps) {
   const missing = repos.filter((repo) => !containerApi.getPanel(repoPanelId(repo.path)));
   if (missing.length === 0) return null;
   return (
-    <Menu label="Abrir un repositorio" trigger="+" floating>
+    <Menu label="Abrir un repositorio" trigger="+">
       {(close) =>
         missing.map((repo) => (
           <button
@@ -1521,7 +1487,9 @@ function EnvironmentStatus({ repo, distro }: { repo: string; distro: string | nu
       onClick={check}
     >
       <span className="delivery-dot" />
-      Entorno: {state}
+      <span>
+        Entorno<span className="delivery-env__state">: {state}</span>
+      </span>
     </button>
   );
 }
@@ -1639,7 +1607,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   // The repo's active batches with what can be done to each, and a new one.
   const batches = (trigger: ReactNode) => (
     <span className="delivery-batches-menu">
-      <Menu trigger={trigger}>
+      <Menu trigger={trigger} listClassName="delivery-batches__list">
         {() => (
           <BatchList
             runs={activeRuns}
@@ -1792,6 +1760,39 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       </button>
     );
   };
+  // The bar's batch, when the repo has one, and what acts on it.
+  const active = activeRuns.length === 1 ? activeRuns[0] : null;
+  const takeable = !!active?.owner && active.owner !== "user";
+  const pauseTitle = active?.paused
+    ? "Lo que está en cola vuelve a arrancar"
+    : "Lo que está en cola espera; lo que corre sigue (puedes pausar cada etapa)";
+  const togglePause = () => setDeliveryRunPaused(active!.id, !active!.paused);
+  const handOverItems = (target: DeliveryRun, close: () => void) => {
+    const targets = handOverTargets(target);
+    return targets.length === 0 ? (
+      <span className="delivery-muted" role="menuitem" aria-disabled="true">
+        Abre en Agents una conversación de este repositorio
+      </span>
+    ) : (
+      targets.map((session) => (
+        <button
+          key={session.id}
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            close();
+            void run(() => handOverDeliveryRun([target.id], session.id));
+          }}
+        >
+          {agentName(session.agent_type)} · {session.id.slice(0, 8)}
+          {session.turn_status === "working" ? " (trabajando)" : ""}
+        </button>
+      ))
+    );
+  };
+  const toggleGuides = () => setSettingsAt(guidesOpen ? null : "guides");
+  const toggleSettings = () => setSettingsAt(settingsOpen && !guidesOpen ? null : "");
+
   const toggleIssue = (id: string) =>
     setListView((view) => ({
       ...view,
@@ -1802,41 +1803,66 @@ function DeliveryRepoView({ repo }: { repo: string }) {
 
   return (
     <div className="delivery-repo" aria-label={`Delivery de ${choice.label}`}>
+      {/* One bar: the batch on the left, what acts on it and on the repo on the
+          right. A narrow pane (split screen) folds the actions into menus. */}
       <div className="delivery-repo__bar">
-        {activeRuns.length === 1 ? (
-          <span className="delivery-run">
-            {batches(
-              <>
-                <strong>{batchName(activeRuns[0].title || activeRuns[0].id)}</strong>
-                <Icon name="down" />
-              </>,
-            )}
-            <span className="delivery-muted" title={activeRuns[0].repo}>
-              {activeRuns[0].owner === "user"
-                ? "lo diriges tú"
-                : activeRuns[0].owner
-                  ? `coordina ${activeRuns[0].owner}`
-                  : "sin coordinador"}
-            </span>
-            {activeRuns[0].notified_at_ms && (
-              <span
-                className="delivery-muted"
-                title="Tinto le escribe en Agents lo que espera de él"
-              >
-                · coordinador avisado {ago(activeRuns[0].notified_at_ms, now)}
+        <div className="delivery-run">
+          {active ? (
+            <>
+              {batches(
+                <>
+                  <strong>{batchName(active.title || active.id)}</strong>
+                  <Icon name="down" />
+                </>,
+              )}
+              <span className="delivery-run__meta">
+                <span className="delivery-muted" title={active.repo}>
+                  {active.owner === "user"
+                    ? "lo diriges tú"
+                    : active.owner
+                      ? `coordina ${active.owner}`
+                      : "sin coordinador"}
+                </span>
+                {active.notified_at_ms && (
+                  <span
+                    className="delivery-muted"
+                    title="Tinto le escribe en Agents lo que espera de él"
+                  >
+                    · coordinador avisado {ago(active.notified_at_ms, now)}
+                  </span>
+                )}
+                {repoStalls.map((stall) => (
+                  <CoordinatorStallChip
+                    key={stall.run.id}
+                    stall={stall}
+                    onOpenCoordinator={() => setCoordinatorOpen(true)}
+                  />
+                ))}
               </span>
-            )}
-            {repoStalls.map((stall) => (
-              <CoordinatorStallChip
-                key={stall.run.id}
-                stall={stall}
-                onOpenCoordinator={() => setCoordinatorOpen(true)}
-              />
-            ))}
-            {activeRuns[0].owner && activeRuns[0].owner !== "user" && (
-              <ActionButton onAction={() => shared.takeover(activeRuns[0])}>
-                Tomar el control
-              </ActionButton>
+            </>
+          ) : (
+            <span className="delivery-run__meta">
+              {batches(
+                <>
+                  {activeRuns.length > 1 ? `${activeRuns.length} lotes activos` : "Lotes"}
+                  <Icon name="down" />
+                </>,
+              )}
+              {repoStalls.map((stall) => (
+                <CoordinatorStallChip
+                  key={stall.run.id}
+                  stall={stall}
+                  named
+                  onOpenCoordinator={() => setCoordinatorOpen(true)}
+                />
+              ))}
+            </span>
+          )}
+        </div>
+        {active && (
+          <span className="delivery-repo__wide">
+            {takeable && (
+              <ActionButton onAction={() => shared.takeover(active)}>Tomar el control</ActionButton>
             )}
             <Menu
               trigger={
@@ -1845,79 +1871,105 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                 </>
               }
             >
-              {(close) => {
-                const targets = handOverTargets(activeRuns[0]);
-                return targets.length === 0 ? (
-                  <span className="delivery-muted" role="menuitem" aria-disabled="true">
-                    Abre en Agents una conversación de este repositorio
-                  </span>
-                ) : (
-                  targets.map((session) => (
+              {(close) => handOverItems(active, close)}
+            </Menu>
+            <ActionButton title={pauseTitle} onAction={togglePause}>
+              {active.paused ? "Reanudar lote" : "Pausar lote"}
+            </ActionButton>
+          </span>
+        )}
+        {active && (
+          <span className="delivery-repo__narrow">
+            <Menu
+              label="Acciones del lote"
+              trigger={
+                <>
+                  Lote <Icon name="down" />
+                </>
+              }
+            >
+              {(close) => (
+                <>
+                  {takeable && (
                     <button
-                      key={session.id}
                       type="button"
                       role="menuitem"
                       onClick={() => {
                         close();
-                        void run(() => handOverDeliveryRun([activeRuns[0].id], session.id));
+                        void run(() => shared.takeover(active));
                       }}
                     >
-                      {agentName(session.agent_type)} · {session.id.slice(0, 8)}
-                      {session.turn_status === "working" ? " (trabajando)" : ""}
+                      Tomar el control
                     </button>
-                  ))
-                );
-              }}
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    title={pauseTitle}
+                    onClick={() => {
+                      close();
+                      void run(togglePause);
+                    }}
+                  >
+                    {active.paused ? "Reanudar lote" : "Pausar lote"}
+                  </button>
+                  <hr />
+                  <small className="delivery-menu__heading">Cambiar coordinador</small>
+                  {handOverItems(active, close)}
+                </>
+              )}
             </Menu>
-            <ActionButton
-              title={
-                activeRuns[0].paused
-                  ? "Lo que está en cola vuelve a arrancar"
-                  : "Lo que está en cola espera; lo que corre sigue (puedes pausar cada etapa)"
-              }
-              onAction={() => setDeliveryRunPaused(activeRuns[0].id, !activeRuns[0].paused)}
-            >
-              {activeRuns[0].paused ? "Reanudar lote" : "Pausar lote"}
-            </ActionButton>
           </span>
-        ) : (
-          <>
-            {batches(
-              <>
-                {activeRuns.length > 1 ? `${activeRuns.length} lotes activos` : "Lotes"}
-                <Icon name="down" />
-              </>,
-            )}
-            {repoStalls.map((stall) => (
-              <CoordinatorStallChip
-                key={stall.run.id}
-                stall={stall}
-                named
-                onOpenCoordinator={() => setCoordinatorOpen(true)}
-              />
-            ))}
-          </>
         )}
-        <span className="delivery-panel__spacer" />
         <EnvironmentStatus repo={choice.path} distro={choice.distro} />
-        <button
-          type="button"
-          aria-pressed={guidesOpen}
-          title={`Guías de ${choice.label}: reglas que salen de sus revisores`}
-          onClick={() => setSettingsAt(guidesOpen ? null : "guides")}
-        >
-          Guías
-        </button>
-        <button
-          type="button"
-          className="delivery-icon-button"
-          aria-label={`Ajustes de ${choice.label}`}
-          aria-pressed={settingsOpen && !guidesOpen}
-          title={`Ajustes de ${choice.label}`}
-          onClick={() => setSettingsAt(settingsOpen && !guidesOpen ? null : "")}
-        >
-          <Icon name="gear" />
-        </button>
+        <span className="delivery-repo__wide">
+          <button
+            type="button"
+            aria-pressed={guidesOpen}
+            title={`Guías de ${choice.label}: reglas que salen de sus revisores`}
+            onClick={toggleGuides}
+          >
+            Guías
+          </button>
+          <button
+            type="button"
+            className="delivery-icon-button"
+            aria-label={`Ajustes de ${choice.label}`}
+            aria-pressed={settingsOpen && !guidesOpen}
+            title={`Ajustes de ${choice.label}`}
+            onClick={toggleSettings}
+          >
+            <Icon name="gear" />
+          </button>
+        </span>
+        <span className="delivery-repo__narrow">
+          <Menu label={`Más de ${choice.label}`} trigger="⋯">
+            {(close) => (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    toggleGuides();
+                  }}
+                >
+                  Guías
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    toggleSettings();
+                  }}
+                >
+                  Ajustes de {choice.label}
+                </button>
+              </>
+            )}
+          </Menu>
+        </span>
       </div>
 
       {settingsOpen ? (
@@ -2214,13 +2266,16 @@ function TaskDetail({
     : null;
   const [requesting, setRequesting] = useState(false);
   // What opens on top of the task: its pending decisions, QA's problems, its
-  // Jira issue or an open step.
-  const [float, setFloat] = useState<
-    "decisions" | "qa" | "blocker" | "issue" | "replies" | `approval:${string}` | null
-  >(null);
-  const floating = openApprovals.find(
-    (approval) => approval.rung !== "pr_reply" && float === `approval:${approval.id}`,
-  );
+  // Jira issue or a blocker to add; next to the button that opened it.
+  const [float, setFloatKind] = useState<"decisions" | "qa" | "blocker" | "issue" | null>(null);
+  const [floatAt, setFloatAt] = useState<Element | null>(null);
+  const setFloat = (kind: typeof float, at: Element | null = null) => {
+    setFloatKind(kind);
+    setFloatAt(at);
+  };
+  // The open step shown in full in its place: one approval or the replies.
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const toggleStep = (id: string) => setExpanded(expanded === id ? null : id);
   // Replies to reviewers are answered together, in one place.
   const replies = openApprovals.filter(
     (approval) => approval.rung === "pr_reply" && approval.status === "pending",
@@ -2360,7 +2415,7 @@ function TaskDetail({
   const menuEntries: (ContextItem | null | false | undefined)[] = [
     pendingStep && {
       label: `Aprobar ${lower(stepOf(pendingStep).label)}…`,
-      onSelect: () => setFloat(`approval:${pendingStep.id}`),
+      onSelect: () => setExpanded(pendingStep.id),
     },
     blocked && {
       label:
@@ -2507,7 +2562,9 @@ function TaskDetail({
                   className="delivery-link-chip delivery-link-chip--jira"
                   aria-expanded={float === "issue"}
                   aria-label={`Ver ${task.key} de Jira`}
-                  onClick={() => setFloat(float === "issue" ? null : "issue")}
+                  onClick={(event) =>
+                    setFloat(float === "issue" ? null : "issue", event.currentTarget)
+                  }
                 >
                   <Icon name="ticket" />
                   Jira
@@ -2545,7 +2602,7 @@ function TaskDetail({
                       ? `Problemas de la QA, ${qaProblemsToDecide} por decidir`
                       : "Problemas de la QA"
                   }
-                  onClick={() => setFloat(float === "qa" ? null : "qa")}
+                  onClick={(event) => setFloat(float === "qa" ? null : "qa", event.currentTarget)}
                 >
                   <Icon name="bug" />
                   Problemas
@@ -2706,7 +2763,8 @@ function TaskDetail({
           <button
             type="button"
             className="delivery-button--primary"
-            onClick={() => setFloat("decisions")}
+            aria-expanded={float === "decisions"}
+            onClick={(event) => setFloat("decisions", event.currentTarget)}
           >
             Responder
           </button>
@@ -2714,6 +2772,7 @@ function TaskDetail({
       )}
       {blocked && float === "decisions" && (
         <TaskFloat
+          anchor={floatAt}
           label="Responder decisiones"
           closeLabel="Cerrar decisiones"
           onClose={() => setFloat(null)}
@@ -2725,10 +2784,11 @@ function TaskDetail({
         task={task}
         tasks={overview.tasks}
         onSelectTask={onSelectTask}
-        onAdd={() => setFloat("blocker")}
+        onAdd={(at) => setFloat("blocker", at)}
       />
       {float === "blocker" && (
         <TaskFloat
+          anchor={floatAt}
           label="Añadir bloqueo"
           closeLabel="Cerrar añadir bloqueo"
           onClose={() => setFloat(null)}
@@ -2738,6 +2798,7 @@ function TaskDetail({
       )}
       {float === "qa" && (
         <TaskFloat
+          anchor={floatAt}
           label="Problemas de la QA"
           closeLabel="Cerrar problemas de la QA"
           onClose={() => setFloat(null)}
@@ -2747,6 +2808,7 @@ function TaskDetail({
       )}
       {float === "issue" && issueUrl && (
         <TaskFloat
+          anchor={floatAt}
           label={`Incidencia ${task.key} de Jira`}
           closeLabel="Cerrar la incidencia"
           onClose={() => setFloat(null)}
@@ -2763,45 +2825,27 @@ function TaskDetail({
           <ApprovalBar
             key={approval.id}
             approval={approval}
-            onOpen={() => setFloat(`approval:${approval.id}`)}
-          />
+            open={expanded === approval.id}
+            onToggle={() => toggleStep(approval.id)}
+          >
+            <ApprovalBanner task={task} approval={approval} pr={pr} />
+          </ApprovalBar>
         ))}
       {replies.length > 0 && (
-        <div className="delivery-pending-bar delivery-pending-bar--step" role="status">
-          <span className="delivery-pending-bar__text">
-            <strong>
-              {replies.length === 1
-                ? "Aprobar la respuesta al revisor"
-                : `Aprobar ${replies.length} respuestas a los revisores`}
-            </strong>
-          </span>
-          <button
-            type="button"
-            className="delivery-button--primary"
-            aria-label="Revisar las respuestas a los revisores"
-            onClick={() => setFloat("replies")}
-          >
-            Revisar
-          </button>
-        </div>
-      )}
-      {floating && (
-        <TaskFloat
-          label={`Paso ${lower(stepOf(floating).label)}`}
-          closeLabel="Cerrar el paso"
-          onClose={() => setFloat(null)}
-        >
-          <ApprovalBanner task={task} approval={floating} pr={pr} />
-        </TaskFloat>
-      )}
-      {float === "replies" && replies.length > 0 && (
-        <TaskFloat
-          label="Respuestas a los revisores"
-          closeLabel="Cerrar las respuestas"
-          onClose={() => setFloat(null)}
+        <StepBar
+          title={
+            replies.length === 1
+              ? "Aprobar la respuesta al revisor"
+              : `Aprobar ${replies.length} respuestas a los revisores`
+          }
+          button="Revisar"
+          buttonLabel="Revisar las respuestas a los revisores"
+          primary
+          open={expanded === "replies"}
+          onToggle={() => toggleStep("replies")}
         >
           <RepliesBanner replies={replies} />
-        </TaskFloat>
+        </StepBar>
       )}
 
       {rejected && openApprovals.length === 0 && (
@@ -3384,29 +3428,20 @@ function StepChecks({
 /** A panel on top of the task, opened by the user: it takes the focus once
  *  (later refreshes must not take it from a card) and closes on Escape. */
 function TaskFloat({
+  anchor,
   label,
   closeLabel,
   onClose,
   children,
 }: {
+  anchor: Element | null;
   label: string;
   closeLabel: string;
   onClose: () => void;
   children: ReactNode;
 }) {
-  const panel = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    panel.current?.focus();
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-    // Once, when it opens; onClose only closes it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   return (
-    <div className="delivery-float" role="dialog" aria-label={label} tabIndex={-1} ref={panel}>
+    <Overlay anchor={anchor} label={label} className="delivery-float" onClose={onClose}>
       <button
         type="button"
         className="delivery-float__close"
@@ -3416,7 +3451,7 @@ function TaskFloat({
         ×
       </button>
       {children}
-    </div>
+    </Overlay>
   );
 }
 
@@ -3690,8 +3725,18 @@ function RejectedStep({
   );
 }
 
-/** An open step as one line in the task; its text and buttons open on top. */
-function ApprovalBar({ approval, onOpen }: { approval: DeliveryApproval; onOpen: () => void }) {
+/** An open step as one line in the task; its text and buttons open in place. */
+function ApprovalBar({
+  approval,
+  open,
+  onToggle,
+  children,
+}: {
+  approval: DeliveryApproval;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
   const name = lower(stepOf(approval).label);
   const pending = approval.status === "pending";
   const commits = approval.commits ?? [];
@@ -3700,19 +3745,59 @@ function ApprovalBar({ approval, onOpen }: { approval: DeliveryApproval; onOpen:
       ? `${commits.length === 1 ? "1 commit" : `${commits.length} commits`} · ${files(commits.reduce((sum, commit) => sum + commit.paths.length, 0))}`
       : approval.title;
   return (
-    <div className="delivery-pending-bar delivery-pending-bar--step" role="status">
-      <span className="delivery-pending-bar__text">
-        <strong>{pending ? `Aprobar ${name}` : `Esperando al coordinador: ${name}`}</strong>{" "}
-        <span className="delivery-muted">· {summary}</span>
-      </span>
-      <button
-        type="button"
-        className={pending ? "delivery-button--primary" : undefined}
-        aria-label={`${pending ? "Revisar" : "Ver"} ${name}`}
-        onClick={onOpen}
-      >
-        {pending ? "Revisar" : "Ver"}
-      </button>
+    <StepBar
+      title={pending ? `Aprobar ${name}` : `Esperando al coordinador: ${name}`}
+      summary={summary}
+      button={pending ? "Revisar" : "Ver"}
+      buttonLabel={`${pending ? "Revisar" : "Ver"} ${name}`}
+      primary={pending}
+      open={open}
+      onToggle={onToggle}
+    >
+      {children}
+    </StepBar>
+  );
+}
+
+/** A step's line, which opens into its card below it; the chevron folds it. */
+function StepBar({
+  title,
+  summary,
+  button,
+  buttonLabel,
+  primary,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  button: string;
+  buttonLabel: string;
+  primary?: boolean;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`delivery-step${open ? " delivery-step--open" : ""}`}>
+      <div className="delivery-pending-bar delivery-pending-bar--step" role="status">
+        <span className="delivery-pending-bar__text">
+          <strong>{title}</strong>
+          {summary && <span className="delivery-muted"> · {summary}</span>}
+        </span>
+        <button
+          type="button"
+          className={primary && !open ? "delivery-button--primary" : undefined}
+          aria-label={buttonLabel}
+          aria-expanded={open}
+          onClick={onToggle}
+        >
+          {open ? "Ocultar" : button}
+          <Icon name="down" />
+        </button>
+      </div>
+      {open && children}
     </div>
   );
 }

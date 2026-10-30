@@ -40,6 +40,7 @@ fn clean(changes: &DeliverySettingsChanges) -> DeliverySettingsChanges {
         setup_add: trimmed(&changes.setup_add),
         setup_remove: trimmed(&changes.setup_remove),
         probes_add: trimmed(&changes.probes_add),
+        environment_up_add: trimmed(&changes.environment_up_add),
         bootstrap: changes
             .bootstrap
             .as_deref()
@@ -64,6 +65,7 @@ fn is_empty(changes: &DeliverySettingsChanges) -> bool {
         && changes.setup_add.is_empty()
         && changes.setup_remove.is_empty()
         && changes.probes_add.is_empty()
+        && changes.environment_up_add.is_empty()
         && changes.bootstrap.is_none()
         && changes.qa_browser.is_none()
         && changes.verification.is_none()
@@ -137,6 +139,11 @@ fn problems(
         &changes.probes_add,
         &settings.environment_probes,
     );
+    commands(
+        "environment_up_add",
+        &changes.environment_up_add,
+        &settings.environment_up,
+    );
     // An empty bootstrap removes it.
     if let Some(bootstrap) = changes.bootstrap.as_ref().filter(|text| !text.is_empty()) {
         if let Some(problem) = command_problem(bootstrap, task) {
@@ -194,6 +201,7 @@ fn is_part_of(part: &DeliverySettingsChanges, whole: &DeliverySettingsChanges) -
         && within(&part.setup_add, &whole.setup_add)
         && within(&part.setup_remove, &whole.setup_remove)
         && within(&part.probes_add, &whole.probes_add)
+        && within(&part.environment_up_add, &whole.environment_up_add)
         && (part.bootstrap.is_none() || part.bootstrap == whole.bootstrap)
         && (part.qa_browser.is_none() || part.qa_browser == whole.qa_browser)
         && (part.verification.is_none() || part.verification == whole.verification)
@@ -233,6 +241,11 @@ fn apply(settings: &mut DeliveryRepoSettings, changes: &DeliverySettingsChanges)
         }
         if !settings.checks.contains(item) {
             settings.checks.push(item.clone());
+        }
+    }
+    for item in &changes.environment_up_add {
+        if !settings.environment_up.contains(item) {
+            settings.environment_up.push(item.clone());
         }
     }
     if let Some(bootstrap) = &changes.bootstrap {
@@ -299,8 +312,12 @@ impl DeliveryService {
         )?;
         drop(store);
         self.notify();
-        // Past the brainstorm, when the repo lets Tinto, it applies whole.
-        if self.run(run_id)?.unattended && settings.autonomy.settings_proposals {
+        // Past the brainstorm, when the repo lets Tinto, it applies whole;
+        // commands that start the environment always wait for the user.
+        if self.run(run_id)?.unattended
+            && settings.autonomy.settings_proposals
+            && proposal.changes.environment_up_add.is_empty()
+        {
             let changes = proposal.changes.clone();
             return self.approve_settings_proposal(&proposal.id, changes, AUTO);
         }
@@ -568,6 +585,7 @@ mod tests {
                 setup_add: vec!["make bindings".into()],
                 setup_remove: vec!["gone".into()],
                 probes_add: Vec::new(),
+                environment_up_add: Vec::new(),
                 bootstrap: Some("npm ci".into()),
                 qa_browser: Some(true),
                 verification: Some("e2e".into()),

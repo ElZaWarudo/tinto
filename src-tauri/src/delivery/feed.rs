@@ -74,6 +74,12 @@ const PENDING_EVENTS: &[&str] = &[
     "qa_problems_sent",
 ];
 
+/// wait_run returns a change once Delivery has been quiet this long after
+/// it, so what follows it at once comes in the same reply...
+const SETTLE_QUIET: Duration = Duration::from_millis(1_500);
+/// ...but never waits longer than this for the quiet.
+const SETTLE_MAX: Duration = Duration::from_secs(8);
+
 /// At most this many unacknowledged changes come again in a wait_run
 /// without cursor: the newest.
 const MAX_REDELIVERED: usize = 50;
@@ -204,6 +210,7 @@ impl DeliveryService {
         let deadline = Instant::now() + timeout;
         let _waiting = Waiting::start(self, run_ids);
         let mut first_look = true;
+        let mut settled = false;
         loop {
             let seen = self.inner.changes.0.lock().map(|count| *count).unwrap_or(0);
             let mut next = match cursor {
@@ -226,6 +233,13 @@ impl DeliveryService {
             events.sort_by_key(|event| event["seq"].as_u64());
             let nudge = first_look && !idle_ok && !idle.is_empty();
             let expired = Instant::now() >= deadline;
+            // What follows a change within moments (a step Tinto takes
+            // after a job, checks ending together) comes in the same reply.
+            if cursor.is_some() && !events.is_empty() && !settled && !expired {
+                settled = true;
+                self.settle_changes(deadline);
+                continue;
+            }
             if cursor.is_none() || !events.is_empty() || nudge || expired {
                 let mut open_jobs = Vec::new();
                 for run_id in run_ids {
@@ -255,6 +269,30 @@ impl DeliveryService {
             let _ = changed
                 .wait_timeout_while(guard, left, |count| *count == seen)
                 .map_err(|_| lock_error())?;
+        }
+    }
+
+    /// Waits until Delivery has been quiet for [`SETTLE_QUIET`], at most
+    /// [`SETTLE_MAX`] and never past `deadline`.
+    fn settle_changes(&self, deadline: Instant) {
+        let until = deadline.min(Instant::now() + SETTLE_MAX);
+        let (count, changed) = &self.inner.changes;
+        let Ok(mut guard) = count.lock() else { return };
+        loop {
+            let seen = *guard;
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            let Ok((next, waited)) =
+                changed.wait_timeout_while(guard, SETTLE_QUIET.min(left), |count| *count == seen)
+            else {
+                return;
+            };
+            if waited.timed_out() {
+                return;
+            }
+            guard = next;
         }
     }
 
@@ -389,18 +427,19 @@ impl DeliveryService {
     }
 
     /// The Agents conversation a Delivery tool call came from becomes the
-    /// run's coordinator: the one Tinto wakes.
+    /// run's coordinator: the one Tinto wakes. A call from outside Agents
+    /// (`None`) leaves the run with no conversation here.
     pub fn set_coordinator_session(
         &self,
         run_id: &str,
-        session: &str,
+        session: Option<&str>,
     ) -> Result<(), DeliveryError> {
         let store = self.store()?;
         if let Some(mut run) = store.run(run_id)? {
-            if run.coordinator_session.as_deref() != Some(session) {
+            if run.coordinator_session.as_deref() != session {
                 // A conversation that starts coordinating is woken only by
                 // what happens from now on.
-                run.coordinator_session = Some(session.to_string());
+                run.coordinator_session = session.map(str::to_string);
                 run.notified_cursor = run.notified_cursor.max(store.last_event_seq()?);
                 store.put_run(&run)?;
             }
@@ -409,19 +448,32 @@ impl DeliveryService {
     }
 
     /// A coordinator's conversation resumed under another id (Tinto
-    /// restarted): its batches follow it, and it hears what it missed. Says
-    /// whether it coordinates any.
-    pub fn rebind_coordinator(&self, before: &str, after: &str) -> Result<bool, DeliveryError> {
+    /// restarted, or the user resumed it): its batches follow it, and it
+    /// hears what it missed.
+    pub fn rebind_coordinator(&self, before: &str, after: &str) -> Result<(), DeliveryError> {
         let store = self.store()?;
-        let mut coordinates = false;
+        let mut moved = false;
         for mut run in store.runs()? {
             if run.coordinator_session.as_deref() == Some(before) {
                 run.coordinator_session = Some(after.to_string());
                 store.put_run(&run)?;
-                coordinates = true;
+                moved = true;
             }
         }
-        Ok(coordinates)
+        drop(store);
+        if moved {
+            self.notify();
+        }
+        Ok(())
+    }
+
+    /// Whether the conversation coordinates any batch.
+    pub fn coordinates(&self, session: &str) -> Result<bool, DeliveryError> {
+        Ok(self
+            .store()?
+            .runs()?
+            .iter()
+            .any(|run| run.coordinator_session.as_deref() == Some(session)))
     }
 
     /// For each conversation that coordinates active batches: the changes

@@ -650,6 +650,8 @@ export interface DeliveryRepoSettings {
   autonomy?: DeliveryAutonomy;
   /** The checks the user marked as environment probes, run by the "Entorno" check. */
   environment_probes?: string[];
+  /** Commands Tinto runs, in order, when the "Entorno" check fails, then checks again. */
+  environment_up?: string[];
   /** The reviewers whose comments make the repo's guides. */
   guides?: DeliveryGuidePerson[];
 }
@@ -698,6 +700,7 @@ export interface DeliverySettingsChanges {
   setup_add?: string[];
   setup_remove?: string[];
   probes_add?: string[];
+  environment_up_add?: string[];
   bootstrap?: string | null;
   qa_browser?: boolean | null;
   verification?: string | null;

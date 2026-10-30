@@ -508,6 +508,11 @@ pub fn delivery_set_repo_settings(
         ci_on_push: settings.ci_on_push,
         autonomy: settings.autonomy,
         environment_probes,
+        environment_up: settings
+            .environment_up
+            .into_iter()
+            .filter_map(|command| clean(Some(command)))
+            .collect(),
         // A person with no kind left guides nothing.
         guides: settings
             .guides

@@ -286,6 +286,28 @@ impl DeliveryService {
                 store.put_qa_problem(&earlier)?;
             }
         }
+        // The problems sent to fix are checked by this QA: found again they
+        // still fail, else they are verified.
+        for mut earlier in known
+            .iter()
+            .filter(|known| {
+                matches!(
+                    known.status,
+                    DeliveryQaProblemStatus::Sent | DeliveryQaProblemStatus::Fixing
+                )
+            })
+            .cloned()
+        {
+            let again = found
+                .iter()
+                .any(|problem| same_problem(&earlier.text, &problem.text));
+            earlier.status = match again {
+                true => DeliveryQaProblemStatus::StillFailing,
+                false => DeliveryQaProblemStatus::Verified,
+            };
+            earlier.updated_at_ms = now;
+            store.put_qa_problem(&earlier)?;
+        }
         let mut added = 0;
         for problem in found {
             let dismissed = known.iter().any(|known| {

@@ -107,25 +107,23 @@
 .delivery-panel__spacer {
   flex: 1;
 }
+/* The repo bar's batch: its name, which may take two lines, over who runs it. */
 .delivery-run {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 3px 2px 10px;
-  border: 1px solid var(--border);
+  display: grid;
+  justify-items: start;
+  gap: 1px;
+  flex: 1;
   min-width: 0;
 }
 .delivery-run strong {
   font-weight: 600;
-  white-space: nowrap;
+  text-align: left;
 }
-.delivery-run .delivery-muted {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.delivery-panel .delivery-run button {
-  padding: 1px 8px;
+.delivery-run__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
   font-size: 12px;
 }
 .delivery-panel .delivery-attention {
@@ -588,28 +586,69 @@
   position: relative;
   display: inline-flex;
 }
-.delivery-menu__list {
+/* ---------- Overlays: one look for menus and cards that open on top ---------- */
+/* The panel behind dims, so the one open card is what reads first. */
+.delivery-overlay__dim {
   position: absolute;
-  right: 0;
-  top: calc(100% + 2px);
-  z-index: 20;
+  inset: 0;
+  z-index: 40;
+  background: rgb(0 0 0 / 0.35);
+}
+/* Raised above the page and edged in the accent, pointing at its button. */
+.delivery-overlay {
+  position: absolute;
+  z-index: 41;
+  display: flex;
+  background: var(--bg-elev);
+  border: 1px solid var(--accent-fg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  outline: none;
+}
+.delivery-overlay--start::before,
+.delivery-overlay--end::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--accent-fg);
+  border-left: 1px solid var(--accent-fg);
+  transform: rotate(45deg);
+}
+.delivery-overlay--start::before {
+  left: calc(var(--arrow) - 6px);
+}
+.delivery-overlay--end::before {
+  right: calc(var(--arrow) - 6px);
+}
+.delivery-overlay__body {
+  min-width: 0;
+  overflow: auto;
+}
+/* The button whose menu or card is open stays pressed. */
+.delivery-panel button[aria-expanded="true"] {
+  background: var(--hover-strong);
+  border-color: var(--accent-fg);
+}
+.delivery-menu__list {
   min-width: 240px;
   padding: 4px 0;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   display: grid;
+  align-content: start;
 }
 /* A task's right-click menu, placed at the pointer. */
 .delivery-menu__list--context {
-  right: auto;
+  position: absolute;
   z-index: 40;
   max-height: calc(100% - 8px);
   overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--accent-fg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
-.delivery-actions .delivery-menu__list {
-  left: 0;
-  right: auto;
+.delivery-menu__list > [aria-disabled="true"] {
+  padding: 2px 12px;
 }
 .delivery-panel .delivery-menu__list button {
   justify-content: space-between;
@@ -668,20 +707,27 @@
   white-space: nowrap;
 }
 .delivery-float {
-  position: fixed;
-  top: 72px;
-  right: 16px;
-  z-index: 40;
-  width: min(620px, calc(100vw - 32px));
-  max-height: calc(100vh - 96px);
-  overflow: auto;
+  width: 620px;
+  max-width: 100%;
   /* Room for the scrollbar from the start: opening a list that makes the
      card scroll must not shift and rewrap what is already there. */
   scrollbar-gutter: stable;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+/* An open step: its line and its card in place, raised and edged in the accent. */
+.delivery-step--open {
+  border: 2px solid var(--accent-fg);
+  background: var(--bg-elev);
+}
+.delivery-step--open > .delivery-pending-bar,
+.delivery-step--open > .delivery-banner {
+  border: 0;
+  background: transparent;
+}
+.delivery-step--open > .delivery-pending-bar {
+  border-bottom: 1px solid var(--border);
+}
+.delivery-step button[aria-expanded="true"] .delivery-icon {
+  transform: rotate(180deg);
 }
 .delivery-float > .delivery-banner,
 .delivery-float > .delivery-qa-problems {
@@ -1497,10 +1543,6 @@
   background: transparent;
   color: var(--fg-muted);
 }
-.delivery-node > .delivery-menu .delivery-menu__list {
-  left: 0;
-  right: auto;
-}
 .delivery-node > div,
 .delivery-panel .delivery-node > button {
   padding-right: 26px;
@@ -1819,6 +1861,9 @@
 .delivery-dialog {
   width: min(560px, 100%);
   max-width: 560px;
+  /* The overlays' edge and depth; a form stays centred over its dim layer. */
+  border-color: var(--accent-fg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 .delivery-dialog--wide {
   width: min(720px, 100%);
@@ -2195,12 +2240,12 @@
 .delivery-panel .delivery-run > .delivery-batches-menu > .delivery-menu > button {
   border: 0;
   background: transparent;
-  padding-left: 0;
+  padding: 1px 4px 1px 0;
+  text-align: left;
 }
-.delivery-batches-menu .delivery-menu__list {
-  left: 0;
-  right: auto;
-  width: min(600px, calc(100vw - 32px));
+.delivery-batches__list {
+  width: 600px;
+  max-width: 100%;
 }
 .delivery-batches {
   display: grid;
@@ -2291,12 +2336,39 @@
   min-height: 0;
 }
 .delivery-repo__bar {
+  /* Its width, not the window's, decides what folds into menus. */
+  container-type: inline-size;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 12px;
+  gap: 8px;
+  padding: 5px 12px;
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
+}
+.delivery-repo__wide,
+.delivery-repo__narrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  white-space: nowrap;
+}
+.delivery-repo__narrow {
+  display: none;
+}
+.delivery-menu__heading {
+  padding: 2px 12px;
+}
+@container (max-width: 1100px) {
+  .delivery-repo__wide {
+    display: none;
+  }
+  .delivery-repo__narrow {
+    display: inline-flex;
+  }
+  /* "Entorno" and its dot; the words only when it fails. */
+  .delivery-env:not(.delivery-env--fail) .delivery-env__state {
+    display: none;
+  }
 }
 /* "Entorno": the dot's colour goes with the words that say it. */
 .delivery-env {
@@ -2309,6 +2381,8 @@
   border: 0;
   padding: 2px 4px;
   cursor: pointer;
+  flex: none;
+  white-space: nowrap;
 }
 .delivery-env:disabled {
   cursor: progress;

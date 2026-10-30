@@ -546,6 +546,16 @@ impl AgentSessionRegistry {
         Ok(())
     }
 
+    /// Refreshes one session's status: true once its process has ended, or
+    /// it is gone.
+    pub fn refresh_session_ended(&mut self, session_id: &str) -> bool {
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return true;
+        };
+        let _ = session.refresh_status();
+        !session.is_active()
+    }
+
     pub fn write_session_input(
         &mut self,
         session_id: &str,

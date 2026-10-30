@@ -52,12 +52,14 @@ pub enum ClassifierError {
 /// Como en git, cada `.gitignore` escopa a su directorio: se compila un
 /// matcher por directorio con `.gitignore` y, al clasificar, decide el
 /// match del matcher más profundo que aplique al path.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PathClassifier {
     root: PathBuf,
     /// (dir relativo al root, matcher) ordenados por profundidad creciente.
     gitignores: Vec<(PathBuf, Gitignore)>,
     watchlist: GlobSet,
+    /// Prefijo literal de cada patrón de la watchlist (ver `watches_dir`).
+    watch_prefixes: Vec<PathBuf>,
 }
 
 impl PathClassifier {
@@ -80,6 +82,7 @@ impl PathClassifier {
         // se recorre node_modules/target al construir.
         let gitignores = collect_gitignore_matchers(root);
 
+        let watch_prefixes = watchlist.iter().map(|p| literal_prefix(p)).collect();
         let mut glob_builder = GlobSetBuilder::new();
         for pattern in watchlist {
             let glob =
@@ -101,6 +104,7 @@ impl PathClassifier {
             root: root.to_path_buf(),
             gitignores,
             watchlist,
+            watch_prefixes,
         })
     }
 
@@ -140,6 +144,30 @@ impl PathClassifier {
         }
     }
 
+    /// ¿Debe el watcher vigilar este directorio? Sí si en él pueden ocurrir
+    /// eventos que viajan: no ignorado (Plano 1), `.git` (solo su nivel, por
+    /// HEAD/index) o ignorado pero en el camino de algún patrón de la
+    /// watchlist (Plano 2). Monótono: si un dir no se vigila, ninguno de sus
+    /// descendientes tampoco. No hace I/O.
+    pub fn watches_dir(&self, path: &Path) -> bool {
+        let Some(rel) = self.relativize(path) else {
+            return false;
+        };
+        if rel.as_os_str().is_empty() {
+            return true;
+        }
+        match self.classify(path, true) {
+            Classification::Plane1 | Classification::Plane2 | Classification::GitMeta => true,
+            Classification::GitInternal => rel == Path::new(".git"),
+            // `*.log` (prefijo vacío) puede matchear en cualquier nivel.
+            Classification::Ignored => self
+                .watch_prefixes
+                .iter()
+                .any(|prefix| rel.starts_with(prefix) || prefix.starts_with(&rel)),
+            Classification::OutsideRepo => false,
+        }
+    }
+
     fn relativize(&self, path: &Path) -> Option<PathBuf> {
         if path.is_absolute() {
             path.strip_prefix(&self.root).ok().map(Path::to_path_buf)
@@ -154,12 +182,33 @@ impl PathClassifier {
     }
 }
 
+/// Componentes literales iniciales de un patrón de watchlist (`dist/**` →
+/// `dist`, `*.log` → vacío): bajo un dir ignorado, el patrón solo puede
+/// matchear si el dir es ancestro o descendiente de ese prefijo.
+fn literal_prefix(pattern: &str) -> PathBuf {
+    pattern
+        .split('/')
+        .take_while(|c| !c.contains(['*', '?', '[', '{', '\\']))
+        .collect()
+}
+
 /// Recorre el árbol en BFS construyendo un matcher por directorio con
 /// `.gitignore`, podando los directorios que ya quedan ignorados por los
 /// matchers acumulados (no se desciende a `node_modules`/`target` ni se
 /// leen sus `.gitignore`, igual que git).
 fn collect_gitignore_matchers(root: &Path) -> Vec<(PathBuf, Gitignore)> {
     let mut matchers: Vec<(PathBuf, Gitignore)> = Vec::new();
+    // `.git/info/exclude` escopa a la raíz con menor precedencia que los
+    // `.gitignore` (va primero: decide el último match). En worktrees
+    // (`.git` es archivo) vive en el common dir y no se lee.
+    let exclude = root.join(".git/info/exclude");
+    if exclude.is_file() {
+        let mut builder = GitignoreBuilder::new(root);
+        let _ = builder.add(&exclude);
+        if let Ok(matcher) = builder.build() {
+            matchers.push((PathBuf::new(), matcher));
+        }
+    }
     // BFS por niveles: garantiza que los matchers de ancestros existen antes
     // de evaluar/descender a los hijos.
     let mut frontier = vec![root.to_path_buf()];
@@ -380,6 +429,18 @@ mod tests {
     }
 
     #[test]
+    fn info_exclude_ignora_con_menor_precedencia_que_gitignore() {
+        let dir = repo_with(&[
+            (".git/info/exclude", "/.worktrees/\n*.tmp\n"),
+            (".gitignore", "!keep.tmp\n"),
+        ]);
+        let c = classifier(&dir, &[]);
+        assert_eq!(c0(&c, ".worktrees/a/x.rs"), Classification::Ignored);
+        assert_eq!(c0(&c, "otro.tmp"), Classification::Ignored);
+        assert_eq!(c0(&c, "keep.tmp"), Classification::Plane1);
+    }
+
+    #[test]
     fn negacion_en_dir_no_ignorado_si_aplica() {
         // Caso válido de negación: el dir NO está ignorado, el patrón del
         // root ignora *.log y el .gitignore anidado rescata keep.log.
@@ -388,6 +449,25 @@ mod tests {
         assert_eq!(c0(&c, "sub/keep.log"), Classification::Plane1);
         assert_eq!(c0(&c, "sub/otro.log"), Classification::Ignored);
         assert_eq!(c0(&c, "raiz.log"), Classification::Ignored);
+    }
+
+    #[test]
+    fn watches_dir_poda_lo_ignorado_salvo_el_camino_de_la_watchlist() {
+        let dir = repo_with(&[(".gitignore", "node_modules/\ndist/\n")]);
+        let c = classifier(&dir, &["dist/**"]);
+        let w = |p: &str| c.watches_dir(&dir.path().join(p));
+
+        assert!(w(""), "el root siempre");
+        assert!(w("src"));
+        assert!(w(".git"), "nivel de HEAD/index");
+        assert!(!w(".git/objects"));
+        assert!(!w("node_modules"));
+        assert!(!w("node_modules/react"));
+        assert!(w("dist/assets"), "Plano 2 bajo dir ignorado");
+
+        // Un patrón sin prefijo literal puede matchear en cualquier nivel.
+        let todo = classifier(&dir, &["*.log"]);
+        assert!(todo.watches_dir(&dir.path().join("node_modules/react")));
     }
 
     #[test]

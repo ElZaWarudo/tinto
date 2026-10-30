@@ -136,7 +136,7 @@ pub fn drvfs_cli_status(repo: &Path) -> Option<RepoStatus> {
         .then(|| parse_porcelain_v1_z(&output.stdout))
 }
 
-fn is_wsl_windows_drive_path(path: &Path) -> bool {
+pub(crate) fn is_wsl_windows_drive_path(path: &Path) -> bool {
     cfg!(target_os = "linux")
         && path
             .to_str()

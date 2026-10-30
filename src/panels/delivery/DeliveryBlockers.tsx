@@ -56,7 +56,7 @@ export function BlockedBar({
   task: DeliveryTask;
   tasks: DeliveryTask[];
   onSelectTask: (task: DeliveryTask) => void;
-  onAdd: () => void;
+  onAdd: (from: Element) => void;
 }) {
   const open = openBlockers(task);
   if (open.length === 0) return null;
@@ -94,7 +94,7 @@ export function BlockedBar({
         {task.blocked_reason && <p className="delivery-muted">{task.blocked_reason}</p>}
       </div>
       <div className="delivery-actions">
-        <button type="button" onClick={onAdd}>
+        <button type="button" onClick={(event) => onAdd(event.currentTarget)}>
           Añadir bloqueo
         </button>
         <ActionButton onAction={override}>Desbloquear</ActionButton>

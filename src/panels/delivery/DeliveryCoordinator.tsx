@@ -1,8 +1,8 @@
 // A batch's coordinator inside Tinto: a floating button with its state that
 // unfolds its Agents conversation (messages, files, everything Agents does),
-// starts one when the batch has none here (for that batch and any others the
-// user ticks: one conversation may coordinate several), stops new tasks, and
-// detaches the conversation into its own window.
+// resumes it here once it ended, starts one when the batch has none here (for
+// that batch and any others the user ticks: one conversation may coordinate
+// several), stops new tasks, and detaches the conversation into its own window.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
@@ -19,6 +19,7 @@ import type {
 import { TerminalPanel, type TerminalPanelParams } from "../terminal/TerminalPanel";
 import { openDetachedTerminalWindow } from "../terminal/detachTerminalWindow";
 import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
+import { WorkspaceActionsContext, useWorkspaceActions } from "../../workspace/actions";
 
 import { ActionButton } from "./ActionButton";
 import { errorText } from "./errorText";
@@ -88,6 +89,7 @@ export function CoordinatorDock({
   onOpenChange: (open: boolean) => void;
 }) {
   const sessions = useAgentSessionState().sessions;
+  const actions = useWorkspaceActions();
   const [runId, setRunId] = useState<string | null>(null);
   const run =
     runs.find((candidate) => candidate.id === (runId ?? focus)) ??
@@ -96,6 +98,9 @@ export function CoordinatorDock({
   // A conversation just started for some batches, until it takes them over.
   const [started, setStarted] = useState<{ runIds: string[]; sessionId: string } | null>(null);
   const handedOver = useRef<string | null>(null);
+  // Conversations the user resumed here, by the id they ended with, until
+  // the batch names the new one.
+  const [resumed, setResumed] = useState<Record<string, string>>({});
   const [detached, setDetached] = useState<string | null>(null);
   const [choice, setChoice] = useState<AgentChoice | null>(null);
   // The batches a new coordinator takes; the one shown until the user ticks others.
@@ -109,14 +114,23 @@ export function CoordinatorDock({
     const status = sessions[id]?.status;
     return status !== undefined && status !== "starting" && status !== "running";
   };
-  // The Agents conversation that coordinates a batch here, if any.
-  const sessionOf = (target: DeliveryRun) =>
-    (target.coordinator_session &&
-    sessions[target.coordinator_session] &&
-    !ended(target.coordinator_session)
-      ? target.coordinator_session
-      : null) ??
-    (started?.runIds.includes(target.id) && !ended(started.sessionId) ? started.sessionId : null);
+  const isLive = (id: string) => sessions[id] !== undefined && !ended(id);
+  // A batch's Agents conversation here: its coordinator's, even once it
+  // ended (the user resumes it), unless one was just started for it.
+  const conversationOf = (target: DeliveryRun) => {
+    const bound = target.coordinator_session
+      ? (resumed[target.coordinator_session] ?? target.coordinator_session)
+      : null;
+    if (bound && isLive(bound)) return bound;
+    if (started?.runIds.includes(target.id) && !ended(started.sessionId)) return started.sessionId;
+    return bound;
+  };
+  // The conversation that coordinates a batch here now, if any.
+  const sessionOf = (target: DeliveryRun) => {
+    const id = conversationOf(target);
+    return id && isLive(id) ? id : null;
+  };
+  const conversationId = run ? conversationOf(run) : null;
   const sessionId = run ? sessionOf(run) : null;
   const session = sessionId ? sessions[sessionId] : undefined;
   // Every batch that conversation coordinates.
@@ -137,15 +151,41 @@ export function CoordinatorDock({
     );
   }, [started, sessions]);
 
+  // An ended conversation opens from the Agents history, as Agents resumes
+  // it, whether it exited or failed, and loaded or not.
+  const conversation = conversationId ? sessions[conversationId] : undefined;
+  const fromHistory = conversationId !== null && conversationId !== sessionId;
+  const conversationRepo = conversation?.repo ?? run?.repo;
+  const conversationAgent = conversation?.agent_type ?? "agent";
   const params = useMemo(
     () =>
-      session
+      conversationId && conversationRepo
         ? ({
-            params: { sessionId: session.id, repo: session.repo, agentType: session.agent_type },
+            params: {
+              sessionId: conversationId,
+              repo: conversationRepo,
+              agentType: conversationAgent,
+              mode: fromHistory ? "journal" : "live",
+            },
             api: drawerApi,
           } as IDockviewPanelProps<TerminalPanelParams>)
         : null,
-    [session],
+    [conversationId, conversationRepo, conversationAgent, fromHistory],
+  );
+  // Resuming the conversation here keeps it here, not in an Agents tab.
+  const drawerActions = useMemo(
+    () => ({
+      ...actions,
+      openAgentTerminal: (target: Parameters<typeof actions.openAgentTerminal>[0]) => {
+        const from = target.replaceSessionId;
+        if (from && from === conversationId) {
+          setResumed((current) => ({ ...current, [from]: target.sessionId }));
+        } else {
+          actions.openAgentTerminal(target);
+        }
+      },
+    }),
+    [actions, conversationId],
   );
 
   if (!run) return null;
@@ -155,15 +195,14 @@ export function CoordinatorDock({
     const id = sessionOf(target);
     const live = id ? sessions[id] : undefined;
     const coordinator = (overview.coordinators ?? []).find((state) => state.run_id === target.id);
-    return stalled.includes(target.id)
+    const bound = conversationOf(target);
+    return stalled.includes(target.id) || (bound && !isLive(bound))
       ? "stalled"
       : live?.turn_status === "working"
         ? "working"
         : coordinator?.waiting || live
           ? "waiting"
-          : target.owner &&
-              target.owner !== "user" &&
-              !(target.coordinator_session && ended(target.coordinator_session))
+          : target.owner && target.owner !== "user"
             ? "outside"
             : "none";
   };
@@ -212,8 +251,11 @@ export function CoordinatorDock({
 
   // Who coordinates, after its state: the conversation's agent here, the
   // owner's name outside Tinto.
-  const who = session
-    ? [AGENT_LABEL[session.agent_type] ?? session.agent_type, session.runtime_options?.model]
+  const who = conversation
+    ? [
+        AGENT_LABEL[conversation.agent_type] ?? conversation.agent_type,
+        conversation.runtime_options?.model,
+      ]
         .filter(Boolean)
         .join(" · ")
     : state === "outside"
@@ -316,7 +358,7 @@ export function CoordinatorDock({
               {error}
             </p>
           )}
-          {params ? (
+          {params && (
             <>
               <button
                 type="button"
@@ -329,18 +371,25 @@ export function CoordinatorDock({
               </button>
               {chatShown && (
                 <div className="delivery-coordinator__chat">
-                  <TerminalPanel {...params} />
+                  <WorkspaceActionsContext.Provider value={drawerActions}>
+                    <TerminalPanel {...params} />
+                  </WorkspaceActionsContext.Provider>
                 </div>
               )}
             </>
-          ) : (
+          )}
+          {/* An ended conversation is resumed from the panel; folded, the
+              user may start another instead. */}
+          {!session && !chatOpen && (
             <div className="delivery-coordinator__start">
               <p className="delivery-muted">
-                {runs.length > 1
-                  ? "Inicia aquí un coordinador: tomará los lotes que marques y seguirá con sus tareas, todos en una conversación."
-                  : state === "outside"
-                    ? "Puedes seguir así o iniciar aquí un coordinador que tome el lote."
-                    : "Inicia aquí un coordinador: tomará el lote y seguirá con sus tareas."}
+                {params
+                  ? "Su conversación terminó: ábrela y escríbele para retomarla con su contexto, o inicia otro coordinador."
+                  : runs.length > 1
+                    ? "Inicia aquí un coordinador: tomará los lotes que marques y seguirá con sus tareas, todos en una conversación."
+                    : state === "outside"
+                      ? "Puedes seguir así o iniciar aquí un coordinador que tome el lote."
+                      : "Inicia aquí un coordinador: tomará el lote y seguirá con sus tareas."}
               </p>
               {runs.length > 1 && (
                 <fieldset className="delivery-coordinator__batches">

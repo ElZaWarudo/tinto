@@ -621,7 +621,7 @@ pub fn is_delivered(task: &DeliveryTask, approvals: &[&DeliveryApproval]) -> boo
 }
 
 /// The first ladder step not done; `None` once every step is.
-fn next_step(
+pub(super) fn next_step(
     task: &DeliveryTask,
     approvals: &[&DeliveryApproval],
 ) -> Option<(DeliveryRung, Option<&'static str>)> {
@@ -1317,6 +1317,7 @@ mod tests {
             addressed: Vec::new(),
             handoff: String::new(),
             blocked_by: String::new(),
+            commit_plan: Vec::new(),
         });
         job
     }

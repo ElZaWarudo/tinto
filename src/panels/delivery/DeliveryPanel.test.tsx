@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act, waitFor, within } from "@testing-library/react";
+import { render, screen, act, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { busStore } from "../../bus/store";
 import type { AgentSession } from "../../bus/contract";
@@ -717,7 +717,24 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(client.resumeDeliveryJob).toHaveBeenCalledWith("j1"));
     expect(screen.queryByRole("button", { name: "Nuevo intento" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Pausar lote" }));
-    await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true));
+    await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledTimes(1));
+    expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true);
+    // A narrow pane folds the batch's actions into one menu that keeps them all.
+    await user.click(screen.getByRole("button", { name: "Acciones del lote" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Tomar el control" })).toBeInTheDocument();
+    expect(within(menu).getByText("Cambiar coordinador")).toBeInTheDocument();
+    await user.click(within(menu).getByRole("menuitem", { name: "Pausar lote" }));
+    await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledTimes(2));
+    // Overlays never stack: one opened without a press outside (a key, a
+    // shortcut) closes the one open.
+    await user.click(screen.getByRole("button", { name: "Acciones del lote" }));
+    fireEvent.click(screen.getByRole("button", { name: "Más acciones de la tarea" }));
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Acciones del lote" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 
   it("shows the code a decision is about as a review thread, before its options", async () => {
@@ -1988,6 +2005,7 @@ describe("DeliveryPanel", () => {
         setup_add: [],
         setup_remove: [],
         probes_add: [],
+        environment_up_add: [],
       }),
     );
   });
@@ -2041,6 +2059,7 @@ describe("DeliveryPanel", () => {
         setup_add: ["npm --prefix frontend ci", "npm run bindings"],
         setup_remove: [],
         probes_add: [],
+        environment_up_add: [],
       }),
     );
   });
@@ -2097,6 +2116,7 @@ describe("DeliveryPanel", () => {
         setup_add: [],
         setup_remove: [],
         probes_add: [],
+        environment_up_add: [],
         check_env: { TEST_DB_MONGO_URL: "mongodb://127.0.0.1:27419/agos{task}" },
       }),
     );
@@ -2177,10 +2197,15 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(client.renewDeliveryPermissions).toHaveBeenCalledWith("t1"));
 
     // A question that stopped making sense is taken back, after confirming.
+    // The click on the log closed the floating card: it opens again.
+    await user.click(screen.getByRole("button", { name: "Responder" }));
     await user.click(
-      within(pending).getByRole("button", {
-        name: "Retirar la decisión «¿Probar la CLI del worktree?»",
-      }),
+      within(await screen.findByRole("region", { name: "Decisiones pendientes" })).getByRole(
+        "button",
+        {
+          name: "Retirar la decisión «¿Probar la CLI del worktree?»",
+        },
+      ),
     );
     await waitFor(() => expect(client.withdrawDeliveryDecision).toHaveBeenCalledWith("p1"));
     expect(confirmMock).toHaveBeenCalledWith(
