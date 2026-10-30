@@ -324,7 +324,13 @@ impl FsWatcher {
     }
 
     /// Agrega un root al listado compartido con el poller de respaldo.
+    /// Solo los drives de Windows vistos desde WSL (`/mnt/<letra>`): ahí
+    /// inotify no ve los cambios hechos desde Windows; en el resto inotify
+    /// basta y escanear el árbol cada 2 s solo quema CPU.
     fn add_poll_root(&self, root: &PathBuf) {
+        if !crate::git::is_wsl_windows_drive_path(root) {
+            return;
+        }
         if let Ok(mut roots) = self.poll_roots.lock() {
             if !roots.contains(root) {
                 roots.push(root.clone());
