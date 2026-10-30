@@ -4,6 +4,12 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.0.3] - 2026-10-30
+
+### Fixes
+
+- **delivery:** a check's long output no longer freezes the panel
+
 ## [1.0.2] - 2026-10-29
 
 ### Features
