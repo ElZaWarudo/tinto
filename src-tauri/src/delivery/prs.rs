@@ -13,6 +13,7 @@
 //! - Activity newer than what the user last saw counts as new; reading it
 //!   (or starting a stage on the task) moves that mark.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -265,6 +266,16 @@ pub struct DeliveryPr {
     /// or asked on GitHub, until they are removed.
     #[serde(default)]
     pub reviewers: Vec<String>,
+    /// Of `reviewers`, those asked on GitHub rather than from Tinto.
+    #[serde(default)]
+    pub asked_on_github: Vec<String>,
+    /// Reviewers the user took off in Tinto: GitHub listing them does not
+    /// bring them back.
+    #[serde(default)]
+    pub removed_in_tinto: Vec<String>,
+    /// Who asks for changes in their latest review.
+    #[serde(default)]
+    pub changes_requested_by: Vec<String>,
 }
 
 impl DeliveryPr {
@@ -299,6 +310,9 @@ impl DeliveryPr {
             merged_failing_ci: None,
             ci: None,
             reviewers: Vec::new(),
+            asked_on_github: Vec::new(),
+            removed_in_tinto: Vec::new(),
+            changes_requested_by: Vec::new(),
         }
     }
 
@@ -316,8 +330,36 @@ impl DeliveryPr {
             .collect()
     }
 
-    /// Adds `logins` to who must approve it, once each.
+    /// Each missing approval with where it was asked and what GitHub shows
+    /// of it now: `luis (revisión pedida desde Tinto, GitHub aún la solicita)`.
+    pub fn missing_approvals_why(&self) -> Vec<String> {
+        let has = |list: &[String], login: &str| {
+            list.iter().any(|known| known.eq_ignore_ascii_case(login))
+        };
+        self.missing_approvals()
+            .into_iter()
+            .map(|login| {
+                let asked = match has(&self.asked_on_github, &login) {
+                    true => "revisión pedida en GitHub",
+                    false => "revisión pedida desde Tinto",
+                };
+                let now = if has(&self.changes_requested_by, &login) {
+                    "pidió cambios"
+                } else if has(&self.requested_reviewers, &login) {
+                    "GitHub aún la solicita"
+                } else {
+                    "GitHub ya no la solicita"
+                };
+                format!("{login} ({asked}, {now})")
+            })
+            .collect()
+    }
+
+    /// Adds `logins`, asked from Tinto, to who must approve it, once each.
     pub fn add_reviewers(&mut self, logins: &[String]) {
+        let asked = |login: &String| logins.iter().any(|asked| asked.eq_ignore_ascii_case(login));
+        self.asked_on_github.retain(|login| !asked(login));
+        self.removed_in_tinto.retain(|login| !asked(login));
         for login in logins {
             if !self
                 .reviewers
@@ -696,8 +738,9 @@ fn head_checks(snapshot: &Value) -> PrChecks {
 }
 
 /// Updates `pr` from a `gh pr view --json` answer. `me` is the user's login:
-/// their own reviews and comments are never news.
-pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
+/// their own reviews and comments are never news. Returns how who must
+/// approve it changed on GitHub, for the task's history.
+pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) -> Vec<String> {
     pr.state = match snapshot["state"].as_str().unwrap_or_default() {
         "MERGED" => "merged",
         "CLOSED" => "closed",
@@ -765,28 +808,7 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
         .filter(|login| !login.is_empty())
         .map(str::to_string)
         .collect();
-    // Who must approve it: one asked on GitHub joins; one whose request was
-    // taken back there before they reviewed leaves.
-    let reviewed = |login: &str| {
-        snapshot["reviews"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|review| {
-                review["author"]["login"]
-                    .as_str()
-                    .is_some_and(|author| author.eq_ignore_ascii_case(login))
-            })
-    };
-    let removed: Vec<String> = pr
-        .requested_reviewers
-        .iter()
-        .filter(|login| !requested.contains(login) && !reviewed(login))
-        .cloned()
-        .collect();
-    pr.reviewers.retain(|login| !removed.contains(login));
-    pr.add_reviewers(&requested);
-    pr.requested_reviewers = requested;
+    let changes = follow_reviewers(pr, snapshot, &verdicts, requested);
 
     // (time, author, is_review, line) of everything others did on the PR.
     let mut activity: Vec<(String, String, bool, String)> = Vec::new();
@@ -864,6 +886,129 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
         .map(|(_, _, _, line)| line.clone())
         .collect();
     pr.error = None;
+    changes
+}
+
+/// Who must approve the PR follows GitHub once it is open: one asked there
+/// joins, unless the user took them off in Tinto; one whose request was
+/// taken back there leaves, unless their approval or changes asked still
+/// stand. GitHub's timeline (`reviewRequestEvents`, which `GhCli::pr` adds)
+/// says who did it and catches what happened between two reads; without
+/// it, a request gone since the last read before they reviewed is the sign.
+/// Returns the changes, none on the first read: what was there before
+/// Tinto followed the PR is not news.
+fn follow_reviewers(
+    pr: &mut DeliveryPr,
+    snapshot: &Value,
+    verdicts: &[(&str, &str, &str)],
+    requested: Vec<String>,
+) -> Vec<String> {
+    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let latest_verdict = |login: &str| {
+        verdicts
+            .iter()
+            .rev()
+            .find(|(author, _, _)| same(author, login))
+            .map(|(_, _, state)| *state)
+    };
+    pr.changes_requested_by = requested_changes(verdicts);
+    let reviewed = |login: &str| {
+        snapshot["reviews"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|review| {
+                review["author"]["login"]
+                    .as_str()
+                    .is_some_and(|a| same(a, login))
+            })
+    };
+    // Each login's latest request event: (still asked, by whom).
+    let mut events: Vec<&Value> = snapshot["reviewRequestEvents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    events.sort_by(|a, b| a["created_at"].as_str().cmp(&b["created_at"].as_str()));
+    let mut latest: HashMap<String, (bool, String)> = HashMap::new();
+    for event in events {
+        if let Some(login) = event["reviewer"].as_str() {
+            let asked = event["event"].as_str() == Some("review_requested");
+            let actor = event["actor"].as_str().unwrap_or_default().to_string();
+            latest.insert(login.to_ascii_lowercase(), (asked, actor));
+        }
+    }
+    let by = |login: &str| {
+        latest
+            .get(&login.to_ascii_lowercase())
+            .map(|(_, actor)| actor.as_str())
+            .filter(|actor| !actor.is_empty())
+            .map_or(String::new(), |actor| format!(" (por {actor})"))
+    };
+    let taken_back = |login: &str| {
+        latest
+            .get(&login.to_ascii_lowercase())
+            .is_some_and(|(asked, _)| !asked)
+    };
+
+    let mut changes = Vec::new();
+    for login in std::mem::take(&mut pr.reviewers) {
+        let standing = matches!(
+            latest_verdict(&login),
+            Some("APPROVED" | "CHANGES_REQUESTED")
+        );
+        let gone = if taken_back(&login) {
+            !standing
+        } else {
+            pr.requested_reviewers
+                .iter()
+                .any(|known| same(known, &login))
+                && !requested.iter().any(|asked| same(asked, &login))
+                && !reviewed(&login)
+        };
+        if gone {
+            changes.push(format!(
+                "se quitó en GitHub la revisión de {login}{}",
+                by(&login)
+            ));
+            pr.asked_on_github.retain(|asked| !same(asked, &login));
+        } else {
+            pr.reviewers.push(login);
+        }
+    }
+    for login in &requested {
+        let known = pr.reviewers.iter().any(|known| same(known, login));
+        let removed = pr.removed_in_tinto.iter().any(|gone| same(gone, login));
+        if known || removed || taken_back(login) {
+            continue;
+        }
+        pr.reviewers.push(login.clone());
+        pr.asked_on_github.push(login.clone());
+        changes.push(format!(
+            "se pidió en GitHub la revisión de {login}{}",
+            by(login)
+        ));
+    }
+    pr.requested_reviewers = requested;
+    if pr.seen_until.is_none() {
+        changes.clear();
+    }
+    changes
+}
+
+/// Who asks for changes in their latest verdict.
+fn requested_changes(verdicts: &[(&str, &str, &str)]) -> Vec<String> {
+    verdicts
+        .iter()
+        .enumerate()
+        .filter(|(index, (author, _, state))| {
+            *state == "CHANGES_REQUESTED"
+                && verdicts
+                    .get(index + 1)
+                    .is_none_or(|(next, _, _)| next != author)
+        })
+        .map(|(_, (author, _, _))| author.to_string())
+        .collect()
 }
 
 /// One page of the notifications feed, or "nothing changed".
@@ -1200,6 +1345,26 @@ impl GhCli {
         answer
     }
 
+    /// The PR's `review_requested` and `review_request_removed` timeline
+    /// events, each as `{event, created_at, actor, reviewer}`.
+    fn review_request_events(repo: &str, number: u64) -> Result<Value, DeliveryError> {
+        let path = format!("repos/{repo}/issues/{number}/timeline");
+        let jq = r#".[] | select(.event == "review_requested" or .event == "review_request_removed") | select(.requested_reviewer) | {event, created_at, actor: .actor.login, reviewer: .requested_reviewer.login}"#;
+        let output = Self::act(
+            &["api", "--paginate", &path, "--jq", jq],
+            "gh no pudo leer quién pidió las revisiones del PR",
+        )?;
+        output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str(line)
+                    .map_err(|error| DeliveryError::new("github_failed", error.to_string()))
+            })
+            .collect::<Result<Vec<Value>, _>>()
+            .map(Value::Array)
+    }
+
     fn json(args: &[&str]) -> Result<Value, DeliveryError> {
         let output = Self::run(args)?;
         if !output.status.success() {
@@ -1259,6 +1424,11 @@ impl GitHub for GhCli {
             // What a review said on the code: news a round must carry.
             if let Ok(comments) = self.pr_review_comments(&pr.repo, pr.number) {
                 snapshot["reviewComments"] = comments;
+            }
+            // Who asked or took back a review, and when: who must approve
+            // it follows GitHub.
+            if let Ok(events) = Self::review_request_events(&pr.repo, pr.number) {
+                snapshot["reviewRequestEvents"] = events;
             }
         }
         Ok(snapshot)
@@ -1816,7 +1986,7 @@ impl DeliveryService {
                 &match restack_from {
                     None => format!("{} se fusionó: esta tarea va ahora a {branch}", other.label()),
                     Some(_) => format!(
-                        "{} se fusionó reescrita (squash o rebase): esta tarea va ahora a {branch} y necesita un restack; pide el paso sync, que la rebasa sobre {branch}, y después el push",
+                        "{} se fusionó reescrita (squash o rebase): esta tarea va ahora a {branch} y necesita un restack; pide el paso sync, que la rebasa sobre {branch}, y después el push (pasado el brainstorm, Tinto los pide solo si el repo lo permite)",
                         other.label()
                     ),
                 },
@@ -1920,10 +2090,13 @@ impl DeliveryService {
                 return Ok(None);
             };
             let before = pr.clone();
-            match read {
+            let reviewers = match read {
                 Ok((snapshot, me)) => apply_snapshot(&mut pr, &snapshot, &me),
-                Err(error) => pr.error = Some(error.message),
-            }
+                Err(error) => {
+                    pr.error = Some(error.message);
+                    Vec::new()
+                }
+            };
             pr.checked_at_ms = Some(now_ms());
             let state = pr.checks.state();
             pr.ci = (state != CiState::NotRun || ci_needed).then_some(state);
@@ -1933,7 +2106,7 @@ impl DeliveryService {
                 pr.changes_requested_at_ms = pr.checked_at_ms;
             }
             store.put_pr(&pr)?;
-            if let Some(news) = pr_news(&before, &pr) {
+            if let Some(news) = pr_news(&before, &pr, &reviewers) {
                 store.record_event(now_ms(), "pr_changed", Some(task_id), None, &news)?;
             }
             // Changes asked send the work back as they arrive, whatever the
@@ -2424,9 +2597,11 @@ impl DeliveryService {
         {
             let store = self.store()?;
             if let Some(mut stored) = store.pr(task_id)? {
-                stored
-                    .reviewers
-                    .retain(|login| !remove.iter().any(|gone| gone.eq_ignore_ascii_case(login)));
+                let gone =
+                    |login: &String| remove.iter().any(|gone| gone.eq_ignore_ascii_case(login));
+                stored.reviewers.retain(|login| !gone(login));
+                stored.asked_on_github.retain(|login| !gone(login));
+                stored.removed_in_tinto.extend(remove.iter().cloned());
                 stored.add_reviewers(&request);
                 store.put_pr(&stored)?;
             }
@@ -2904,8 +3079,8 @@ fn merged_outside(pr: &DeliveryPr) -> String {
 /// What a coordinator acts on in a PR that changed: its state, the review
 /// decision, conflicts, checks starting to fail, others' new reviews and
 /// comments. Checks that merely progress are left out.
-fn pr_news(before: &DeliveryPr, after: &DeliveryPr) -> Option<String> {
-    let mut news = Vec::new();
+fn pr_news(before: &DeliveryPr, after: &DeliveryPr, reviewers: &[String]) -> Option<String> {
+    let mut news = reviewers.to_vec();
     if after.state != before.state {
         news.push(format!("ahora está {}", after.state));
     }

@@ -183,6 +183,8 @@ pub const QA_CLI_LEASE: &str = "qa:cli:";
 /// How long a passing "Entorno" check stands before a job that needs the
 /// environment checks it again.
 pub(super) const ENVIRONMENT_FRESH_MS: u64 = 60_000;
+/// Tinto starts a repo's environment again only after this long.
+const ENVIRONMENT_START_EVERY_MS: u64 = 10 * 60_000;
 /// How often a running job's process and output are looked at. Tests look
 /// often: each of their jobs would otherwise end up to a tick late.
 const MONITOR_TICK: Duration = if cfg!(test) {
@@ -266,6 +268,8 @@ pub(super) struct RepoEnvironment {
     pub(super) checked_at_ms: Option<u64>,
     /// A check is running.
     checking: bool,
+    /// When Tinto last ran the repo's commands that start the environment.
+    started_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -437,7 +441,24 @@ impl DeliveryService {
         if let Ok(mut repos) = self.inner.environment.lock() {
             repos.entry(repo.to_path_buf()).or_default().checking = true;
         }
-        let results = check(repo, distro, &settings);
+        let mut results = check(repo, distro, &settings);
+        // A failing environment the repo knows how to start is started, at
+        // most once every few minutes, and checked again.
+        let started_at_ms = self
+            .inner
+            .environment
+            .lock()
+            .ok()
+            .and_then(|repos| repos.get(repo).and_then(|state| state.started_at_ms));
+        let due = started_at_ms
+            .is_none_or(|at| now_ms().saturating_sub(at) >= ENVIRONMENT_START_EVERY_MS);
+        let mut started = started_at_ms;
+        if results.iter().any(|result| !result.ok) && !settings.environment_up.is_empty() && due {
+            started = Some(now_ms());
+            let start = environment::start(repo, distro, &settings.environment_up);
+            results = check(repo, distro, &settings);
+            results.extend(start.into_iter().filter(|step| !step.ok));
+        }
         let failed: Vec<String> = results
             .iter()
             .filter(|result| !result.ok)
@@ -450,6 +471,7 @@ impl DeliveryService {
                     problem: (!failed.is_empty()).then(|| failed.join("\n")),
                     checked_at_ms: Some(now_ms()),
                     checking: false,
+                    started_at_ms: started,
                 },
             );
         }
@@ -3651,6 +3673,32 @@ impl DeliveryService {
             })?;
         }
         Ok(())
+    }
+
+    /// The coordinator asks for the task's checks on the code as it is now,
+    /// instead of running them in its own shell.
+    pub fn run_checks(&self, task_id: &str) -> Result<Vec<DeliveryJob>, DeliveryError> {
+        let task = self.task(task_id)?;
+        if task.checks.is_empty() {
+            return Err(DeliveryError::new(
+                "no_checks",
+                "la tarea no tiene comprobaciones: fíjalas con set_task_state `checks`",
+            ));
+        }
+        let open = |jobs: &[DeliveryJob]| -> Vec<DeliveryJob> {
+            jobs.iter()
+                .filter(|job| job.role == CHECKS_ROLE && job.status.is_open())
+                .cloned()
+                .collect()
+        };
+        if !open(&self.store()?.task_jobs(task_id)?).is_empty() {
+            return Err(DeliveryError::new(
+                "checks_running",
+                "las comprobaciones de la tarea ya están en cola o corriendo: espera su resultado con wait_run",
+            ));
+        }
+        self.queue_task_checks(task_id, None)?;
+        Ok(open(&self.store()?.task_jobs(task_id)?))
     }
 
     /// What an agent job is told about the task's checks: that Tinto runs

@@ -285,6 +285,10 @@ fn created_commits(approval: &DeliveryApproval) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// How many failing-checks rounds of a task Tinto sends to implementation
+/// on its own, past the brainstorm.
+const AUTO_FIX_ROUNDS: usize = 2;
+
 /// The Jira step when the PR is open (the issue goes to review).
 pub const JIRA_AFTER_PR: &str = "after_pr";
 /// The Jira step once the PR is merged (the issue is closed).
@@ -975,7 +979,9 @@ impl DeliveryService {
         let place = Place::of(task.distro.as_deref());
         let planned = request.rung == DeliveryRung::Commit && !request.commits.is_empty();
         let reply = request.rung == DeliveryRung::PrReply;
-        if request.title.trim().is_empty() && !planned && !reply {
+        // A merge's text defaults to the PR's approved title.
+        let merge = request.rung == DeliveryRung::Merge;
+        if request.title.trim().is_empty() && !planned && !reply && !merge {
             return Err(DeliveryError::new(
                 "invalid_approval",
                 "la aprobación necesita el texto exacto (título o mensaje)",
@@ -1149,6 +1155,7 @@ impl DeliveryService {
         let mut notice = None;
         let mut style_examples = Vec::new();
         let mut fix_commits = Vec::new();
+        let mut merge_method = None;
         let merge_head = match request.rung {
             DeliveryRung::Commit => tasks::merge_head(place, &task.worktree),
             _ => None,
@@ -1246,7 +1253,29 @@ impl DeliveryService {
                 self.sync_prerequisites(&task)?;
             }
             DeliveryRung::Merge => {
-                self.merge_prerequisites(&task, request.merge_method.as_deref())?
+                // The base's own history picks the method when none is asked.
+                let method = match request.merge_method.as_deref() {
+                    Some(method) => method.to_string(),
+                    None => self.merge_method(&task.id)?,
+                };
+                self.merge_prerequisites(&task, Some(&method))?;
+                if title.is_empty() && method != "rebase" {
+                    let pr = self.task_pr(&task.id)?;
+                    let pr_title = self
+                        .latest_approval(&task.id, DeliveryRung::Pr)?
+                        .map(|step| step.title)
+                        .filter(|title| !title.trim().is_empty());
+                    title = match (pr_title, pr) {
+                        (Some(pr_title), Some(pr)) => format!("{pr_title} (#{})", pr.number),
+                        _ => {
+                            return Err(DeliveryError::new(
+                                "invalid_approval",
+                                "la aprobación necesita el texto exacto (título o mensaje)",
+                            ))
+                        }
+                    };
+                }
+                merge_method = Some(method);
             }
             DeliveryRung::PrReply => {
                 title = match thread.as_ref().and_then(|thread| thread.comment.as_ref()) {
@@ -1274,9 +1303,7 @@ impl DeliveryService {
             }
         }
         let approval = DeliveryApproval {
-            merge_method: request
-                .merge_method
-                .filter(|_| request.rung == DeliveryRung::Merge),
+            merge_method,
             stage,
             jira_statuses,
             jira_link_only: link_only,
@@ -1342,8 +1369,9 @@ impl DeliveryService {
     }
 
     /// Whether the repo lets Tinto take this step on its own past the
-    /// brainstorm (by default commit, sync, push and the Jira steps it runs
-    /// itself; opening the PR, merging it and replies wait for the user).
+    /// brainstorm (by default commit, sync, push and the Jira steps, whether
+    /// Tinto or the coordinator runs them; opening the PR, merging it and
+    /// replies wait for the user).
     fn step_allowed(
         &self,
         task: &DeliveryTask,
@@ -1356,11 +1384,7 @@ impl DeliveryService {
             DeliveryRung::Push => autonomy.push,
             DeliveryRung::Pr => autonomy.pr,
             DeliveryRung::Merge => autonomy.merge,
-            DeliveryRung::Jira => {
-                autonomy.jira
-                    && (!approval.jira_statuses.is_empty()
-                        || (approval.jira_link_only && self.jira_site(&task.repo)?.is_some()))
-            }
+            DeliveryRung::Jira => autonomy.jira,
             DeliveryRung::PrReply => autonomy.pr_reply,
         })
     }
@@ -1780,10 +1804,32 @@ impl DeliveryService {
         Ok(approval)
     }
 
-    /// The merge method to propose: the one the base branch's history
-    /// shows for its latest PRs.
+    /// The merge method to propose: the one the repo's latest merge through
+    /// Tinto used, else the one the base branch's history shows for its
+    /// latest PRs (a rebase merge leaves no trace there).
     pub fn merge_method(&self, task_id: &str) -> Result<String, DeliveryError> {
         let task = self.task(task_id)?;
+        let store = self.store()?;
+        let repo_tasks: std::collections::HashSet<String> = store
+            .tasks()?
+            .into_iter()
+            .filter(|other| other.repo == task.repo)
+            .map(|other| other.id)
+            .collect();
+        let latest = store
+            .approvals()?
+            .into_iter()
+            .filter(|step| {
+                step.rung == DeliveryRung::Merge
+                    && step.status == DeliveryApprovalStatus::Executed
+                    && repo_tasks.contains(&step.task_id)
+            })
+            .max_by_key(|step| step.executed_at_ms)
+            .and_then(|step| step.merge_method);
+        drop(store);
+        if let Some(method) = latest {
+            return Ok(method);
+        }
         let place = Place::of(task.distro.as_deref());
         Ok(tasks::base_merge_method(place, &task.repo, &task.base_ref).to_string())
     }
@@ -1926,6 +1972,198 @@ impl DeliveryService {
         };
         if let Err(error) = self.request_approval(request) {
             eprintln!("tinto: delivery did not sync {}: {error}", task.key);
+        }
+        Ok(())
+    }
+
+    /// Past the brainstorm, Tinto asks the ladder steps that need no text of
+    /// the coordinator's and that the repo lets it take on its own: the push
+    /// that publishes a task's commits, the restack of a package whose base
+    /// merged rewritten, and the Jira steps when Tinto's Jira runs them. A
+    /// drifted push stays with the coordinator: the remote changed outside.
+    pub fn advance_ladders(&self) -> Result<(), DeliveryError> {
+        use super::phase::{Phase, Waiter};
+        let runs: std::collections::HashSet<String> = self
+            .store()?
+            .runs()?
+            .into_iter()
+            .filter(|run| run.unattended && !run.paused && run.status == "active")
+            .map(|run| run.id)
+            .collect();
+        if runs.is_empty() {
+            return Ok(());
+        }
+        let overview = self.overview()?;
+        for task in &overview.tasks {
+            if !task.run_id.as_ref().is_some_and(|run| runs.contains(run)) {
+                continue;
+            }
+            let Some(phase) = overview.phases.get(&task.id) else {
+                continue;
+            };
+            let approvals: Vec<&DeliveryApproval> = overview
+                .approvals
+                .iter()
+                .filter(|approval| approval.task_id == task.id)
+                .collect();
+            let busy = approvals.iter().any(|approval| {
+                matches!(
+                    approval.status,
+                    DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                )
+            }) || overview
+                .jobs
+                .iter()
+                .any(|job| job.task_id == task.id && job.status.is_open());
+            if busy {
+                continue;
+            }
+            if let (Phase::NextStage { role }, Waiter::Coordinator) = (&phase.phase, phase.waits_on)
+            {
+                if role == "implementation" {
+                    self.fix_failing_checks(task, &overview.rounds)?;
+                }
+                continue;
+            }
+            // A step that failed when Tinto took it is the coordinator's.
+            let failed = |rung: DeliveryRung| {
+                approvals
+                    .iter()
+                    .filter(|approval| approval.rung == rung)
+                    .max_by_key(|approval| approval.requested_at_ms)
+                    .is_some_and(|approval| approval.status == DeliveryApprovalStatus::Failed)
+            };
+            let autonomy = self.autonomy(task)?;
+            if task.restack_from.is_some() {
+                if autonomy.sync && !failed(DeliveryRung::Sync) {
+                    self.auto_sync(task)?;
+                }
+                continue;
+            }
+            let mut commits = Vec::new();
+            let (rung, stage, title) = match (&phase.phase, phase.waits_on) {
+                (
+                    Phase::NextStep {
+                        rung: DeliveryRung::Commit,
+                        ..
+                    },
+                    Waiter::Coordinator,
+                ) if autonomy.commit => {
+                    match proposed_commit_plan(task, &overview.jobs, &approvals) {
+                        Some(plan) => commits = plan,
+                        None => continue,
+                    }
+                    (DeliveryRung::Commit, None, String::new())
+                }
+                (
+                    Phase::NextStep {
+                        rung: DeliveryRung::Push,
+                        ..
+                    },
+                    Waiter::Coordinator,
+                ) if autonomy.push => (
+                    DeliveryRung::Push,
+                    None,
+                    format!("Publicar {}", task.branch),
+                ),
+                _ => match super::phase::next_step(task, &approvals) {
+                    Some((DeliveryRung::Jira, Some(stage)))
+                        if autonomy.jira && self.jira_site(&task.repo)?.is_some() =>
+                    {
+                        (
+                            DeliveryRung::Jira,
+                            Some(stage.to_string()),
+                            format!("{}: Jira {stage}", task.key),
+                        )
+                    }
+                    _ => continue,
+                },
+            };
+            if failed(rung) {
+                continue;
+            }
+            let request = NewApproval {
+                task_id: task.id.clone(),
+                rung,
+                title,
+                body: String::new(),
+                requested_by: super::decisions::AUTO.to_string(),
+                commits,
+                merge_method: None,
+                stage,
+                jira_statuses: Vec::new(),
+                leave_out: Vec::new(),
+                single_commit_reason: None,
+                comment_url: None,
+                resolve_thread: false,
+            };
+            if let Err(error) = self.request_approval(request) {
+                eprintln!("tinto: delivery did not advance {}: {error}", task.key);
+            }
+        }
+        Ok(())
+    }
+
+    /// A round opened by failing checks gets its implementation stage from
+    /// Tinto, on the agent the user fixed for implementation: the round's
+    /// items already tell the job what failed. Only for the task's first
+    /// [`AUTO_FIX_ROUNDS`] such rounds; after that the coordinator judges.
+    fn fix_failing_checks(
+        &self,
+        task: &DeliveryTask,
+        rounds: &[super::model::DeliveryRound],
+    ) -> Result<(), DeliveryError> {
+        let checks_rounds: Vec<&super::model::DeliveryRound> = rounds
+            .iter()
+            .filter(|round| round.task_id == task.id && round.kind == "checks")
+            .collect();
+        let Some(round) = checks_rounds
+            .iter()
+            .find(|round| round.closed_at_ms.is_none())
+        else {
+            return Ok(());
+        };
+        // Once per round: a fix that did not settle it is the coordinator's.
+        let tried = self
+            .store()?
+            .task_jobs(&task.id)?
+            .iter()
+            .any(|job| job.role == "implementation" && job.created_at_ms >= round.opened_at_ms);
+        if checks_rounds.len() > AUTO_FIX_ROUNDS || tried {
+            return Ok(());
+        }
+        let Some(stage) = self
+            .store()?
+            .repo_settings(&task.repo)?
+            .stages
+            .remove("implementation")
+        else {
+            return Ok(());
+        };
+        let job = self.dispatch(super::service::NewJob {
+            task_id: task.id.clone(),
+            role: "implementation".to_string(),
+            agent: stage.agent,
+            model: stage.model,
+            access: super::model::DeliveryAccess::Workspace,
+            prompt: format!(
+                "Make the task's failing checks pass (round {}): fix the code, not the checks, with the smallest change that does it, and keep the task's decisions.",
+                round.number
+            ),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: stage.reasoning,
+            platform: None,
+            read_dirs: Vec::new(),
+            stage_default: true,
+            needs_environment: false,
+        });
+        if let Err(error) = job {
+            eprintln!(
+                "tinto: delivery did not fix the checks of {}: {error}",
+                task.key
+            );
         }
         Ok(())
     }
@@ -2791,9 +3029,9 @@ impl DeliveryService {
             Some(format!("el PR #{} {why}", pr.number))
         } else if !pr.missing_approvals().is_empty() {
             Some(format!(
-                "al PR #{} le falta la aprobación de {}: aprueban todos los revisores elegidos, salvo los que quites",
+                "al PR #{} le falta la aprobación de {}: aprueban todos los revisores elegidos y los que GitHub pida, salvo los que quites",
                 pr.number,
-                pr.missing_approvals().join(", ")
+                pr.missing_approvals_why().join(", ")
             ))
         } else if !pr
             .review_allows_merge(self.store()?.repo_settings(&task.repo)?.pr_without_reviewer)
@@ -2905,7 +3143,11 @@ impl DeliveryService {
 
     /// Merges the task's PR on GitHub and deletes its branch there.
     fn merge_pr(&self, approval: &DeliveryApproval) -> Result<String, DeliveryError> {
-        let method = approval.merge_method.as_deref().unwrap_or("squash");
+        let method = match approval.merge_method.clone() {
+            Some(method) => method,
+            None => self.merge_method(&approval.task_id)?,
+        };
+        let method = method.as_str();
         // The PR as it is now: the step may have waited while it moved.
         let task = self.task(&approval.task_id)?;
         self.refresh_pr(&task.id, std::time::Duration::ZERO)?;
@@ -3171,6 +3413,43 @@ fn author_notice(author: &str, recent: &[String]) -> Option<String> {
         "Los commits se harán como {author}, que no firma ninguno de los últimos commits de la base (los firman {}). Si no es tu identidad, corrige user.name y user.email (git config) en el repositorio y pide el commit de nuevo",
         recent.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
     ))
+}
+
+/// The commits the task's writing jobs since its last commit proposed, in
+/// the order they ran; `None` when one of them changed files without a plan.
+fn proposed_commit_plan(
+    task: &DeliveryTask,
+    jobs: &[super::model::DeliveryJob],
+    approvals: &[&DeliveryApproval],
+) -> Option<Vec<DeliveryCommit>> {
+    let since = approvals
+        .iter()
+        .filter(|step| {
+            step.rung == DeliveryRung::Commit && step.status == DeliveryApprovalStatus::Executed
+        })
+        .filter_map(|step| step.executed_at_ms)
+        .max()
+        .unwrap_or(0);
+    let mut writing: Vec<&super::model::DeliveryJob> = jobs
+        .iter()
+        .filter(|job| {
+            job.task_id == task.id
+                && job.writes
+                && job.status == super::model::DeliveryJobStatus::Finished
+                && job.ended_at_ms.unwrap_or(0) > since
+        })
+        .collect();
+    writing.sort_by_key(|job| job.ended_at_ms);
+    let mut plan = Vec::new();
+    for job in writing {
+        let proposed = job.result.as_ref().map(|result| &result.commit_plan);
+        match proposed {
+            Some(proposed) if !proposed.is_empty() => plan.extend(proposed.iter().cloned()),
+            _ if job.changes.is_empty() => {}
+            _ => return None,
+        }
+    }
+    (!plan.is_empty()).then_some(plan)
 }
 
 /// Checks out the submodules at the commits the branch now records, after

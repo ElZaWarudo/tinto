@@ -488,6 +488,10 @@ impl DeliveryService {
                 if let Err(error) = service.release_renewed_quotas() {
                     eprintln!("tinto: delivery could not release the agents' quotas: {error}");
                 }
+                // Steps that need nothing of the coordinator's are asked here.
+                if let Err(error) = service.advance_ladders() {
+                    eprintln!("tinto: delivery could not advance the ladders: {error}");
+                }
                 let (count, changed) = &service.inner.changes;
                 let Ok(guard) = count.lock() else { return };
                 let Ok((guard, _)) =

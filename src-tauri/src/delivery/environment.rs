@@ -83,6 +83,31 @@ fn check_within(
     })
 }
 
+/// How long a command that starts the environment gets.
+const START_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Runs the repo's commands that start the environment, in order, where its
+/// jobs run, up to the first that fails. Returns how each went.
+pub fn start(
+    repo: &Path,
+    distro: Option<&str>,
+    commands: &[String],
+) -> Vec<DeliveryEnvironmentCheck> {
+    let mut results = Vec::new();
+    for command in commands {
+        let (ok, output) = run(probe_command(repo, distro, command), START_TIMEOUT);
+        results.push(DeliveryEnvironmentCheck {
+            name: command.clone(),
+            ok,
+            output,
+        });
+        if !ok {
+            break;
+        }
+    }
+    results
+}
+
 /// Below this much free space on the repo's disk the environment fails.
 const MIN_FREE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 

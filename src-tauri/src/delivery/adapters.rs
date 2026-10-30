@@ -56,9 +56,19 @@ pub const RESULT_SCHEMA: &str = r#"{
     "findings": { "type": "array", "description": "Only defects still open, one short line each: never what was fixed, addressed, verified or found fine.", "items": { "type": "string" } },
     "addressed": { "type": "array", "description": "Each item of the round or earlier finding dealt with: the item, what was done and where (file:line), one short line each.", "items": { "type": "string" } },
     "handoff": { "type": "string" },
-    "blocked_by": { "type": "string", "enum": ["none", "environment", "sandbox"] }
+    "blocked_by": { "type": "string", "enum": ["none", "environment", "sandbox"] },
+    "commit_plan": {
+      "type": "array",
+      "description": "Only for a job that changed files: the commits that should hold this job's changes, in order. Empty otherwise.",
+      "items": {
+        "type": "object",
+        "properties": { "message": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } } },
+        "required": ["message", "paths"],
+        "additionalProperties": false
+      }
+    }
   },
-  "required": ["status", "summary", "changed_paths", "checks", "findings", "addressed", "handoff", "blocked_by"],
+  "required": ["status", "summary", "changed_paths", "checks", "findings", "addressed", "handoff", "blocked_by", "commit_plan"],
   "additionalProperties": false
 }"#;
 
@@ -400,6 +410,9 @@ pub fn job_prompt(
         "Do not commit, push, open pull requests or change issue trackers: Tinto asks the user for those steps."
             .to_string(),
     );
+    if job.writes {
+        lines.push("In `commit_plan`, propose the commits for the files you changed: atomic, each with its code and its tests (docs apart when they stand alone), every changed file in exactly one, paths relative to the worktree, and each message (subject, then an optional body after a blank line) in the repository's convention as `git log` shows it, with no trailers it does not use. Tinto checks the plan before it is committed.".to_string());
+    }
     if !job.round.is_empty() {
         lines.push("In the result, list in `addressed` each round item you dealt with (the item, what you did, file:line). `findings` holds only defects still open: never what you fixed, addressed or verified.".to_string());
     }

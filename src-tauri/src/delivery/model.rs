@@ -324,6 +324,9 @@ pub struct DeliveryJobResult {
     /// `environment` (something outside them failed) or `none`.
     #[serde(default)]
     pub blocked_by: String,
+    /// A writing job's proposal for the commits of its changes.
+    #[serde(default)]
+    pub commit_plan: Vec<DeliveryCommit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1163,6 +1166,10 @@ pub struct DeliverySettingsChanges {
     /// become environment probes (and checks, which probes must be).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub probes_add: Vec<String>,
+    /// Commands that start the environment when its check fails: they wait
+    /// for the user, whatever the repo's autonomy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment_up_add: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1377,6 +1384,11 @@ pub struct DeliveryRepoSettings {
     /// probes: the "Entorno" check runs them (e.g. a database ping).
     #[serde(default)]
     pub environment_probes: Vec<String>,
+    /// Commands that start what the jobs need outside the worktree (e.g.
+    /// `docker compose up -d`): when the "Entorno" check fails, Tinto runs
+    /// them in order and checks again. Only the user sets or approves them.
+    #[serde(default)]
+    pub environment_up: Vec<String>,
     /// The reviewers whose comments make the repo's guides.
     #[serde(default)]
     pub guides: Vec<DeliveryGuidePerson>,
@@ -1438,7 +1450,8 @@ pub struct DeliveryAutonomy {
     pub pr: bool,
     /// Merging it, once its checks and reviews let it.
     pub merge: bool,
-    /// The Jira steps Tinto runs itself.
+    /// The Jira steps, run by Tinto or, without the repo's Jira set in
+    /// Tinto, by the coordinator.
     pub jira: bool,
     /// Posting a reply on the PR as the user.
     pub pr_reply: bool,
