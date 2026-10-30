@@ -1294,47 +1294,53 @@ describe("TerminalPanel", () => {
     expect(composer).toHaveValue("");
   });
 
-  it("resumes an exited live conversation before sending its preserved draft", async () => {
-    const user = userEvent.setup();
-    const openAgentTerminal = vi.fn();
-    listAgentSessionsMock
-      .mockResolvedValueOnce([
-        sessionFixture({
-          status: "exited",
-          pid: null,
-          ended_at_ms: 2500,
-          exit_code: 0,
-          turn_status: "waiting",
-          active_sessions: 0,
-        }),
-      ])
-      .mockResolvedValueOnce([sessionFixture({ id: "sess-resumed", status: "running" })]);
-    renderWithWorkspaceActions(
-      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
-      { openAgentTerminal },
-    );
+  it.each([
+    ["exited", 0],
+    ["failed", 1],
+  ] as const)(
+    "resumes an %s live conversation before sending its preserved draft",
+    async (status, exit_code) => {
+      const user = userEvent.setup();
+      const openAgentTerminal = vi.fn();
+      listAgentSessionsMock
+        .mockResolvedValueOnce([
+          sessionFixture({
+            status,
+            pid: null,
+            ended_at_ms: 2500,
+            exit_code,
+            turn_status: "waiting",
+            active_sessions: 0,
+          }),
+        ])
+        .mockResolvedValueOnce([sessionFixture({ id: "sess-resumed", status: "running" })]);
+      renderWithWorkspaceActions(
+        <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
+        { openAgentTerminal },
+      );
 
-    const composer = await screen.findByPlaceholderText("Continúa esta conversación");
-    expect(composer).toHaveAttribute(
-      "title",
-      "Entrada de mensajes de Codex para a: el próximo mensaje retomará la conversación archivada.",
-    );
-    await user.type(composer, "Seguimos");
-    await user.click(screen.getByRole("button", { name: "Enviar" }));
+      const composer = await screen.findByPlaceholderText("Continúa esta conversación");
+      expect(composer).toHaveAttribute(
+        "title",
+        "Entrada de mensajes de Codex para a: el próximo mensaje retomará la conversación archivada.",
+      );
+      await user.type(composer, "Seguimos");
+      await user.click(screen.getByRole("button", { name: "Enviar" }));
 
-    await waitFor(() => expect(resumeAgentJournalSessionMock).toHaveBeenCalledWith("sess-1"));
-    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-resumed", "Seguimos\r", {
-      model: "gpt-5.6-sol",
-      speed: "standard",
-    });
-    expect(openAgentTerminal).toHaveBeenCalledWith({
-      sessionId: "sess-resumed",
-      repo: "/r/a",
-      agentType: "codex",
-      replaceSessionId: "sess-1",
-    });
-    expect(composer).toHaveValue("");
-  });
+      await waitFor(() => expect(resumeAgentJournalSessionMock).toHaveBeenCalledWith("sess-1"));
+      expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-resumed", "Seguimos\r", {
+        model: "gpt-5.6-sol",
+        speed: "standard",
+      });
+      expect(openAgentTerminal).toHaveBeenCalledWith({
+        sessionId: "sess-resumed",
+        repo: "/r/a",
+        agentType: "codex",
+        replaceSessionId: "sess-1",
+      });
+      expect(composer).toHaveValue("");
+    },
+  );
 
   it("recovers a restored live conversation from the journal after an app restart", async () => {
     const user = userEvent.setup();

@@ -473,6 +473,7 @@ pub async fn resume_agent_journal_session(
     bus: State<'_, BusHandle>,
     registry: State<'_, Mutex<AgentSessionRegistry>>,
     journal: State<'_, Mutex<AgentJournal>>,
+    delivery: State<'_, crate::delivery::service::DeliveryService>,
     session_id: String,
 ) -> Result<AgentSessionResumeResult, CommandError> {
     let archived = {
@@ -489,7 +490,10 @@ pub async fn resume_agent_journal_session(
     let fallback_context = resume_context_summary(&archived);
     let archived_permission_mode =
         permission_mode_for_resume(&archived.agent_type, archived.permission_mode);
-    let (mut started, mut mode) = {
+    // It starts again on the model and reasoning it ran on.
+    let launch_options =
+        Some(archived.runtime_options.clone()).filter(|options| !options.is_empty());
+    let (mut started, mut mode) = super::pty::with_launch_options(launch_options, || {
         let mut registry = lock_registry(&registry)?;
         let native = native_resume_id.as_deref().and_then(|provider_session_id| {
             let result = match resolved.source {
@@ -510,7 +514,7 @@ pub async fn resume_agent_journal_session(
             };
             result.ok()
         });
-        match native {
+        let resumed = match native {
             Some(started) => (started, AgentSessionResumeMode::Native),
             None => {
                 let started = match resolved.source {
@@ -530,8 +534,9 @@ pub async fn resume_agent_journal_session(
                 };
                 (started, AgentSessionResumeMode::ContextBridge)
             }
-        }
-    };
+        };
+        Ok::<_, CommandError>(resumed)
+    })?;
 
     let resumed_timeline = remap_archived_timeline(&archived.timeline, &started.id);
     let completed_turns = timeline_turn_count(&archived.timeline);
@@ -649,6 +654,10 @@ pub async fn resume_agent_journal_session(
         }),
         now_ms(),
     );
+    // A Delivery batch it coordinated follows it.
+    if let Err(error) = delivery.rebind_coordinator(&session_id, &started.id) {
+        eprintln!("tinto: el lote de la conversación {session_id} no se reasignó: {error}");
+    }
     refresh_and_emit_sessions(&app);
     Ok(AgentSessionResumeResult {
         session_id: started.id,
@@ -3646,7 +3655,12 @@ fn spawn_output_reader(
 ) {
     let last_output_at = Arc::new(AtomicU64::new(0));
     let done = Arc::new(AtomicBool::new(false));
-    spawn_output_quiet_monitor(app.clone(), last_output_at.clone(), done.clone());
+    spawn_output_quiet_monitor(
+        app.clone(),
+        session_id.clone(),
+        last_output_at.clone(),
+        done.clone(),
+    );
     std::thread::spawn(move || {
         let mut buffer = vec![0u8; 2 * 1024 * 1024];
         loop {
@@ -3918,6 +3932,7 @@ fn strip_ansi(text: &str) -> String {
 
 fn spawn_output_quiet_monitor(
     app: AppHandle,
+    session_id: String,
     last_output_at: Arc<AtomicU64>,
     done: Arc<AtomicBool>,
 ) {
@@ -3927,6 +3942,22 @@ fn spawn_output_quiet_monitor(
             thread::sleep(std::time::Duration::from_millis(
                 SESSION_OUTPUT_MONITOR_TICK_MS,
             ));
+            // Some agents' output outlives their process (Claude Code's goes
+            // through a channel its handle keeps open): its end is noticed
+            // here, not by the reader.
+            let ended = app
+                .try_state::<Mutex<AgentSessionRegistry>>()
+                .and_then(|registry| {
+                    registry
+                        .lock()
+                        .ok()
+                        .map(|mut registry| registry.refresh_session_ended(&session_id))
+                })
+                .unwrap_or(false);
+            if ended {
+                refresh_and_emit_sessions(&app);
+                return;
+            }
             let observed = last_output_at.load(Ordering::Relaxed);
             let is_done = done.load(Ordering::Relaxed);
             if observed != 0
@@ -4172,8 +4203,9 @@ pub struct RestoredAgentSession {
 /// Resumes the conversations that were live when Tinto last closed (an
 /// update, a restart), each in its provider's own session: a Delivery
 /// batch they coordinated is bound to them again, and the ones cut off
-/// mid-turn are told to go on. Returns the ones resumed, for the view to
-/// open; it takes them once, so a second call returns none.
+/// mid-turn are told to go on. Returns them for the view to open, the ones
+/// that could not resume as they were left, with a note saying why; it
+/// takes them once, so a second call returns none.
 #[tauri::command]
 pub async fn restore_live_agent_sessions(
     app: AppHandle,
@@ -4192,6 +4224,7 @@ pub async fn restore_live_agent_sessions(
             bus.clone(),
             registry.clone(),
             journal.clone(),
+            delivery.clone(),
             session.id.clone(),
         )
         .await
@@ -4202,18 +4235,33 @@ pub async fn restore_live_agent_sessions(
                     "tinto: no se pudo retomar la conversación {}: {}",
                     session.id, error.message
                 );
+                // It opens as it was left, saying why: the next message
+                // the user sends tries again.
+                let journal = lock_journal(&journal)?;
+                let note = AgentSessionTimelineItem {
+                    session_id: session.id.clone(),
+                    id: format!("{}:restore-failed:{}", session.id, now_ms()),
+                    kind: AgentSessionTimelineKind::Lifecycle,
+                    text: format!(
+                        "No se pudo retomar al abrir Tinto: {}. Escribe para intentarlo de nuevo.",
+                        error.message
+                    ),
+                    timestamp_ms: now_ms(),
+                    attachments: Vec::new(),
+                };
+                let _ = journal.record_timeline_item(&note);
+                if let Ok(Some(archived)) = journal.session_from_journal(&session.id) {
+                    restored.push(RestoredAgentSession {
+                        coordinator: delivery.coordinates(&session.id).unwrap_or(false),
+                        session_id: archived.id,
+                        repo: archived.repo,
+                        agent_type: archived.agent_type,
+                    });
+                }
                 continue;
             }
         };
-        let coordinator = delivery
-            .rebind_coordinator(&session.id, &resumed.session_id)
-            .unwrap_or_else(|error| {
-                eprintln!(
-                    "tinto: el lote de la conversación {} no se reasignó: {error}",
-                    session.id
-                );
-                false
-            });
+        let coordinator = delivery.coordinates(&resumed.session_id).unwrap_or(false);
         if session.working {
             let app = app.clone();
             let id = resumed.session_id.clone();

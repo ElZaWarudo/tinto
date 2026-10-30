@@ -581,7 +581,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const liveSession = useAgentSession(sessionId);
   const [archivedSession, setArchivedSession] = useState<AgentSession | null>(null);
   const session = liveSession ?? archivedSession ?? undefined;
-  const resumesConversation = readOnly || session?.status === "exited";
+  // One that ended, by itself or by crashing, goes on with the next message.
+  const resumesConversation =
+    readOnly || session?.status === "exited" || session?.status === "failed";
   const { chunks: sessionOutput } = useAgentSessionOutput(sessionId);
   const timeline = useAgentSessionTimeline(sessionId);
   const [initialComposerDraft] = useState(() => readAgentComposerDraft(sessionId));

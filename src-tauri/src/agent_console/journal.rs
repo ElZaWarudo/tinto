@@ -148,6 +148,7 @@ impl AgentJournal {
         self.ensure_agent_sessions_column("exit_code", "INTEGER")?;
         self.ensure_agent_sessions_column("live", "INTEGER")?;
         self.ensure_agent_sessions_column("turn_working", "INTEGER")?;
+        self.ensure_agent_sessions_column("runtime_options_json", "TEXT")?;
         Ok(())
     }
 
@@ -312,12 +313,20 @@ impl AgentJournal {
             session.status,
             AgentSessionStatus::Starting | AgentSessionStatus::Running
         );
+        // The model and reasoning it runs on, for a resume to start on them.
+        let runtime_options_json = if session.runtime_options.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&session.runtime_options)?)
+        };
         self.conn.execute(
-            "UPDATE agent_sessions SET live = ?2, turn_working = ?3 WHERE id = ?1",
+            "UPDATE agent_sessions SET live = ?2, turn_working = ?3, runtime_options_json = ?4
+             WHERE id = ?1",
             params![
                 &session.id,
                 live,
-                live && session.turn_status == AgentSessionTurnStatus::Working
+                live && session.turn_status == AgentSessionTurnStatus::Working,
+                runtime_options_json
             ],
         )?;
         Ok(())
@@ -620,6 +629,15 @@ impl AgentJournal {
             return Ok(None);
         };
         let timeline = self.timeline_for_session(&id)?;
+        let runtime_options = self
+            .conn
+            .query_row(
+                "SELECT runtime_options_json FROM agent_sessions WHERE id = ?1",
+                params![&id],
+                |row| row.get::<_, Option<String>>(0),
+            )?
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
         let feedback = feedback_json
             .as_deref()
             .and_then(|json| serde_json::from_str::<Vec<AgentSessionFeedback>>(json).ok())
@@ -664,7 +682,7 @@ impl AgentJournal {
             turn_checkpoints,
             timeline,
             subagents,
-            runtime_options: Default::default(),
+            runtime_options,
             goal: goal_json
                 .as_deref()
                 .and_then(|json| serde_json::from_str::<AgentSessionGoal>(json).ok())
@@ -932,6 +950,26 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn journal_keeps_the_model_and_reasoning_a_conversation_ran_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.sqlite");
+        let options = crate::bus::contract::AgentSessionRuntimeOptions {
+            model: Some("haiku".into()),
+            reasoning_effort: Some("low".into()),
+            speed: None,
+        };
+        {
+            let journal = AgentJournal::open(&path).unwrap();
+            let mut running = session("s1");
+            running.runtime_options = options.clone();
+            journal.record_session(&running).unwrap();
+        }
+        let journal = AgentJournal::open(&path).unwrap();
+        let archived = journal.session_from_journal("s1").unwrap().unwrap();
+        assert_eq!(archived.runtime_options, options);
     }
 
     fn subagent(id: &str, parent_id: Option<&str>, status: &str) -> AgentSubagentThread {
