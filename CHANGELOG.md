@@ -4,6 +4,22 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.1.0] - 2026-10-30
+
+### Features
+
+- **delivery:** lighter panel header and overlays that cannot be missed
+- **delivery:** Tinto takes the deterministic steps of a batch itself
+
+### Fixes
+
+- **agents:** a crashed agent shows as failed at once and can resume
+
+### Performance
+
+- **watcher:** watch only the directories git does not ignore
+- **watcher:** poll only WSL drive roots and drop the unused tick event
+
 ## [1.0.3] - 2026-10-30
 
 ### Fixes
