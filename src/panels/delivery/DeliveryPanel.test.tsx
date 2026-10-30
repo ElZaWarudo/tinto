@@ -673,6 +673,23 @@ describe("DeliveryPanel", () => {
     expect(within(history).getByText("Comprobaciones de Tinto al empezar")).toBeInTheDocument();
   });
 
+  it("shows only the end of a check's long output", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [job({ id: "c1", role: "checks", agent: "shell", prompt: "npm test", result: null })],
+      }),
+    );
+    client.getDeliveryJobLog.mockResolvedValue({
+      entries: Array.from({ length: 600 }, (_, line) => ({ kind: "info", text: `line ${line}` })),
+      next_line: 600,
+      stderr_tail: "",
+    });
+    renderPanel();
+    expect(await screen.findByText(/^100 líneas anteriores no se muestran/)).toBeInTheDocument();
+    expect(screen.queryByText("line 99")).not.toBeInTheDocument();
+    expect(screen.getByText("line 599")).toBeInTheDocument();
+  });
+
   it("resumes a paused stage and pauses the batch", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(

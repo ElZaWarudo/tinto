@@ -4794,8 +4794,12 @@ function JobRow({
   );
 }
 
+/** The latest log entries a job shows: a check's whole output (a test suite
+ * prints hundreds of thousands of lines) froze WebKit drawing it. */
+const MAX_LOG_ENTRIES = 500;
+
 function JobLog({ job }: { job: DeliveryJob }) {
-  const [log, setLog] = useState<DeliveryJobLog | null>(null);
+  const [log, setLog] = useState<(DeliveryJobLog & { skipped: number }) | null>(null);
   const live = isOpen(job);
   const nextLine = useRef(0);
   useEffect(() => {
@@ -4805,11 +4809,16 @@ function JobLog({ job }: { job: DeliveryJob }) {
         const chunk = await getDeliveryJobLog(job.id, nextLine.current);
         if (!active) return;
         nextLine.current = chunk.next_line;
-        setLog((previous) => ({
-          entries: [...(previous?.entries ?? []), ...chunk.entries],
-          next_line: chunk.next_line,
-          stderr_tail: chunk.stderr_tail,
-        }));
+        setLog((previous) => {
+          const entries = [...(previous?.entries ?? []), ...chunk.entries];
+          const over = Math.max(0, entries.length - MAX_LOG_ENTRIES);
+          return {
+            entries: entries.slice(over),
+            skipped: (previous?.skipped ?? 0) + over,
+            next_line: chunk.next_line,
+            stderr_tail: chunk.stderr_tail,
+          };
+        });
       } catch {
         // The log appears once the job has started.
       }
@@ -4825,6 +4834,11 @@ function JobLog({ job }: { job: DeliveryJob }) {
   return (
     <details className="delivery-log" open={live}>
       <summary>Registro</summary>
+      {log.skipped > 0 && (
+        <p className="delivery-job__note">
+          {log.skipped} líneas anteriores no se muestran; las últimas {MAX_LOG_ENTRIES} sí.
+        </p>
+      )}
       <ol>
         {log.entries.map((entry, index) => (
           <li key={index} className={`delivery-log__entry delivery-log__entry--${entry.kind}`}>
