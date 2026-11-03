@@ -2500,6 +2500,7 @@ impl DeliveryService {
                         "Separas a mano el merge de esos cambios; después una etapa verifica el resultado y las comprobaciones de Tinto vuelven a correr.".to_string(),
                     ),
                 ],
+                recommendation: None,
                 text: String::new(),
                 command: None,
                 undo: String::new(),

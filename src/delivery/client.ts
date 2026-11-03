@@ -361,6 +361,10 @@ export const answerDeliveryDecision = (decisionId: string, answer: string) =>
 export const renewDeliveryPermissions = (taskId: string) =>
   invoke<DeliveryDecision[]>("delivery_renew_permissions", { taskId });
 
+/** Asks the coordinator about a decision; its reply arrives in the decision. */
+export const askDeliveryDecision = (decisionId: string, question: string) =>
+  invoke<DeliveryDecision>("delivery_ask_decision", { decisionId, question });
+
 /** Takes back a decision nobody answered yet. */
 export const withdrawDeliveryDecision = (decisionId: string) =>
   invoke<void>("delivery_withdraw_decision", { decisionId });

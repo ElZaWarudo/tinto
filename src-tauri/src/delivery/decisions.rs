@@ -7,6 +7,11 @@
 //! - Answered decisions go into every later job's instructions, and an
 //!   allowed permission's command joins the commands its QA job may run.
 //! - "Accept recommended" settles choices and texts, never permissions.
+//! - A recommended option comes with why, on what it rests and what would
+//!   change it, so the user can weigh it, also once settled without them.
+//! - The user may ask the coordinator about a decision before answering it;
+//!   while the question waits for its reply, nothing answers the decision
+//!   in their place.
 //! - Once the coordinator ends a run's brainstorm, its decisions settle as
 //!   they are asked: choices with their recommendation, texts as proposed,
 //!   and permissions allowed. A choice without a recommendation is refused,
@@ -18,8 +23,8 @@
 //!   task's own code is allowed for the worktree content of that moment.
 
 use super::model::{
-    DeliveryDecision, DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionStatus,
-    DeliveryFrozenScript, DeliveryTask,
+    DeliveryDecision, DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionQuestion,
+    DeliveryDecisionStatus, DeliveryFrozenScript, DeliveryRecommendation, DeliveryTask,
 };
 use super::service::DeliveryService;
 use super::tasks::plain_path;
@@ -30,13 +35,21 @@ pub const DENIED: &str = "denied";
 /// Who answered a decision settled after its run's brainstorm ended.
 pub const AUTO: &str = "auto";
 
+/// The user asked about it and the coordinator has not replied yet.
+fn has_open_question(decision: &DeliveryDecision) -> bool {
+    decision
+        .questions
+        .iter()
+        .any(|question| question.reply.is_none())
+}
+
 /// The answer Tinto gives in the user's place: the recommended option of a
 /// choice, the text as proposed, and, when `permissions`, allowed.
 fn recommended_answer(
     decision: &DeliveryDecision,
     takes: impl Fn(&DeliveryDecision) -> bool,
 ) -> Option<String> {
-    if !takes(decision) {
+    if !takes(decision) || has_open_question(decision) {
         return None;
     }
     match decision.kind {
@@ -58,6 +71,8 @@ pub struct NewDecision {
     /// The code the question is about: review comments or worktree lines.
     pub references: Vec<super::threads::NewReference>,
     pub options: Vec<DeliveryDecisionOption>,
+    /// `choice`: required with a recommended option, refused without one.
+    pub recommendation: Option<DeliveryRecommendation>,
     pub text: String,
     pub command: Option<String>,
     pub undo: String,
@@ -139,6 +154,9 @@ fn validate(decision: &NewDecision) -> Result<(), DeliveryError> {
             _ => {}
         }
     }
+    if decision.recommendation.is_some() && decision.kind != DeliveryDecisionKind::Choice {
+        return Err(invalid("solo una elección lleva recommendation"));
+    }
     match decision.kind {
         DeliveryDecisionKind::Choice => {
             if !(2..=4).contains(&decision.options.len()) {
@@ -151,14 +169,31 @@ fn validate(decision: &NewDecision) -> Result<(), DeliveryError> {
             {
                 return Err(invalid("cada opción necesita un texto"));
             }
-            if decision
+            let recommended = decision
                 .options
                 .iter()
                 .filter(|option| option.recommended)
-                .count()
-                > 1
-            {
+                .count();
+            if recommended > 1 {
                 return Err(invalid("solo una opción puede ser la recomendada"));
+            }
+            match &decision.recommendation {
+                None if recommended == 1 => {
+                    return Err(invalid(
+                        "la opción recomendada necesita su recommendation: why, basis y unknown",
+                    ))
+                }
+                Some(_) if recommended == 0 => {
+                    return Err(invalid(
+                        "recommendation acompaña a una opción recommended: marca cuál recomiendas",
+                    ))
+                }
+                Some(reason) if reason.why.trim().is_empty() || reason.unknown.trim().is_empty() => {
+                    return Err(invalid(
+                        "recommendation necesita why (por qué esa opción) y unknown (qué no sabes o qué la cambiaría)",
+                    ))
+                }
+                _ => {}
             }
         }
         DeliveryDecisionKind::Text => {
@@ -530,6 +565,14 @@ impl DeliveryService {
                 decided_at_ms: (!decision.blocking).then_some(now),
                 blocking: decision.blocking,
                 options: decision.options,
+                recommendation: decision
+                    .recommendation
+                    .map(|reason| DeliveryRecommendation {
+                        why: reason.why.trim().to_string(),
+                        unknown: reason.unknown.trim().to_string(),
+                        ..reason
+                    }),
+                questions: Vec::new(),
                 requested_by: requested_by.to_string(),
                 requested_at_ms: now,
             })
@@ -718,6 +761,91 @@ impl DeliveryService {
         Ok(())
     }
 
+    /// The user asks the coordinator about a decision they can still answer
+    /// or change. One question at a time: the next waits for the reply.
+    pub fn ask_decision(
+        &self,
+        decision_id: &str,
+        question: &str,
+    ) -> Result<DeliveryDecision, DeliveryError> {
+        let store = self.store()?;
+        let mut decision = store
+            .decision(decision_id)?
+            .ok_or_else(|| DeliveryError::not_found("la decisión", decision_id))?;
+        let question = question.trim();
+        if question.is_empty() {
+            return Err(invalid("escribe la pregunta"));
+        }
+        if decision.status != DeliveryDecisionStatus::Pending && decision.blocking {
+            return Err(DeliveryError::new(
+                "decision_answered",
+                "esta decisión ya tiene respuesta definitiva",
+            ));
+        }
+        if has_open_question(&decision) {
+            return Err(DeliveryError::new(
+                "question_open",
+                "el coordinador aún no contestó tu pregunta anterior",
+            ));
+        }
+        decision.questions.push(DeliveryDecisionQuestion {
+            question: question.to_string(),
+            asked_at_ms: now_ms(),
+            reply: None,
+            replied_at_ms: None,
+        });
+        store.put_decision(&decision)?;
+        store.record_event(
+            now_ms(),
+            "decision_question",
+            Some(&decision.task_id),
+            None,
+            &decision.id,
+        )?;
+        drop(store);
+        self.notify();
+        Ok(decision)
+    }
+
+    /// The coordinator's reply to the user's open question on a decision.
+    pub fn reply_decision(
+        &self,
+        decision_id: &str,
+        reply: &str,
+    ) -> Result<DeliveryDecision, DeliveryError> {
+        let store = self.store()?;
+        let mut decision = store
+            .decision(decision_id)?
+            .ok_or_else(|| DeliveryError::not_found("la decisión", decision_id))?;
+        let reply = reply.trim();
+        if reply.is_empty() {
+            return Err(invalid("la respuesta está vacía"));
+        }
+        let open = decision
+            .questions
+            .iter_mut()
+            .find(|question| question.reply.is_none())
+            .ok_or_else(|| {
+                DeliveryError::new(
+                    "no_open_question",
+                    "el usuario no tiene ninguna pregunta abierta sobre esta decisión",
+                )
+            })?;
+        open.reply = Some(reply.to_string());
+        open.replied_at_ms = Some(now_ms());
+        store.put_decision(&decision)?;
+        store.record_event(
+            now_ms(),
+            "decision_replied",
+            Some(&decision.task_id),
+            None,
+            &decision.id,
+        )?;
+        drop(store);
+        self.notify();
+        Ok(decision)
+    }
+
     /// The user allows again, for the worktree as it is now, every allowed
     /// permission of the task that runs its code (it changed since).
     pub fn renew_permissions(
@@ -776,7 +904,8 @@ impl DeliveryService {
     }
 
     /// Answers every pending choice with its recommended option and approves
-    /// every pending text as proposed. Permissions stay pending.
+    /// every pending text as proposed. Permissions stay pending, and so does
+    /// a decision whose question the coordinator has not replied to.
     pub fn accept_recommended(
         &self,
         task_id: &str,

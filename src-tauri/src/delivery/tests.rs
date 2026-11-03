@@ -2305,6 +2305,11 @@ fn choice(question: &str, recommended: Option<usize>) -> super::decisions::NewDe
                 recommended: recommended == Some(index),
             })
             .collect(),
+        recommendation: recommended.map(|_| super::model::DeliveryRecommendation {
+            why: "lo pide el issue".into(),
+            basis: super::model::DeliveryRecommendationBasis::Code,
+            unknown: "si hay usuarios de Codex".into(),
+        }),
         text: String::new(),
         command: None,
         undo: String::new(),
@@ -2324,6 +2329,7 @@ fn permission(command: &str) -> super::decisions::NewDecision {
         detail: String::new(),
         references: Vec::new(),
         options: Vec::new(),
+        recommendation: None,
         text: String::new(),
         command: Some(command.into()),
         undo: "agentos skills uninstall demo".into(),
@@ -2348,7 +2354,22 @@ fn decisions_are_validated() {
     no_undo.undo.clear();
     let mut empty_text = choice("Texto del aviso", None);
     empty_text.kind = DeliveryDecisionKind::Text;
-    for bad in [one_option, two_recommended, no_undo, empty_text] {
+    // A recommendation says why; a reason goes with a recommended option.
+    let mut unexplained = choice("¿Codex?", Some(0));
+    unexplained.recommendation = None;
+    let mut no_unknown = choice("¿Codex?", Some(0));
+    no_unknown.recommendation.as_mut().unwrap().unknown = " ".into();
+    let mut reason_alone = choice("¿Codex?", None);
+    reason_alone.recommendation = choice("¿Codex?", Some(0)).recommendation;
+    for bad in [
+        one_option,
+        two_recommended,
+        no_undo,
+        empty_text,
+        unexplained,
+        no_unknown,
+        reason_alone,
+    ] {
         let error = h
             .service
             .request_decisions(&task.id, vec![bad], "coord")
@@ -2518,7 +2539,7 @@ fn a_coordinator_asks_for_decisions_over_mcp() {
             {"kind": "choice", "question": "¿Codex también?", "options": [
                 {"label": "Sí", "consequence": "Instala en los dos", "recommended": true},
                 {"label": "No", "consequence": "Solo Claude"}
-            ]},
+            ], "recommendation": {"why": "w", "basis": "code", "unknown": "u"}},
             {"kind": "permission", "question": "¿Escribir en ~/.claude?", "undo": "borrar la carpeta", "command": "agentos skills install", "read_dirs": ["C:/Users/me/.claude/skills"]}
         ]}),
     );
@@ -6459,7 +6480,7 @@ fn after_the_brainstorm_decisions_settle_as_they_are_asked() {
     };
     let recommended = json!({"kind": "choice", "question": "¿Aviso?", "options": [
         {"label": "Sí", "consequence": "a"},
-        {"label": "No", "consequence": "b", "recommended": true}]});
+        {"label": "No", "consequence": "b", "recommended": true}], "recommendation": {"why": "w", "basis": "code", "unknown": "u"}});
     let unrecommended = json!({"kind": "choice", "question": "¿Sin recomendación?", "options": [
         {"label": "A", "consequence": "a"}, {"label": "B", "consequence": "b"}]});
     let permission = json!({"kind": "permission", "question": "¿Instalar?", "undo": "desinstalar", "command": "agentos skills install"});
@@ -6591,7 +6612,7 @@ fn a_coordinator_accepts_the_recommended_decisions_but_never_a_permission() {
         fenced(json!({"decisions": [
             {"kind": "choice", "question": "¿Aviso?", "options": [
                 {"label": "Sí", "consequence": "a", "recommended": true},
-                {"label": "No", "consequence": "b"}]},
+                {"label": "No", "consequence": "b"}], "recommendation": {"why": "w", "basis": "code", "unknown": "u"}},
             {"kind": "choice", "question": "¿Sin recomendación?", "options": [
                 {"label": "A", "consequence": "a"}, {"label": "B", "consequence": "b"}]},
             {"kind": "text", "question": "Mensaje", "text": "Hecho."},
@@ -6626,6 +6647,65 @@ fn a_coordinator_accepts_the_recommended_decisions_but_never_a_permission() {
         json!({"run_id": run_id, "owner": "other", "generation": 1, "task_id": task_id}),
     );
     assert_eq!(stale["isError"], true);
+}
+
+#[test]
+fn nothing_answers_a_decision_the_user_asked_about_until_the_coordinator_replies() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("D-6");
+    let asked = h
+        .service
+        .request_decisions(&task_id, vec![choice("¿Codex?", Some(0))], "coord")
+        .unwrap();
+    let decision_id = asked[0].id.clone();
+    let cursor = coordinator.write("wait_run", json!({}))["structuredContent"]["cursor"]
+        .as_u64()
+        .unwrap();
+
+    h.service
+        .ask_decision(&decision_id, "¿Por qué también Codex?")
+        .unwrap();
+    assert_eq!(
+        h.service
+            .ask_decision(&decision_id, "¿Y bien?")
+            .unwrap_err()
+            .category,
+        "question_open",
+        "one question at a time"
+    );
+    let woken = coordinator.write(
+        "wait_run",
+        json!({"cursor": cursor, "timeout_seconds": 20, "idle_ok": true}),
+    );
+    let events = woken["structuredContent"]["events"].as_array().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["kind"] == "decision_question"),
+        "{woken}"
+    );
+    assert!(h
+        .service
+        .accept_recommended(&task_id, "user")
+        .unwrap()
+        .is_empty());
+
+    let replied = coordinator.write(
+        "reply_decision",
+        json!({"decision_id": decision_id, "reply": "El issue lo pide."}),
+    );
+    assert_eq!(
+        replied["structuredContent"]["questions"][0]["reply"], "El issue lo pide.",
+        "{replied}"
+    );
+    assert_eq!(
+        h.service
+            .accept_recommended(&task_id, "user")
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -7839,6 +7919,7 @@ fn a_decision_shows_the_review_comment_and_the_code_it_is_about() {
         json!({"task_id": task_id, "decisions": [{
             "kind": "choice", "question": "Which folders may --force replace?",
             "options": [{"label": "Only copies of this skill", "recommended": true}, {"label": "Any"}],
+            "recommendation": {"why": "w", "basis": "code", "unknown": "u"},
             "references": [
                 {"comment_url": "https://github.com/o/r/pull/299#discussion_r2105", "note": "first comment"},
                 {"comment_url": "https://github.com/o/r/pull/299#discussion_r2200"},

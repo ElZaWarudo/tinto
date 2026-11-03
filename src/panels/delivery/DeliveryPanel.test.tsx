@@ -57,6 +57,7 @@ const client = vi.hoisted(() => ({
   openDeliveryJobInAgents: vi.fn(),
   completeDeliveryApproval: vi.fn(),
   answerDeliveryDecision: vi.fn(),
+  askDeliveryDecision: vi.fn(),
   changeDeliveryDecision: vi.fn(),
   renewDeliveryPermissions: vi.fn(),
   withdrawDeliveryDecision: vi.fn(),
@@ -1889,7 +1890,13 @@ describe("DeliveryPanel", () => {
         // The stage due stays known while decisions hold it.
         phases: { t1: phase({ kind: "decisions", count: 2 }, "user", "implementation") },
         decisions: [
-          decision({}),
+          decision({
+            recommendation: {
+              why: "El issue pide los dos clientes",
+              basis: "assumption",
+              unknown: "Si alguien usa solo Claude",
+            },
+          }),
           decision({
             id: "d2",
             kind: "permission",
@@ -1911,6 +1918,7 @@ describe("DeliveryPanel", () => {
     );
     client.answerDeliveryDecision.mockResolvedValue({});
     client.acceptRecommendedDecisions.mockResolvedValue([]);
+    client.askDeliveryDecision.mockResolvedValue({});
     renderPanel();
     // The task shows one line; the cards open in a floating panel.
     await userEvent.click(await screen.findByRole("button", { name: "Responder" }));
@@ -1924,6 +1932,25 @@ describe("DeliveryPanel", () => {
     expect(screen.getByRole("button", { name: "Lanzar implementación" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Otra etapa…" })).toBeDisabled();
     expect(within(pending).getByRole("radio", { name: /Sí/ })).toBeChecked();
+    // The recommendation says why, on what it rests and what would change it.
+    expect(pending).toHaveTextContent("El issue pide los dos clientes");
+    expect(within(pending).getByText("Suposición")).toBeInTheDocument();
+    expect(pending).toHaveTextContent("Si alguien usa solo Claude");
+    await user.click(
+      within(pending).getByRole("button", {
+        name: "Preguntar al coordinador sobre «¿Instalamos también para Codex?»",
+      }),
+    );
+    await user.type(
+      within(pending).getByRole("textbox", {
+        name: "Tu pregunta sobre «¿Instalamos también para Codex?»",
+      }),
+      "¿Quién usa Codex?",
+    );
+    await user.click(within(pending).getByRole("button", { name: "Enviar pregunta" }));
+    await waitFor(() =>
+      expect(client.askDeliveryDecision).toHaveBeenCalledWith("d1", "¿Quién usa Codex?"),
+    );
     expect(within(pending).getByText(/agentos skills install/)).toBeInTheDocument();
     expect(
       within(pending).getByText(/Cómo se deshace: agentos skills uninstall demo/),

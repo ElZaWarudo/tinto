@@ -433,6 +433,26 @@ export interface DeliveryDecisionOption {
   recommended: boolean;
 }
 
+/** What a recommendation rests on: something the coordinator ran, code it
+ *  read, or a guess about what the user wants. */
+export type DeliveryRecommendationBasis = "verified" | "code" | "assumption";
+
+/** Why the coordinator recommends an option of a choice. */
+export interface DeliveryRecommendation {
+  why: string;
+  basis: DeliveryRecommendationBasis;
+  /** What it does not know, or what would change it. */
+  unknown: string;
+}
+
+/** A question the user asked the coordinator about a decision, and its reply. */
+export interface DeliveryDecisionQuestion {
+  question: string;
+  asked_at_ms: number;
+  reply?: string | null;
+  replied_at_ms?: number | null;
+}
+
 /** Something the user settles before a task's stages run; answers are final. */
 export type DeliveryQaProblemStatus =
   "open" | "sent" | "fixing" | "verified" | "still_failing" | "dismissed" | "superseded";
@@ -529,6 +549,10 @@ export interface DeliveryDecision {
   /** The code the question is about, as Tinto read it. */
   references?: DeliveryCodeThread[];
   options: DeliveryDecisionOption[];
+  /** `choice`: why its recommended option. */
+  recommendation?: DeliveryRecommendation | null;
+  /** What the user asked the coordinator about it, oldest first. */
+  questions?: DeliveryDecisionQuestion[];
   /** `text`: the proposed text, exactly as it will be shown. */
   text: string;
   /** `permission`: the command QA may run once allowed. */
