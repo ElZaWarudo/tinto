@@ -4,6 +4,16 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.1.1] - 2026-11-03
+
+### Features
+
+- **delivery:** hold a package's pr until its predecessor merges
+
+### Fixes
+
+- **delivery:** merge ready prs without syncing the rest of the batch
+
 ## [1.1.0] - 2026-10-30
 
 ### Features
