@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 use super::job_process;
 use super::model::{
-    DeliveryAgent, DeliveryJob, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
-    DeliveryLeaseWaiter, DeliveryQueueWait, DeliveryQuota, DeliveryTask, QUOTA_STOP_PERCENT,
+    DeliveryAgent, DeliveryApprovalStatus, DeliveryJob, DeliveryJobStatus, DeliveryLease,
+    DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryQueueWait, DeliveryQuota, DeliveryRung,
+    DeliveryTask, QUOTA_STOP_PERCENT,
 };
 use super::phase::current_setup;
 use super::service::{
@@ -75,6 +76,8 @@ pub(super) struct Queue {
     unprepared: HashSet<String>,
     /// Tasks of a paused batch.
     held: HashSet<String>,
+    /// Tasks about to merge: their merge asked, or their PR approved.
+    merging: HashSet<String>,
     environments: HashMap<PathBuf, RepoEnvironment>,
     quotas: Vec<DeliveryQuota>,
 }
@@ -115,6 +118,26 @@ impl Queue {
             })
             .map(|task| task.id.clone())
             .collect();
+        // What is ready to merge goes before keeping other branches checked.
+        let mut merging: HashSet<String> = store
+            .approvals()?
+            .into_iter()
+            .filter(|approval| {
+                approval.rung == DeliveryRung::Merge
+                    && matches!(
+                        approval.status,
+                        DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                    )
+            })
+            .map(|approval| approval.task_id)
+            .collect();
+        merging.extend(
+            store
+                .prs()?
+                .into_iter()
+                .filter(|pr| pr.is_open() && pr.is_approved())
+                .map(|pr| pr.task_id),
+        );
         Ok(Self {
             quotas: quotas(store)?,
             leases: store.leases()?,
@@ -123,6 +146,7 @@ impl Queue {
             capacity,
             unprepared,
             held,
+            merging,
             environments,
         })
     }
@@ -135,8 +159,9 @@ impl Queue {
             .and_then(|task| self.environments.get(&task.repo))
     }
 
-    /// Each queued job, oldest first, with what holds it (`None`: it starts
-    /// now): one job per task at a time, setup first, the environment for
+    /// Each queued job, those of tasks about to merge first, then oldest
+    /// first, with what holds it (`None`: it starts now): one job per task at
+    /// a time, setup first, the environment for
     /// those that need it, up to the capacity, and exclusive resources in
     /// the order they were asked for. The resources it takes or queues for
     /// are updated in `leases`.
@@ -159,12 +184,14 @@ impl Queue {
             .filter(|job| job.status.is_active() && is_check(job))
             .map(|job| job.id.clone())
             .collect();
-        let mut plan = Vec::new();
-        for job in self
+        let mut queued: Vec<&DeliveryJob> = self
             .jobs
             .iter()
             .filter(|job| job.status == DeliveryJobStatus::Queued)
-        {
+            .collect();
+        queued.sort_by_key(|job| !self.merging.contains(&job.task_id));
+        let mut plan = Vec::new();
+        for job in queued {
             let hold = self.hold(job, &busy, running, &checking, &mut leases, now);
             if hold.is_none() {
                 busy.insert(job.task_id.clone(), job.id.clone());
@@ -595,6 +622,7 @@ mod tests {
             capacity: 8,
             unprepared: HashSet::new(),
             held: HashSet::new(),
+            merging: HashSet::new(),
             environments: HashMap::new(),
             quotas: vec![quota],
         };
@@ -618,5 +646,35 @@ mod tests {
         // Below the threshold, or once the window renewed, it starts.
         assert!(held(&queue(quota(94)), 0).is_empty());
         assert!(held(&near, 10 * 60_000).is_empty());
+    }
+
+    #[test]
+    fn checks_of_a_task_about_to_merge_go_before_older_ones() {
+        let check = |task: &str| {
+            let mut job = sample_job(DeliveryAgent::Shell);
+            job.id = task.into();
+            job.task_id = task.into();
+            job.role = CHECKS_ROLE.into();
+            job
+        };
+        let queue = Queue {
+            tasks: Vec::new(),
+            jobs: vec![check("older"), check("old"), check("merging")],
+            leases: Vec::new(),
+            capacity: 8,
+            unprepared: HashSet::new(),
+            held: HashSet::new(),
+            merging: HashSet::from(["merging".to_string()]),
+            environments: HashMap::new(),
+            quotas: Vec::new(),
+        };
+        let started: Vec<String> = queue
+            .plan(0)
+            .0
+            .into_iter()
+            .filter(|(_, hold)| hold.is_none())
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(started, ["merging", "older"]);
     }
 }

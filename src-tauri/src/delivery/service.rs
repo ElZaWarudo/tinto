@@ -289,7 +289,9 @@ pub struct NewTask {
 
 /// A package as a coordinator asks for it. With `builds_on` (a package
 /// index) it starts from that package's branch and is blocked until that
-/// one reaches `until` (its PR opened, by default).
+/// one reaches `until` (its PR opened, by default). With `pr_after_merge`
+/// it is not blocked unless `until` is given: only its PR waits for that
+/// package to merge.
 #[derive(Debug, Clone)]
 pub struct NewPackage {
     pub index: u32,
@@ -297,6 +299,7 @@ pub struct NewPackage {
     pub title: String,
     pub builds_on: Option<u32>,
     pub until: Option<DeliveryTaskMilestone>,
+    pub pr_after_merge: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -910,6 +913,13 @@ impl DeliveryService {
             })
             .map(|task| task.id.clone())
             .collect();
+        let pr_waits: BTreeMap<String, String> = tasks
+            .iter()
+            .filter_map(|task| {
+                super::phase::pr_predecessor(task, &tasks)
+                    .map(|other| (task.id.clone(), other.label()))
+            })
+            .collect();
         // Where each task is, from the same facts the view gets.
         let facts = super::phase::Facts {
             runs: &runs,
@@ -925,6 +935,7 @@ impl DeliveryService {
             releasable_runs: &releasable_runs,
             review_optional: &review_optional,
             no_qa: &no_qa,
+            pr_waits: &pr_waits,
         };
         let phases = tasks
             .iter()
@@ -1161,14 +1172,21 @@ impl DeliveryService {
             .filter(|branch| !branch.trim().is_empty())
             .map(|branch| branch.trim().to_string())
             .unwrap_or_else(|| tasks::default_branch(&leaf));
-        let until = package
-            .and_then(|package| package.until)
-            .unwrap_or(DeliveryTaskMilestone::PrOpened);
+        // A package whose PR waits for the one it builds on starts at once.
+        let until = match package {
+            Some(package) if package.pr_after_merge => package.until,
+            _ => Some(
+                package
+                    .and_then(|package| package.until)
+                    .unwrap_or(DeliveryTaskMilestone::PrOpened),
+            ),
+        };
         let package = request.package.map(|package| DeliveryPackage {
             index: package.index,
             of: package.of,
             title: package.title.trim().to_string(),
             builds_on: builds_on.as_ref().map(|other| other.id.clone()),
+            pr_after_merge: package.pr_after_merge,
         });
         if place == Place::Native {
             std::fs::create_dir_all(&root).map_err(DeliveryError::io)?;
@@ -1239,7 +1257,7 @@ impl DeliveryService {
         }
         // Its stages wait for the package it builds on (after the bootstrap:
         // a blocked task takes no job).
-        if let Some(other) = builds_on {
+        if let (Some(other), Some(until)) = (builds_on, until) {
             let index = other.package.as_ref().map_or(0, |package| package.index);
             return self.set_blockers(
                 &task.id,
@@ -1649,7 +1667,7 @@ impl DeliveryService {
     ) -> Result<DeliveryTask, DeliveryError> {
         validate_package(package)?;
         let invalid = |message: String| DeliveryError::new("invalid_package", message);
-        if package.builds_on.is_some() || package.until.is_some() {
+        if package.builds_on.is_some() || package.until.is_some() || package.pr_after_merge {
             return Err(invalid(
                 "una tarea que ya existe conserva su base: package solo admite index, of y title"
                     .into(),
@@ -1668,6 +1686,7 @@ impl DeliveryService {
             of: package.of,
             title: package.title.trim().to_string(),
             builds_on: None,
+            pr_after_merge: false,
         });
         task.updated_at_ms = now_ms();
         let store = self.store()?;
@@ -2057,6 +2076,22 @@ impl DeliveryService {
         }
         if job.role == IMPLEMENTATION_ROLE {
             self.end_brainstorm_once_implementing(&task)?;
+        }
+        // A check running while the setup changes what it runs on (a
+        // dependency install) would fail on it: it starts again once the
+        // setup passed. Queued ones already wait for it.
+        if job.agent == DeliveryAgent::Shell && job.role == SETUP_ROLE {
+            let jobs = self.store()?.task_jobs(&job.task_id)?;
+            for check in jobs {
+                if is_check(&check)
+                    && check.status.is_active()
+                    && self
+                        .dispatch(check_job(&check.task_id, check.prompt))
+                        .is_ok()
+                {
+                    let _ = self.cancel(&check.id);
+                }
+            }
         }
         self.tick();
         Ok(job)
@@ -3649,30 +3684,65 @@ impl DeliveryService {
             .filter_map(|check| super::phase::check_scope(check))
             .collect();
         for check in task.checks.clone() {
-            let ran = jobs.iter().any(|job| {
-                job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE && job.prompt == check
-            });
+            let runs: Vec<&DeliveryJob> = jobs
+                .iter()
+                .filter(|job| is_check(job) && job.prompt == check)
+                .collect();
+            // One cancelled before it ended (a sync) never verified the code.
+            let ran = runs
+                .last()
+                .is_some_and(|job| job.status != DeliveryJobStatus::Cancelled);
             if ran && stage.is_some_and(|stage| !super::phase::touches(&check, &scopes, stage)) {
                 continue;
             }
-            self.dispatch(NewJob {
-                task_id: task_id.to_string(),
-                role: CHECKS_ROLE.to_string(),
-                agent: DeliveryAgent::Shell,
-                model: None,
-                access: DeliveryAccess::Workspace,
-                prompt: check,
-                writes: None,
-                lease: None,
-                timeout_minutes: None,
-                reasoning: None,
-                platform: None,
-                read_dirs: Vec::new(),
-                stage_default: false,
-                needs_environment: false,
-            })?;
+            // A queued run has not started: it verifies the code as it is now,
+            // in its place. A running one is on the code before: the new run
+            // replaces it.
+            if runs
+                .iter()
+                .any(|job| job.status == DeliveryJobStatus::Queued)
+            {
+                continue;
+            }
+            self.dispatch(check_job(task_id, check))?;
+            for job in runs.iter().filter(|job| job.status.is_active()) {
+                let _ = self.cancel(&job.id);
+            }
         }
         Ok(())
+    }
+
+    /// Queues again the task's checks whose latest run was cancelled.
+    pub(super) fn requeue_cancelled_checks(&self, task_id: &str) -> Result<(), DeliveryError> {
+        let task = self.task(task_id)?;
+        let jobs = self.store()?.task_jobs(task_id)?;
+        for check in task.checks {
+            let cancelled = jobs
+                .iter()
+                .rev()
+                .find(|job| is_check(job) && job.prompt == check)
+                .is_some_and(|job| job.status == DeliveryJobStatus::Cancelled);
+            if cancelled {
+                self.dispatch(check_job(task_id, check))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Cancels the task's open checks; true while one still runs (its
+    /// process ends a moment later).
+    pub(super) fn cancel_open_checks(&self, task_id: &str) -> Result<bool, DeliveryError> {
+        let jobs = self.store()?.task_jobs(task_id)?;
+        for job in jobs {
+            if is_check(&job) && job.status.is_open() {
+                let _ = self.cancel(&job.id);
+            }
+        }
+        Ok(self
+            .store()?
+            .task_jobs(task_id)?
+            .iter()
+            .any(|job| is_check(job) && job.status.is_active()))
     }
 
     /// The coordinator asks for the task's checks on the code as it is now,
@@ -4197,6 +4267,30 @@ impl DeliveryService {
     }
 }
 
+fn is_check(job: &DeliveryJob) -> bool {
+    job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE
+}
+
+/// One of the task's checks, as the shell job that runs it.
+fn check_job(task_id: &str, command: String) -> NewJob {
+    NewJob {
+        task_id: task_id.to_string(),
+        role: CHECKS_ROLE.to_string(),
+        agent: DeliveryAgent::Shell,
+        model: None,
+        access: DeliveryAccess::Workspace,
+        prompt: command,
+        writes: None,
+        lease: None,
+        timeout_minutes: None,
+        reasoning: None,
+        platform: None,
+        read_dirs: Vec::new(),
+        stage_default: false,
+        needs_environment: false,
+    }
+}
+
 /// Whether a finished job's result can advance its task.
 fn result_state(
     store: &DeliveryStore,
@@ -4413,6 +4507,12 @@ fn validate_package(package: &NewPackage) -> Result<(), DeliveryError> {
     {
         return Err(invalid(
             "un paquete solo construye sobre uno anterior".into(),
+        ));
+    }
+    if package.pr_after_merge && package.builds_on.is_none() {
+        return Err(invalid(
+            "pr_after: merged espera al paquete sobre el que construye: da también builds_on"
+                .into(),
         ));
     }
     if package.title.trim().chars().count() > 60 {

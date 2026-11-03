@@ -1249,8 +1249,11 @@ impl DeliveryService {
                 ));
             }
             DeliveryRung::Push => self.check_base_merged(&task)?,
+            DeliveryRung::Pr => self.package_pr_refusal(&task)?,
             DeliveryRung::Sync => {
-                self.sync_prerequisites(&task)?;
+                // A sync runs as it is asked; a restack waits for the user,
+                // who may reject it.
+                self.sync_prerequisites(&task, task.restack_from.is_none())?;
             }
             DeliveryRung::Merge => {
                 // The base's own history picks the method when none is asked.
@@ -1609,6 +1612,11 @@ impl DeliveryService {
             && !self.same_tree(&approval.task_id, approval.before.as_deref())?
         {
             self.queue_task_checks(&approval.task_id, None)?;
+        } else if approval.rung == DeliveryRung::Sync && approval.conflicts.is_empty() {
+            // Nothing changed, or it failed: the checks it cancelled run
+            // again. With conflicts they run after the stage that resolves
+            // them.
+            self.requeue_cancelled_checks(&approval.task_id)?;
         }
         if let Some(found) = opened {
             let task = self.task(&approval.task_id)?;
@@ -1916,37 +1924,6 @@ impl DeliveryService {
         self.auto_sync(&self.task(&pr.task_id)?)
     }
 
-    /// Once a PR of the batch merges, every other open PR of the repo into
-    /// the same base brings it in at once, while the conflicts are few and
-    /// fresh, instead of when its own PR is ready.
-    pub(super) fn sync_after_merge(
-        &self,
-        merged: &super::prs::DeliveryPr,
-    ) -> Result<(), DeliveryError> {
-        let Some(base) = merged.base.as_deref() else {
-            return Ok(());
-        };
-        let repo = self.task(&merged.task_id)?.repo;
-        let store = self.store()?;
-        let open: Vec<DeliveryTask> = store
-            .tasks()?
-            .into_iter()
-            .filter(|task| task.id != merged.task_id && task.repo == repo)
-            .filter(|task| {
-                store
-                    .pr(&task.id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|pr| pr.is_open() && pr.base.as_deref() == Some(base))
-            })
-            .collect();
-        drop(store);
-        for task in open {
-            self.auto_sync(&task)?;
-        }
-        Ok(())
-    }
-
     /// Asks the sync of the task's base, which runs as it is asked; one that
     /// cannot start now is only logged.
     fn auto_sync(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
@@ -2170,8 +2147,13 @@ impl DeliveryService {
 
     /// A sync starts from a clean worktree no job is changing, with no merge
     /// in progress and a base, fetched now, that is not merged yet. Returns
-    /// the base's name and commit.
-    fn sync_prerequisites(&self, task: &DeliveryTask) -> Result<(String, String), DeliveryError> {
+    /// the base's name and commit. `running`: it runs now, so the task's
+    /// checks give way.
+    fn sync_prerequisites(
+        &self,
+        task: &DeliveryTask,
+        running: bool,
+    ) -> Result<(String, String), DeliveryError> {
         let place = Place::of(task.distro.as_deref());
         let refuse = |category: &str, message: &str| Err(DeliveryError::new(category, message));
         if tasks::merge_head(place, &task.worktree).is_some() {
@@ -2190,11 +2172,20 @@ impl DeliveryService {
             .store()?
             .task_jobs(&task.id)?
             .iter()
-            .any(|job| job.status.is_open())
+            .any(|job| job.status.is_open() && job.role != super::service::CHECKS_ROLE)
         {
             return refuse(
                 "job_running",
                 "un job de la tarea está en curso; sincroniza cuando termine",
+            );
+        }
+        // Its checks verify the code before the sync: they give way, and run
+        // again on what it leaves. None may still run while git changes the
+        // worktree. Only once it runs: a sync asked but not run leaves them.
+        if running && self.cancel_open_checks(&task.id)? {
+            return refuse(
+                "job_running",
+                "una comprobación de la tarea se está cancelando para sincronizar: pide la sincronización de nuevo en un momento",
             );
         }
         let base = self.sync_base(task)?;
@@ -2230,7 +2221,7 @@ impl DeliveryService {
         task: &DeliveryTask,
         approval: &mut DeliveryApproval,
     ) -> Result<String, DeliveryError> {
-        let (name, commit) = self.sync_prerequisites(task)?;
+        let (name, commit) = self.sync_prerequisites(task, true)?;
         let task = &self.task(&task.id)?;
         let place = Place::of(task.distro.as_deref());
         approval.merge_head = Some(commit.clone());
@@ -2997,7 +2988,9 @@ impl DeliveryService {
 
     /// A merge needs the followed PR open, approved (unless the repo merges
     /// without a review), without conflicts and with its checks finished and
-    /// green. GitHub still enforces its own rules.
+    /// green. A base that moved since is no reason to wait: merging what is
+    /// ready goes before keeping other branches up to date, and GitHub still
+    /// enforces its own rules (a branch protection that wants it up to date).
     fn merge_prerequisites(
         &self,
         task: &DeliveryTask,
@@ -3052,25 +3045,6 @@ impl DeliveryService {
         };
         if let Some(message) = blocker {
             return Err(DeliveryError::new("pr_not_ready", message));
-        }
-        // CI passed on a branch without the base's latest commits: what
-        // merges was never tested together.
-        let place = Place::of(task.distro.as_deref());
-        let base = self.sync_base(task)?;
-        // Offline, the base as last fetched; unknown, nothing to compare.
-        let tip = tasks::base_tip(place, &task.worktree, &base, true)
-            .or_else(|_| tasks::base_tip(place, &task.worktree, &base, false));
-        let Ok((name, commit)) = tip else {
-            return Ok(());
-        };
-        if !tasks::on_branch(place, &task.worktree, &commit) {
-            return Err(DeliveryError::new(
-                "base_moved",
-                format!(
-                    "{name} avanzó ({}) desde la última CI en verde: sincroniza la rama, publícala y espera a que la CI pase de nuevo",
-                    short(&commit)
-                ),
-            ));
         }
         Ok(())
     }

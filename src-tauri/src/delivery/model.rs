@@ -93,6 +93,12 @@ pub struct DeliveryPackage {
     /// targets that branch until that package merges.
     #[serde(default)]
     pub builds_on: Option<String>,
+    /// Created with `pr_after: merged`: its stages, commit and push run on
+    /// that package's branch, but its PR opens only once that one merged,
+    /// restacked onto the base it merged into and going there (no stacked
+    /// PR).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pr_after_merge: bool,
 }
 
 impl DeliveryPackage {
