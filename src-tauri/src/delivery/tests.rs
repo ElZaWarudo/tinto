@@ -3001,6 +3001,7 @@ fn package(
             title: format!("Parte {index}"),
             builds_on,
             until: None,
+            pr_after_merge: false,
         }),
     })
 }
@@ -3142,6 +3143,7 @@ fn a_task_created_as_a_whole_issue_becomes_its_first_package() {
         title: format!("Parte {index}"),
         builds_on,
         until: None,
+        pr_after_merge: false,
     };
     // An existing task keeps its base: it cannot build on another.
     let refused = h
@@ -3307,6 +3309,159 @@ fn a_package_merges_after_the_one_it_builds_on_into_that_ones_base() {
     assert!(events.iter().any(|event| event.kind == "package_retargeted"
         && event.task_id.as_deref() == Some(second.id.as_str())));
     h.service.request_approval(merge).unwrap();
+}
+
+#[test]
+fn a_package_whose_pr_waits_for_its_predecessor_works_meanwhile_and_opens_it_on_the_base() {
+    use super::phase::{Phase, Waiter};
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let coordinator = Coordinator::start(&h);
+    let set_pr_autonomy = |on: bool| {
+        let store = h.service.store().unwrap();
+        let mut settings = store.repo_settings(h.repo.path()).unwrap();
+        settings.autonomy.pr = on;
+        store.set_repo_settings(h.repo.path(), &settings).unwrap();
+    };
+    let create = |index: u32| {
+        h.service
+            .create_task(NewTask {
+                repo: h.repo.path().to_path_buf(),
+                distro: None,
+                key: "K-70".into(),
+                title: "K-70".into(),
+                read_dirs: Vec::new(),
+                base: None,
+                branch: None,
+                run_id: Some(coordinator.run_id.clone()),
+                package: Some(NewPackage {
+                    index,
+                    of: 3,
+                    title: format!("Parte {index}"),
+                    builds_on: (index > 1).then_some(index - 1),
+                    until: None,
+                    pr_after_merge: index > 1,
+                }),
+            })
+            .unwrap()
+    };
+    let ask_pr = |task: &DeliveryTask| {
+        h.service
+            .request_approval(step(task, DeliveryRung::Pr, "PR"))
+    };
+    let phase = |task: &DeliveryTask| h.service.overview().unwrap().phases[&task.id].clone();
+    // Package 1 squash-merges into main: main gets its files in one commit.
+    let squash_into_main = |task: &DeliveryTask, files: &[&str]| {
+        let repo = h.repo.path();
+        for name in files {
+            std::fs::write(repo.join(name), format!("{name}\n")).unwrap();
+        }
+        git(repo, &["add", "--all"]);
+        git(
+            repo,
+            &["commit", "-q", "-m", &format!("{} (#1)", task.label())],
+        );
+        git(repo, &["push", "-q", "origin", "main"]);
+        let mut merge = executed_step(&task.id, "merge");
+        merge.merge_method = Some("squash".into());
+        h.service.store().unwrap().put_approval(&merge).unwrap();
+    };
+    // Tinto restacks it on its own, then the coordinator publishes it.
+    let restack_and_push = |task: &DeliveryTask| {
+        assert_eq!(
+            phase(task).phase,
+            Phase::NextStep {
+                rung: DeliveryRung::Sync,
+                stage: None
+            }
+        );
+        assert_eq!(ask_pr(task).unwrap_err().category, "pr_waits_predecessor");
+        h.service.advance_ladders().unwrap();
+        let task = h.service.task(&task.id).unwrap();
+        assert_eq!(
+            (task.base_ref.as_str(), task.restack_from.as_deref()),
+            ("main", None)
+        );
+        assert_eq!(
+            in_worktree(&task, &["rev-parse", "HEAD^"]),
+            in_worktree(&task, &["rev-parse", "origin/main"])
+        );
+        // Past the brainstorm the push runs as it is asked.
+        let push = h
+            .service
+            .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+            .unwrap();
+        assert_eq!(
+            push.status,
+            DeliveryApprovalStatus::Executed,
+            "{:?}",
+            push.outcome
+        );
+        task
+    };
+
+    let first = create(1);
+    write_files(&first, &["one.txt"]);
+    commit_outside(&first, "one");
+    git(&first.worktree, &["push", "-q", "origin", &first.branch]);
+    // Packages 2 and 3 start at once and publish while package 1 is open.
+    let second = create(2);
+    assert!(second.blockers.is_empty());
+    write_files(&second, &["two.txt"]);
+    commit_and_push(&h, &second, "Add two");
+    let third = create(3);
+    write_files(&third, &["three.txt"]);
+    commit_and_push(&h, &third, "Add three");
+    for (task, waits_for) in [(&second, "K-70 · 1/3"), (&third, "K-70 · 2/3")] {
+        assert_eq!(ask_pr(task).unwrap_err().category, "pr_waits_predecessor");
+        let phase = phase(task);
+        assert_eq!(
+            phase.phase,
+            Phase::PrWaitsPredecessor {
+                package: waits_for.into()
+            }
+        );
+        assert_eq!(phase.waits_on, Waiter::Dependency);
+    }
+    // Nor does Tinto ask it on its own.
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    set_pr_autonomy(true);
+    h.service.advance_ladders().unwrap();
+    let prs = || {
+        h.service
+            .store()
+            .unwrap()
+            .approvals()
+            .unwrap()
+            .into_iter()
+            .filter(|approval| approval.rung == DeliveryRung::Pr)
+            .count()
+    };
+    assert_eq!(prs(), 0);
+    set_pr_autonomy(false);
+
+    // Package 1 merges: package 2 goes onto main with only its own commit,
+    // and its PR goes there.
+    squash_into_main(&first, &["one.txt"]);
+    assert_eq!(h.service.retarget_packages().unwrap(), 1);
+    let second = restack_and_push(&second);
+    ask_pr(&second).unwrap();
+    assert_eq!(
+        phase(&third).phase,
+        Phase::PrWaitsPredecessor {
+            package: "K-70 · 2/3".into()
+        }
+    );
+
+    // Then package 3, though package 2 was rewritten under it.
+    squash_into_main(&second, &["two.txt"]);
+    assert_eq!(h.service.retarget_packages().unwrap(), 1);
+    let third = restack_and_push(&third);
+    assert_eq!(
+        in_worktree(&third, &["diff", "--name-only", "origin/main", "HEAD"]),
+        "three.txt"
+    );
+    ask_pr(&third).unwrap();
 }
 
 fn executed_step(task_id: &str, rung: &str) -> super::model::DeliveryApproval {

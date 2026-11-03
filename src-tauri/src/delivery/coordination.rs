@@ -1249,6 +1249,7 @@ impl DeliveryService {
                 ));
             }
             DeliveryRung::Push => self.check_base_merged(&task)?,
+            DeliveryRung::Pr => self.package_pr_refusal(&task)?,
             DeliveryRung::Sync => {
                 // A sync runs as it is asked; a restack waits for the user,
                 // who may reject it.

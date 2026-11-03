@@ -160,6 +160,11 @@ pub enum Phase {
     MergeMixed {
         mixed_rounds: Vec<u32>,
     },
+    /// Its PR opens once the package it builds on merged (`pr_after:
+    /// merged`); Tinto then restacks it onto that one's base.
+    PrWaitsPredecessor {
+        package: String,
+    },
     /// Its PR was merged on GitHub with the CI of its head not green; a
     /// round fixes it on the base.
     MergedFailingCi {
@@ -238,6 +243,25 @@ pub struct Facts<'a> {
     pub review_optional: &'a HashSet<String>,
     /// Tasks whose repo has no QA configured (see `skips_qa`).
     pub no_qa: &'a HashSet<String>,
+    /// Tasks whose PR waits for a package to merge (see `pr_predecessor`),
+    /// with that package's label.
+    pub pr_waits: &'a BTreeMap<String, String>,
+}
+
+/// The package whose merge a task's PR waits for: with `pr_after: merged`,
+/// the one it builds on, while the task still goes into that one's branch.
+pub fn pr_predecessor<'a>(
+    task: &DeliveryTask,
+    tasks: &'a [DeliveryTask],
+) -> Option<&'a DeliveryTask> {
+    let package = task
+        .package
+        .as_ref()
+        .filter(|package| package.pr_after_merge)?;
+    let other_id = package.builds_on.as_deref()?;
+    tasks.iter().find(|other| {
+        other.id == other_id && other.branch == task.base_ref.trim_start_matches("origin/")
+    })
 }
 
 fn is_open(job: &DeliveryJob) -> bool {
@@ -1285,6 +1309,30 @@ fn phase_in_round(
     if let Some(role) = next.clone() {
         return phase(Phase::NextStage { role }, Waiter::Coordinator);
     }
+    if rung == DeliveryRung::Pr {
+        if let Some(package) = facts.pr_waits.get(&task.id) {
+            return phase(
+                Phase::PrWaitsPredecessor {
+                    package: package.clone(),
+                },
+                Waiter::Dependency,
+            );
+        }
+        // That package merged: the restack onto its base comes first.
+        let gated = task
+            .package
+            .as_ref()
+            .is_some_and(|package| package.pr_after_merge);
+        if gated && task.restack_from.is_some() {
+            return phase(
+                Phase::NextStep {
+                    rung: DeliveryRung::Sync,
+                    stage: None,
+                },
+                Waiter::Coordinator,
+            );
+        }
+    }
     phase(
         Phase::NextStep {
             rung,
@@ -1385,6 +1433,7 @@ mod tests {
                     releasable_runs: &self.releasable_runs,
                     review_optional: &self.review_optional,
                     no_qa: &self.no_qa,
+                    pr_waits: &BTreeMap::new(),
                 },
             )
         }
@@ -1521,6 +1570,7 @@ mod tests {
             releasable_runs: &HashSet::new(),
             review_optional: &HashSet::new(),
             no_qa: &HashSet::new(),
+            pr_waits: &BTreeMap::new(),
         };
         assert!(matches!(
             task_phase(&task, &facts).phase,

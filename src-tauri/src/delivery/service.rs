@@ -289,7 +289,9 @@ pub struct NewTask {
 
 /// A package as a coordinator asks for it. With `builds_on` (a package
 /// index) it starts from that package's branch and is blocked until that
-/// one reaches `until` (its PR opened, by default).
+/// one reaches `until` (its PR opened, by default). With `pr_after_merge`
+/// it is not blocked unless `until` is given: only its PR waits for that
+/// package to merge.
 #[derive(Debug, Clone)]
 pub struct NewPackage {
     pub index: u32,
@@ -297,6 +299,7 @@ pub struct NewPackage {
     pub title: String,
     pub builds_on: Option<u32>,
     pub until: Option<DeliveryTaskMilestone>,
+    pub pr_after_merge: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -910,6 +913,13 @@ impl DeliveryService {
             })
             .map(|task| task.id.clone())
             .collect();
+        let pr_waits: BTreeMap<String, String> = tasks
+            .iter()
+            .filter_map(|task| {
+                super::phase::pr_predecessor(task, &tasks)
+                    .map(|other| (task.id.clone(), other.label()))
+            })
+            .collect();
         // Where each task is, from the same facts the view gets.
         let facts = super::phase::Facts {
             runs: &runs,
@@ -925,6 +935,7 @@ impl DeliveryService {
             releasable_runs: &releasable_runs,
             review_optional: &review_optional,
             no_qa: &no_qa,
+            pr_waits: &pr_waits,
         };
         let phases = tasks
             .iter()
@@ -1161,14 +1172,21 @@ impl DeliveryService {
             .filter(|branch| !branch.trim().is_empty())
             .map(|branch| branch.trim().to_string())
             .unwrap_or_else(|| tasks::default_branch(&leaf));
-        let until = package
-            .and_then(|package| package.until)
-            .unwrap_or(DeliveryTaskMilestone::PrOpened);
+        // A package whose PR waits for the one it builds on starts at once.
+        let until = match package {
+            Some(package) if package.pr_after_merge => package.until,
+            _ => Some(
+                package
+                    .and_then(|package| package.until)
+                    .unwrap_or(DeliveryTaskMilestone::PrOpened),
+            ),
+        };
         let package = request.package.map(|package| DeliveryPackage {
             index: package.index,
             of: package.of,
             title: package.title.trim().to_string(),
             builds_on: builds_on.as_ref().map(|other| other.id.clone()),
+            pr_after_merge: package.pr_after_merge,
         });
         if place == Place::Native {
             std::fs::create_dir_all(&root).map_err(DeliveryError::io)?;
@@ -1239,7 +1257,7 @@ impl DeliveryService {
         }
         // Its stages wait for the package it builds on (after the bootstrap:
         // a blocked task takes no job).
-        if let Some(other) = builds_on {
+        if let (Some(other), Some(until)) = (builds_on, until) {
             let index = other.package.as_ref().map_or(0, |package| package.index);
             return self.set_blockers(
                 &task.id,
@@ -1649,7 +1667,7 @@ impl DeliveryService {
     ) -> Result<DeliveryTask, DeliveryError> {
         validate_package(package)?;
         let invalid = |message: String| DeliveryError::new("invalid_package", message);
-        if package.builds_on.is_some() || package.until.is_some() {
+        if package.builds_on.is_some() || package.until.is_some() || package.pr_after_merge {
             return Err(invalid(
                 "una tarea que ya existe conserva su base: package solo admite index, of y title"
                     .into(),
@@ -1668,6 +1686,7 @@ impl DeliveryService {
             of: package.of,
             title: package.title.trim().to_string(),
             builds_on: None,
+            pr_after_merge: false,
         });
         task.updated_at_ms = now_ms();
         let store = self.store()?;
@@ -4488,6 +4507,12 @@ fn validate_package(package: &NewPackage) -> Result<(), DeliveryError> {
     {
         return Err(invalid(
             "un paquete solo construye sobre uno anterior".into(),
+        ));
+    }
+    if package.pr_after_merge && package.builds_on.is_none() {
+        return Err(invalid(
+            "pr_after: merged espera al paquete sobre el que construye: da también builds_on"
+                .into(),
         ));
     }
     if package.title.trim().chars().count() > 60 {

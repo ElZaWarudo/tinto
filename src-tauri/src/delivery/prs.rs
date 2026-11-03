@@ -1939,7 +1939,15 @@ impl DeliveryService {
             // What the branch has of the merged one: its local branch, else
             // what Tinto last published of it.
             let place = Place::of(other.distro.as_deref());
+            // A package whose PR waited for this one keeps only its own
+            // commits, from the one of that package it builds on: that
+            // package's branch may have been rewritten since (restacked).
+            let gated = task
+                .package
+                .as_ref()
+                .is_some_and(|package| package.pr_after_merge);
             let restack_from = match rewritten {
+                _ if gated => Some(task.base_commit.clone()),
                 false => None,
                 true => tasks::git(
                     place,
@@ -1997,6 +2005,40 @@ impl DeliveryService {
             self.notify();
         }
         Ok(moved)
+    }
+
+    /// Why a package created with `pr_after: merged` cannot open its PR yet:
+    /// the package it builds on has not merged, or it merged and this one
+    /// is not restacked onto its base yet.
+    pub(super) fn package_pr_refusal(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        if !task
+            .package
+            .as_ref()
+            .is_some_and(|package| package.pr_after_merge)
+        {
+            return Ok(());
+        }
+        // It may have merged since Tinto last looked.
+        self.retarget_packages()?;
+        let task = self.task(&task.id)?;
+        let tasks = self.store()?.tasks()?;
+        let refuse = |message: String| Err(DeliveryError::new("pr_waits_predecessor", message));
+        if let Some(other) = super::phase::pr_predecessor(&task, &tasks) {
+            return refuse(format!(
+                "el PR de {} espera a que se fusione {}: sus etapas, commit y push siguen; cuando se fusione, Tinto lo rebasa sobre {} y el PR va allí",
+                task.label(),
+                other.label(),
+                other.base_ref.trim_start_matches("origin/")
+            ));
+        }
+        if task.restack_from.is_some() {
+            let base = task.base_ref.trim_start_matches("origin/");
+            return refuse(format!(
+                "el paquete sobre el que construye {} ya se fusionó: pide antes el paso sync (el restack sobre {base}) y el push; el PR irá a {base}",
+                task.label()
+            ));
+        }
+        Ok(())
     }
 
     /// Why a package's PR cannot merge yet: it still goes into the branch of

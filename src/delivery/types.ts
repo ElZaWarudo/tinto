@@ -164,6 +164,8 @@ export interface DeliveryPackage {
   title: string;
   /** The package (task id) whose branch it starts from. */
   builds_on?: string | null;
+  /** Its PR opens only once `builds_on` merged, against that one's base. */
+  pr_after_merge?: boolean;
 }
 
 /** An issue split into packages, as far as its packages got. */
@@ -759,6 +761,8 @@ export type DeliveryPhase =
   | { kind: "waits_merge_commit"; waiting_round: number | null }
   /** Stages of these rounds changed the code during a merge: the user decides how to commit it. */
   | { kind: "merge_mixed"; mixed_rounds: number[] }
+  /** Its PR opens once this package (its label) merged; Tinto then restacks it. */
+  | { kind: "pr_waits_predecessor"; package: string }
   /** Its PR was merged on GitHub with CI not green; a round fixes it on the base. */
   | { kind: "merged_failing_ci"; number: number; why: string }
   | { kind: "next_stage"; role: string }

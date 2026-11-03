@@ -368,6 +368,8 @@ function packageWhere(overview: DeliveryOverview, taskId: string): string {
       return "con decisiones";
     case "pr":
       return "PR abierto";
+    case "pr_waits_predecessor":
+      return "PR en espera";
     default:
       return "en curso";
   }
@@ -816,6 +818,11 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
       return {
         ...attention("Merge mezclado con otros cambios", "alert"),
         detail: `Cambios de ${phase.mixed_rounds.length === 1 ? "la ronda" : "las rondas"} ${phase.mixed_rounds.join(", ")} quedaron dentro del merge en curso: decide cómo confirmarlos.`,
+      };
+    case "pr_waits_predecessor":
+      return {
+        ...waiting(`PR tras fusionar ${phase.package}`),
+        detail: "Sus etapas, commit y push siguen; cuando se fusione, Tinto la rebasa sobre la base y el PR va allí.",
       };
     case "merged_failing_ci":
       return {
