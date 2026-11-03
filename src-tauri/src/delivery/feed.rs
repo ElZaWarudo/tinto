@@ -44,6 +44,7 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "commit_undone",
     "decision_answered",
     "decision_changed",
+    "decision_question",
     "permission_renewed",
     "settings_approved",
     "settings_rejected",
@@ -69,6 +70,7 @@ const COORDINATOR_EVENTS: &[&str] = &[
 const PENDING_EVENTS: &[&str] = &[
     "decision_answered",
     "decision_changed",
+    "decision_question",
     "approval_approved",
     "approval_rejected",
     "qa_problems_sent",
@@ -652,6 +654,9 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         "commit_undone" => "el usuario deshizo el commit".to_string(),
         "decision_answered" => "el usuario contestó una decisión".to_string(),
         "decision_changed" => "el usuario cambió una decisión".to_string(),
+        "decision_question" => format!(
+            "el usuario pregunta por la decisión {detail} antes de contestarla: lee su pregunta en read_decisions (questions) y responde con reply_decision"
+        ),
         "permission_renewed" => "el usuario renovó un permiso".to_string(),
         "settings_approved" => "el usuario aprobó un cambio de ajustes".to_string(),
         "settings_rejected" => "el usuario rechazó un cambio de ajustes".to_string(),

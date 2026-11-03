@@ -155,6 +155,7 @@ pub fn run() {
             delivery::commands::delivery_change_decision,
             delivery::commands::delivery_renew_permissions,
             delivery::commands::delivery_withdraw_decision,
+            delivery::commands::delivery_ask_decision,
             delivery::commands::delivery_accept_recommended,
             delivery::commands::delivery_set_run_qa_jira_comment,
             delivery::commands::delivery_create_task,

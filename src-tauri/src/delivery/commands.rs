@@ -872,6 +872,18 @@ pub async fn delivery_renew_permissions(
     blocking(move || service.renew_permissions(&task_id, "user")).await
 }
 
+/// The user asks the coordinator about a decision before answering it.
+#[tauri::command]
+pub fn delivery_ask_decision(
+    service: State<'_, DeliveryService>,
+    decision_id: String,
+    question: String,
+) -> Result<DeliveryDecision, CommandError> {
+    service
+        .ask_decision(&decision_id, &question)
+        .map_err(CommandError::from)
+}
+
 #[tauri::command]
 pub fn delivery_withdraw_decision(
     service: State<'_, DeliveryService>,

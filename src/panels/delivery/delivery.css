@@ -1463,6 +1463,58 @@
   border-color: var(--border);
   color: var(--fg-muted);
 }
+.delivery-badge--attention {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+/* Why the coordinator recommends an option, under the options. */
+.delivery-recommendation {
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent-fg);
+  background: var(--bg-elev);
+  font-size: 12px;
+}
+.delivery-recommendation p,
+.delivery-decision__questions p {
+  margin: 0;
+}
+.delivery-decision-log__answer > .delivery-recommendation,
+.delivery-decision-log__answer > .delivery-decision__questions,
+.delivery-coordinator-decision > .delivery-recommendation,
+.delivery-coordinator-decision > .delivery-decision__questions,
+.delivery-coordinator-decision > .delivery-decision__ask,
+.delivery-coordinator-decision > .delivery-decision__ask-link {
+  grid-column: 1 / -1;
+}
+.delivery-decision-log__answer > .delivery-recommendation,
+.delivery-decision-log__answer > .delivery-decision__questions {
+  flex-basis: 100%;
+}
+.delivery-decision__questions {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.delivery-decision-log .delivery-decision__questions {
+  border: 0;
+}
+.delivery-decision-log .delivery-decision__questions li {
+  display: grid;
+  padding: 0;
+  border: 0;
+}
+.delivery-decision__ask {
+  display: grid;
+  gap: 6px;
+}
+.delivery-decision__ask-link {
+  justify-self: start;
+}
 
 /* ---------- Stage track ---------- */
 .delivery-track {

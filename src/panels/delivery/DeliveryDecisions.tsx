@@ -1,17 +1,20 @@
 // What the user settles before a task's stages run: choices, user-facing
 // texts and QA permissions, asked by the coordinator and answered here.
-// Answers are final; changing one is a new contract version.
+// Answers are final; changing one is a new contract version. A recommended
+// option says why and on what it rests, and the user can ask the coordinator
+// before answering.
 
 import { useState, type ReactNode } from "react";
 import {
   acceptRecommendedDecisions,
   answerDeliveryDecision,
+  askDeliveryDecision,
   changeDeliveryDecision,
   renewDeliveryPermissions,
   withdrawDeliveryDecision,
 } from "../../delivery/client";
 import { confirm } from "../../workbench/confirmDialog";
-import type { DeliveryDecision } from "../../delivery/types";
+import type { DeliveryDecision, DeliveryRecommendationBasis } from "../../delivery/types";
 import { CodeThreads } from "./DeliveryCodeThread";
 
 import { ActionButton, ActionGroup } from "./ActionButton";
@@ -33,6 +36,123 @@ function TechnicalDetail({ detail }: { detail: string }) {
       <summary>Ver detalle técnico</summary>
       <pre>{detail}</pre>
     </details>
+  );
+}
+
+const BASIS: Record<DeliveryRecommendationBasis, { label: string; title: string; tone: string }> = {
+  verified: {
+    label: "Comprobado",
+    title: "Algo que ejecutó el coordinador lo muestra: un test, una comprobación, un comando.",
+    tone: "",
+  },
+  code: {
+    label: "Leído en el código",
+    title: "Se sigue del código que leyó el coordinador.",
+    tone: "",
+  },
+  assumption: {
+    label: "Suposición",
+    title: "Es lo que el coordinador cree que quieres tú o tus usuarios: nada lo comprueba.",
+    tone: "delivery-badge--attention",
+  },
+};
+
+/** Why the coordinator recommends an option, on what it rests and what
+ *  would change it: enough to weigh the recommendation, not just follow it. */
+function RecommendationReason({ decision }: { decision: DeliveryDecision }) {
+  const reason = decision.recommendation;
+  if (!reason) return null;
+  const basis = BASIS[reason.basis];
+  return (
+    <div className="delivery-recommendation">
+      <p className="delivery-decision__label">
+        <strong>Por qué la recomienda</strong>
+        {basis && (
+          <span className={`delivery-badge ${basis.tone}`} title={basis.title}>
+            {basis.label}
+          </span>
+        )}
+      </p>
+      <p>{reason.why}</p>
+      <p className="delivery-muted">Lo que no sabe o la cambiaría: {reason.unknown}</p>
+    </div>
+  );
+}
+
+function openQuestion(decision: DeliveryDecision): boolean {
+  return (decision.questions ?? []).some((question) => !question.reply);
+}
+
+/** What the user asked the coordinator about a decision, with its replies. */
+function QuestionThread({ decision }: { decision: DeliveryDecision }) {
+  const questions = decision.questions ?? [];
+  if (questions.length === 0) return null;
+  return (
+    <ol className="delivery-decision__questions" aria-label="Preguntas al coordinador">
+      {questions.map((question) => (
+        <li key={question.asked_at_ms}>
+          <p>
+            <strong>Tú:</strong> {question.question}
+          </p>
+          {question.reply ? (
+            <p>
+              <strong>Coordinador:</strong> {question.reply}
+            </p>
+          ) : (
+            <p className="delivery-muted">
+              Esperando su respuesta. Hasta entonces nada contesta esta decisión por ti.
+            </p>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Asks the coordinator about a decision before answering it. */
+function AskCoordinator({ decision }: { decision: DeliveryDecision }) {
+  const [asking, setAsking] = useState(false);
+  const [text, setText] = useState("");
+  return (
+    <>
+      <QuestionThread decision={decision} />
+      {!openQuestion(decision) &&
+        (asking ? (
+          <div className="delivery-decision__ask">
+            <GrowingTextarea
+              aria-label={`Tu pregunta sobre «${decision.question}»`}
+              placeholder="¿Qué necesitas saber para decidir?"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              rows={2}
+            />
+            <span className="delivery-actions">
+              <ActionButton
+                disabled={!text.trim()}
+                onAction={async () => {
+                  await askDeliveryDecision(decision.id, text);
+                  setText("");
+                  setAsking(false);
+                }}
+              >
+                Enviar pregunta
+              </ActionButton>
+              <button type="button" onClick={() => setAsking(false)}>
+                Cancelar
+              </button>
+            </span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="delivery-link-button delivery-decision__ask-link"
+            aria-label={`Preguntar al coordinador sobre «${decision.question}»`}
+            onClick={() => setAsking(true)}
+          >
+            Preguntar al coordinador
+          </button>
+        ))}
+    </>
   );
 }
 
@@ -130,7 +250,9 @@ function ChoiceCard({ decision }: { decision: DeliveryDecision }) {
         onPick={() => setOwn(own ?? "")}
         onText={setOwn}
       />
+      <RecommendationReason decision={decision} />
       <TechnicalDetail detail={decision.detail} />
+      <AskCoordinator decision={decision} />
       <ActionGroup>
         <div className="delivery-actions">
           <ActionButton
@@ -157,6 +279,7 @@ function TextCard({ decision }: { decision: DeliveryDecision }) {
         <GrowingTextarea value={text} onChange={(event) => setText(event.target.value)} rows={2} />
       </label>
       <TechnicalDetail detail={decision.detail} />
+      <AskCoordinator decision={decision} />
       <ActionGroup>
         <div className="delivery-actions">
           <ActionButton
@@ -268,6 +391,7 @@ function PermissionCard({ decision }: { decision: DeliveryDecision }) {
       <PermissionScope decision={decision} />
       <p className="delivery-muted">Cómo se deshace: {decision.undo}</p>
       <TechnicalDetail detail={decision.detail} />
+      <AskCoordinator decision={decision} />
       <ActionGroup>
         <div className="delivery-actions">
           <ActionButton onAction={() => answerDeliveryDecision(decision.id, ALLOWED)}>
@@ -294,8 +418,11 @@ export function PendingDecisions({
   const choices = decisions.filter((decision) => decision.kind === "choice");
   const texts = decisions.filter((decision) => decision.kind === "text");
   const permissions = decisions.filter((decision) => decision.kind === "permission");
-  const acceptable =
-    texts.length + choices.filter((decision) => decision.options.some((o) => o.recommended)).length;
+  // A decision the user asked about waits for the reply, and for them.
+  const acceptable = [
+    ...texts,
+    ...choices.filter((decision) => decision.options.some((o) => o.recommended)),
+  ].filter((decision) => !openQuestion(decision)).length;
   const askers = [...new Set(decisions.map((decision) => who(decision.requested_by)))];
   return (
     <section className="delivery-banner delivery-decisions" aria-label="Decisiones pendientes">
@@ -378,6 +505,8 @@ function LogRow({
       <span className="delivery-decision-log__question">{decision.question}</span>
       <span className="delivery-decision-log__answer">
         {children}
+        <RecommendationReason decision={decision} />
+        <QuestionThread decision={decision} />
         {!shared && (
           <small className="delivery-muted">
             {who(decision.decided_by)} · {decidedOn(decision.decided_at_ms)}
@@ -475,7 +604,9 @@ function CoordinatorDecision({ decision }: { decision: DeliveryDecision }) {
           </span>
         </span>
       )}
+      <RecommendationReason decision={decision} />
       <TechnicalDetail detail={decision.detail} />
+      <AskCoordinator decision={decision} />
     </li>
   );
 }

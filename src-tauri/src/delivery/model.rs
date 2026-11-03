@@ -966,6 +966,38 @@ pub struct DeliveryDecisionOption {
     pub recommended: bool,
 }
 
+/// What the recommendation of a choice rests on, so the user can weigh it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryRecommendationBasis {
+    /// Something the coordinator ran shows it: a test, a check, a command.
+    Verified,
+    /// It follows from code the coordinator read.
+    Code,
+    /// A guess about what the user or their users want.
+    Assumption,
+}
+
+/// Why the coordinator recommends an option of a choice.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryRecommendation {
+    pub why: String,
+    pub basis: DeliveryRecommendationBasis,
+    /// What the coordinator does not know, or what would change it.
+    pub unknown: String,
+}
+
+/// A question the user asks the coordinator about a decision, and its reply.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryDecisionQuestion {
+    pub question: String,
+    pub asked_at_ms: u64,
+    #[serde(default)]
+    pub reply: Option<String>,
+    #[serde(default)]
+    pub replied_at_ms: Option<u64>,
+}
+
 /// A problem QA found (or the user reported) and what the user decided.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryQaProblem {
@@ -1095,6 +1127,12 @@ pub struct DeliveryDecision {
     /// `choice` only.
     #[serde(default)]
     pub options: Vec<DeliveryDecisionOption>,
+    /// `choice` only: why its recommended option, given with it.
+    #[serde(default)]
+    pub recommendation: Option<DeliveryRecommendation>,
+    /// What the user asked the coordinator about it, oldest first.
+    #[serde(default)]
+    pub questions: Vec<DeliveryDecisionQuestion>,
     /// `text` only: the proposed text, exactly as it will be shown.
     #[serde(default)]
     pub text: String,
