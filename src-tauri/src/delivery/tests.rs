@@ -7990,7 +7990,7 @@ fn a_pr_with_conflicts_brings_its_base_in_without_asking() {
 }
 
 #[test]
-fn a_merged_pr_brings_its_base_into_the_other_open_prs_and_checks_verify_the_merge() {
+fn a_merge_syncs_no_pr_without_conflicts_and_a_sync_replaces_the_checks_on_the_code_before() {
     let h = harness();
     set_repo_checks(&h, &["exit=0"]);
     let coordinator = Coordinator::start(&h);
@@ -8001,29 +8001,46 @@ fn a_merged_pr_brings_its_base_into_the_other_open_prs_and_checks_verify_the_mer
         .set_task_checks(&open_id, vec!["exit=0".into()])
         .unwrap();
     diverge_from_main(&h, &open, false);
-    let pr = |task_id: &str, number: u32, state: &str| {
+    let pr = |task_id: &str, number: u32| {
         let reference =
             super::prs::parse_pr_url(&format!("https://github.com/o/r/pull/{number}")).unwrap();
-        // Stored as GitHub showed it, without the background read a link starts.
+        // Stored as Tinto last read it, open and without conflicts.
         let mut pr = super::prs::DeliveryPr::linked(task_id, &reference);
-        pr.state = state.into();
+        pr.state = "open".into();
         pr.base = Some("main".into());
+        pr.checked_at_ms = Some(1);
         h.service.store().unwrap().put_pr(&pr).unwrap();
         pr
     };
-    let merged = pr(&merged_id, 290, "merged");
-    pr(&open_id, 291, "open");
+    pr(&merged_id, 290);
+    let mut other = pr(&open_id, 291);
     h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    let syncs = || {
+        h.service
+            .store()
+            .unwrap()
+            .approvals()
+            .unwrap()
+            .into_iter()
+            .filter(|approval| approval.rung == DeliveryRung::Sync)
+            .collect::<Vec<_>>()
+    };
 
-    h.service.sync_after_merge(&merged).unwrap();
-    let store = h.service.store().unwrap();
-    let sync = store
-        .approvals()
-        .unwrap()
-        .into_iter()
-        .find(|approval| approval.rung == DeliveryRung::Sync)
-        .expect("the open PR's task syncs");
-    assert_eq!(sync.task_id, open_id);
+    // Tinto reads S-10 merged: S-11, still mergeable, is left as it is.
+    h.service.set_github(FakeGitHub::new(
+        json!({"state": "MERGED", "mergeable": "MERGEABLE", "baseRefName": "main", "statusCheckRollup": [], "reviews": [], "comments": [], "labels": []}),
+        json!([]),
+    ));
+    h.service.refresh_pr(&merged_id, Duration::ZERO).unwrap();
+    assert!(syncs().is_empty());
+
+    // Once GitHub shows it conflicting it syncs, and the checks still queued
+    // on the code before the sync give way to a run on the merged code.
+    h.service.set_run_paused(&coordinator.run_id, true).unwrap();
+    let [stale] = h.service.run_checks(&open_id).unwrap().try_into().unwrap();
+    other.conflicts = true;
+    h.service.sync_conflicted_pr(&other).unwrap();
+    let [sync] = syncs().try_into().unwrap();
     assert_eq!(
         sync.status,
         DeliveryApprovalStatus::Executed,
@@ -8031,15 +8048,20 @@ fn a_merged_pr_brings_its_base_into_the_other_open_prs_and_checks_verify_the_mer
         sync.outcome
     );
     assert!(sync.conflicts.is_empty());
-    // The clean merge is verified by Tinto's checks, not by a stage.
-    let checks: Vec<String> = store
+    let checks: Vec<(String, DeliveryJobStatus)> = h
+        .service
+        .store()
+        .unwrap()
         .task_jobs(&open_id)
         .unwrap()
         .into_iter()
         .filter(|job| job.role == "checks")
-        .map(|job| job.prompt)
+        .map(|job| (job.id, job.status))
         .collect();
-    assert_eq!(checks, ["exit=0"]);
+    let [(old, cancelled), (_, queued)] = checks.try_into().unwrap();
+    assert_eq!(old, stale.id);
+    assert_eq!(cancelled, DeliveryJobStatus::Cancelled);
+    assert_eq!(queued, DeliveryJobStatus::Queued);
 }
 
 #[test]
@@ -8706,6 +8728,52 @@ fn set_repo_setup(h: &Harness, setup: &[&str]) {
     let mut settings = store.repo_settings(h.repo.path()).unwrap();
     settings.setup = setup.iter().map(|command| command.to_string()).collect();
     store.set_repo_settings(h.repo.path(), &settings).unwrap();
+}
+
+#[test]
+fn a_setup_restarts_the_check_running_beside_it_unless_it_cannot_queue_it_again() {
+    let h = harness();
+    set_repo_checks(&h, &["sleep=30"]);
+    set_repo_setup(&h, &["exit=0", "touch=deps.txt"]);
+    let task = h.task("K-61");
+    h.service
+        .set_task_checks(&task.id, vec!["sleep=30".into()])
+        .unwrap();
+    let [running] = h.service.run_checks(&task.id).unwrap().try_into().unwrap();
+    h.wait_status(&running.id, DeliveryJobStatus::Started);
+
+    // Blocked, the setup runs but no check can be queued: the one running
+    // goes on rather than be lost.
+    h.service
+        .add_blocker(
+            &task.id,
+            super::model::NewBlocker::Note {
+                text: "waits".into(),
+            },
+        )
+        .unwrap();
+    h.service
+        .set_task_setup(&task.id, vec!["exit=0".into()])
+        .unwrap();
+    assert_eq!(
+        h.service.job(&running.id).unwrap().status,
+        DeliveryJobStatus::Started
+    );
+
+    // Otherwise it gives way and runs again behind the setup.
+    h.service.clear_blockers(&task.id, None, true).unwrap();
+    let setup = h
+        .service
+        .set_task_setup(&task.id, vec!["exit=0".into(), "touch=deps.txt".into()])
+        .unwrap();
+    h.wait_status(&running.id, DeliveryJobStatus::Cancelled);
+    let jobs = h.service.store().unwrap().task_jobs(&setup.id).unwrap();
+    let last_setup = jobs.iter().rfind(|job| job.role == "setup").unwrap();
+    let again = jobs.iter().rfind(|job| job.role == "checks").unwrap();
+    assert_ne!(again.id, running.id);
+    assert!(again.created_at_ms >= last_setup.created_at_ms);
+    assert!(again.status.is_open());
+    h.service.cancel(&again.id).unwrap();
 }
 
 #[test]
@@ -10383,12 +10451,12 @@ fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
         .unwrap();
     h.service.withdraw_approval(&asked.id, "again").unwrap();
 
-    // The base moved after the green run: sync and a new green run first.
     std::fs::write(h.repo.path().join("later.txt"), "later\n").unwrap();
     git(h.repo.path(), &["add", "--all"]);
     git(h.repo.path(), &["commit", "-q", "-m", "main moves on"]);
-    let moved = refused(green).unwrap();
-    assert_eq!(moved.category, "base_moved", "{moved}");
+    // The base moved after the green run, without conflicts: it merges
+    // without a sync and a new run first.
+    assert!(refused(green).is_none());
 }
 
 #[test]
@@ -11863,12 +11931,31 @@ fn a_task_on_another_tasks_branch_follows_it_and_is_restacked_when_it_merges_squ
     let first_tip = in_worktree(&first, &["rev-parse", "HEAD"]);
     assert_eq!(moved.restack_from.as_deref(), Some(first_tip.as_str()));
 
-    // The restack waits for the user, then keeps only its own commit.
+    // The restack waits for the user, then keeps only its own commit. Asking
+    // it stops no check: the user may reject it.
+    set_repo_checks(&h, &["sleep=30"]);
+    h.service
+        .set_task_checks(&second.id, vec!["sleep=30".into()])
+        .unwrap();
+    let [check] = h
+        .service
+        .run_checks(&second.id)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    h.wait_status(&check.id, DeliveryJobStatus::Started);
     let restack = h
         .service
         .request_approval(step(&second, DeliveryRung::Sync, "Restack"))
         .unwrap();
     assert_eq!(restack.status, DeliveryApprovalStatus::Pending);
+    assert_eq!(
+        h.service.job(&check.id).unwrap().status,
+        DeliveryJobStatus::Started
+    );
+    h.service.set_task_checks(&second.id, Vec::new()).unwrap();
+    h.service.cancel(&check.id).unwrap();
+    h.wait_status(&check.id, DeliveryJobStatus::Cancelled);
     let restack = h.service.decide_approval(&restack.id, true, None).unwrap();
     assert_eq!(
         restack.status,

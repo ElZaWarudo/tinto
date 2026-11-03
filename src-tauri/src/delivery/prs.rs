@@ -2126,11 +2126,9 @@ impl DeliveryService {
         if changed {
             self.check_push(&self.task(task_id)?)?;
         }
+        // Only a PR GitHub shows conflicting brings its base in: a merge
+        // into its base alone does not make it wait for a sync.
         self.sync_conflicted_pr(&pr)?;
-        // Merged since Tinto last read it, not found merged when linked.
-        if pr.state == "merged" && before.state != "merged" && before.checked_at_ms.is_some() {
-            self.sync_after_merge(&pr)?;
-        }
         // Done with: the screenshots its replies showed are not kept.
         let done = |pr: &DeliveryPr| pr.state == "merged" || pr.state == "closed";
         if done(&pr) && !done(&before) && before.checked_at_ms.is_some() {

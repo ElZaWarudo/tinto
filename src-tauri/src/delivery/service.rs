@@ -2058,6 +2058,22 @@ impl DeliveryService {
         if job.role == IMPLEMENTATION_ROLE {
             self.end_brainstorm_once_implementing(&task)?;
         }
+        // A check running while the setup changes what it runs on (a
+        // dependency install) would fail on it: it starts again once the
+        // setup passed. Queued ones already wait for it.
+        if job.agent == DeliveryAgent::Shell && job.role == SETUP_ROLE {
+            let jobs = self.store()?.task_jobs(&job.task_id)?;
+            for check in jobs {
+                if is_check(&check)
+                    && check.status.is_active()
+                    && self
+                        .dispatch(check_job(&check.task_id, check.prompt))
+                        .is_ok()
+                {
+                    let _ = self.cancel(&check.id);
+                }
+            }
+        }
         self.tick();
         Ok(job)
     }
@@ -3649,30 +3665,65 @@ impl DeliveryService {
             .filter_map(|check| super::phase::check_scope(check))
             .collect();
         for check in task.checks.clone() {
-            let ran = jobs.iter().any(|job| {
-                job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE && job.prompt == check
-            });
+            let runs: Vec<&DeliveryJob> = jobs
+                .iter()
+                .filter(|job| is_check(job) && job.prompt == check)
+                .collect();
+            // One cancelled before it ended (a sync) never verified the code.
+            let ran = runs
+                .last()
+                .is_some_and(|job| job.status != DeliveryJobStatus::Cancelled);
             if ran && stage.is_some_and(|stage| !super::phase::touches(&check, &scopes, stage)) {
                 continue;
             }
-            self.dispatch(NewJob {
-                task_id: task_id.to_string(),
-                role: CHECKS_ROLE.to_string(),
-                agent: DeliveryAgent::Shell,
-                model: None,
-                access: DeliveryAccess::Workspace,
-                prompt: check,
-                writes: None,
-                lease: None,
-                timeout_minutes: None,
-                reasoning: None,
-                platform: None,
-                read_dirs: Vec::new(),
-                stage_default: false,
-                needs_environment: false,
-            })?;
+            // A queued run has not started: it verifies the code as it is now,
+            // in its place. A running one is on the code before: the new run
+            // replaces it.
+            if runs
+                .iter()
+                .any(|job| job.status == DeliveryJobStatus::Queued)
+            {
+                continue;
+            }
+            self.dispatch(check_job(task_id, check))?;
+            for job in runs.iter().filter(|job| job.status.is_active()) {
+                let _ = self.cancel(&job.id);
+            }
         }
         Ok(())
+    }
+
+    /// Queues again the task's checks whose latest run was cancelled.
+    pub(super) fn requeue_cancelled_checks(&self, task_id: &str) -> Result<(), DeliveryError> {
+        let task = self.task(task_id)?;
+        let jobs = self.store()?.task_jobs(task_id)?;
+        for check in task.checks {
+            let cancelled = jobs
+                .iter()
+                .rev()
+                .find(|job| is_check(job) && job.prompt == check)
+                .is_some_and(|job| job.status == DeliveryJobStatus::Cancelled);
+            if cancelled {
+                self.dispatch(check_job(task_id, check))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Cancels the task's open checks; true while one still runs (its
+    /// process ends a moment later).
+    pub(super) fn cancel_open_checks(&self, task_id: &str) -> Result<bool, DeliveryError> {
+        let jobs = self.store()?.task_jobs(task_id)?;
+        for job in jobs {
+            if is_check(&job) && job.status.is_open() {
+                let _ = self.cancel(&job.id);
+            }
+        }
+        Ok(self
+            .store()?
+            .task_jobs(task_id)?
+            .iter()
+            .any(|job| is_check(job) && job.status.is_active()))
     }
 
     /// The coordinator asks for the task's checks on the code as it is now,
@@ -4194,6 +4245,30 @@ impl DeliveryService {
                 }
             }
         }
+    }
+}
+
+fn is_check(job: &DeliveryJob) -> bool {
+    job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE
+}
+
+/// One of the task's checks, as the shell job that runs it.
+fn check_job(task_id: &str, command: String) -> NewJob {
+    NewJob {
+        task_id: task_id.to_string(),
+        role: CHECKS_ROLE.to_string(),
+        agent: DeliveryAgent::Shell,
+        model: None,
+        access: DeliveryAccess::Workspace,
+        prompt: command,
+        writes: None,
+        lease: None,
+        timeout_minutes: None,
+        reasoning: None,
+        platform: None,
+        read_dirs: Vec::new(),
+        stage_default: false,
+        needs_environment: false,
     }
 }
 
