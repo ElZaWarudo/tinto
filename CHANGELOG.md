@@ -4,6 +4,13 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.2.0] - 2026-11-04
+
+### Features
+
+- **delivery:** start the coordinator with full access
+- **delivery:** make scoping a first-class Alcance stage
+
 ## [1.1.2] - 2026-11-03
 
 ### Features
