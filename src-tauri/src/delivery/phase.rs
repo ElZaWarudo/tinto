@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::coordination::{JIRA_AFTER_MERGE, JIRA_AFTER_PR};
+use super::model::SCOPE_ROLE;
 use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
     DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJob, DeliveryJobStatus,
@@ -246,6 +247,8 @@ pub struct Facts<'a> {
     /// Tasks whose PR waits for a package to merge (see `pr_predecessor`),
     /// with that package's label.
     pub pr_waits: &'a BTreeMap<String, String>,
+    /// Tasks whose repo runs Alcance on every task.
+    pub scope_always: &'a HashSet<String>,
 }
 
 /// The package whose merge a task's PR waits for: with `pr_after: merged`,
@@ -335,9 +338,27 @@ pub fn is_answered(job: &DeliveryJob, jobs: &[&DeliveryJob]) -> bool {
         })
 }
 
-/// Ended with findings nobody has accepted (see `resolve_job`).
+/// Ended with findings nobody has accepted (see `resolve_job`). Alcance's
+/// findings are its questions for the user, never defects.
 pub fn has_open_findings(job: &DeliveryJob) -> bool {
-    job.status == DeliveryJobStatus::Finished && result_is(job, "findings") && !is_resolved(job)
+    job.role != SCOPE_ROLE
+        && job.status == DeliveryJobStatus::Finished
+        && result_is(job, "findings")
+        && !is_resolved(job)
+}
+
+/// Alcance is behind the task: it was skipped, or a job of it ended with
+/// its exploration (questions included), or was settled another way.
+pub fn scope_settled(task: &DeliveryTask, jobs: &[&DeliveryJob]) -> bool {
+    task.scope_skip.is_some()
+        || jobs.iter().any(|job| {
+            job.role == SCOPE_ROLE
+                && is_live(job)
+                && (is_resolved(job)
+                    || (job.status == DeliveryJobStatus::Finished
+                        && job.result_state != Some(DeliveryResultState::Invalid)
+                        && !result_is(job, "blocked")))
+        })
 }
 
 /// A check run that failed and nobody accepted (see `resolve_job`).
@@ -674,6 +695,7 @@ pub fn next_stage(
     setup: &[String],
     checks: &[String],
     skip_qa: bool,
+    scope_due: bool,
     jobs: &[&DeliveryJob],
     approvals: &[&DeliveryApproval],
 ) -> Option<String> {
@@ -728,6 +750,10 @@ pub fn next_stage(
     }
     if checks.iter().any(|job| check_fails(job)) {
         return Some("implementation".into());
+    }
+    // The repo runs Alcance on every task: it comes first.
+    if scope_due {
+        return Some(SCOPE_ROLE.into());
     }
     STAGES
         .iter()
@@ -937,7 +963,15 @@ fn phase_in_round(
         .any(|run| Some(&run.id) == task.run_id.as_ref() && run.unattended);
     let merge = open_merge(&approvals, facts.merging.contains(&task.id));
     let skip_qa = skips_qa(!facts.no_qa.contains(&task.id), &jobs);
-    let mut next = next_stage(&task.setup, &task.checks, skip_qa, &jobs, &approvals);
+    let scope_due = facts.scope_always.contains(&task.id) && !scope_settled(task, &jobs);
+    let mut next = next_stage(
+        &task.setup,
+        &task.checks,
+        skip_qa,
+        scope_due,
+        &jobs,
+        &approvals,
+    );
     // While a merge is in progress only the stages resolving it run, and
     // none once they passed: the merge is committed first.
     if let Some(sync) = merge {
@@ -1392,6 +1426,7 @@ mod tests {
         releasable_runs: HashSet<String>,
         review_optional: HashSet<String>,
         no_qa: HashSet<String>,
+        scope_always: HashSet<String>,
         checks: Vec<String>,
     }
 
@@ -1410,6 +1445,7 @@ mod tests {
                 releasable_runs: HashSet::new(),
                 review_optional: HashSet::new(),
                 no_qa: HashSet::new(),
+                scope_always: HashSet::new(),
                 checks: Vec::new(),
             }
         }
@@ -1434,6 +1470,7 @@ mod tests {
                     review_optional: &self.review_optional,
                     no_qa: &self.no_qa,
                     pr_waits: &BTreeMap::new(),
+                    scope_always: &self.scope_always,
                 },
             )
         }
@@ -1486,6 +1523,17 @@ mod tests {
             job("j3", "review", Started, None),
         ]);
         assert_eq!(world.phase().next_stage, None);
+    }
+
+    #[test]
+    fn alcance_questions_are_not_findings_and_a_repo_that_always_scopes_starts_there() {
+        let mut world = World::new(Vec::new());
+        world.scope_always.insert(sample_task().id);
+        assert_eq!(world.phase().next_stage.as_deref(), Some(SCOPE_ROLE));
+        world
+            .jobs
+            .push(job("j1", SCOPE_ROLE, Finished, Some("findings")));
+        assert_eq!(world.phase().next_stage.as_deref(), Some("tests"));
     }
 
     #[test]
@@ -1571,6 +1619,7 @@ mod tests {
             review_optional: &HashSet::new(),
             no_qa: &HashSet::new(),
             pr_waits: &BTreeMap::new(),
+            scope_always: &HashSet::new(),
         };
         assert!(matches!(
             task_phase(&task, &facts).phase,

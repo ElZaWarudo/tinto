@@ -6,6 +6,7 @@
 import type {
   DeliveryApproval,
   DeliveryBlocker,
+  DeliveryDecision,
   DeliveryJob,
   DeliveryOverview,
   DeliveryPr,
@@ -16,7 +17,11 @@ import type {
   DeliveryTaskPhase,
 } from "../../delivery/types";
 
+/** Alcance: the read-only scoping stage, first in the row. */
+export const SCOPE_ROLE = "explore";
+
 export const STAGES = [
+  { role: SCOPE_ROLE, label: "Alcance", verb: "Explorando el alcance" },
   { role: "tests", label: "Tests", verb: "Escribiendo tests" },
   { role: "implementation", label: "Implementación", verb: "Implementando" },
   { role: "review", label: "Revisión", verb: "Revisando" },
@@ -200,7 +205,8 @@ function stageOrder(role: string): number {
 export function isSuperseded(job: DeliveryJob, jobs: DeliveryJob[]): boolean {
   const order = stageOrder(job.role);
   const at = jobs.findIndex((other) => other.id === job.id);
-  if (order < 1 || at < 0) return false;
+  // Nothing comes before the tests that changes the code (Alcance reads).
+  if (order <= stageOrder("tests") || at < 0) return false;
   return jobs.slice(at + 1).some((later) => {
     const laterOrder = stageOrder(later.role);
     return laterOrder >= 0 && laterOrder < order && !later.undone_at_ms && later.changes.length > 0;
@@ -270,6 +276,11 @@ export function attemptOutcome(
   if (job.undone_at_ms) return { tone: "idle", label: "Deshecho" };
   const result = job.result;
   if (!result) return { tone: "idle", label: "Terminado" };
+  // Alcance's findings are its questions for the user: a normal outcome.
+  if (job.role === SCOPE_ROLE && result.status !== "blocked") {
+    const count = result.status === "findings" ? result.findings.length : 0;
+    return { tone: "ok", label: count > 0 ? `Listo · ${questions(count)}` : "Listo" };
+  }
   if (result.status === "pass") {
     return isSuperseded(job, jobs)
       ? { tone: "idle", label: "Superado" }
@@ -290,6 +301,38 @@ export function attemptOutcome(
       : { tone: "attention", label };
   }
   return { tone: "idle", label: result.status };
+}
+
+export function questions(count: number): string {
+  return count === 1 ? "1 pregunta" : `${count} preguntas`;
+}
+
+/** How Alcance reads on the task row: skipped (with who and why), or its
+ *  latest job, its questions counted from the task's decisions once asked. */
+export function scopeOutcome(
+  task: DeliveryTask,
+  job: DeliveryJob | undefined,
+  jobs: DeliveryJob[],
+  decisions: DeliveryDecision[],
+): { tone: Tone; label: string; title?: string } | null {
+  if (task.scope_skip && (!job || !isOpen(job))) {
+    const by = task.scope_skip.by === "user" ? "ti" : "el coordinador";
+    return {
+      tone: "idle",
+      label: "Omitido",
+      title: `Omitido por ${by}: ${task.scope_skip.reason}`,
+    };
+  }
+  if (!job) return null;
+  const outcome = attemptOutcome(job, jobs);
+  if (outcome.tone !== "ok" || !outcome.label.startsWith("Listo")) return outcome;
+  const asked = decisions.filter((decision) => decision.kind !== "permission");
+  if (asked.length === 0) return outcome;
+  const decided = asked.filter((decision) => decision.status === "answered").length;
+  return {
+    tone: "ok",
+    label: `Listo · ${questions(asked.length)} · ${decided} ${decided === 1 ? "decidida" : "decididas"}`,
+  };
 }
 
 /** Findings a later stage answered: one after it passed (the tests' failing
@@ -672,9 +715,16 @@ export function roundStage(
   round: DeliveryCurrentRound | null,
 ): { tone: Tone | "todo"; label: string } | null {
   if (!round || (job && job.created_at_ms >= round.opened_at_ms)) return null;
+  // Alcance reads as it went; the tests still stand; what follows runs again.
   const order = stageOrder(role);
-  if (order >= 1) return { tone: "todo", label: "Se repite en esta ronda" };
-  if (order === 0 && job && (isPassed(job) || isAnswered(job, jobs)) && !isSuperseded(job, jobs)) {
+  const tests = stageOrder("tests");
+  if (order > tests) return { tone: "todo", label: "Se repite en esta ronda" };
+  if (
+    order === tests &&
+    job &&
+    (isPassed(job) || isAnswered(job, jobs)) &&
+    !isSuperseded(job, jobs)
+  ) {
     return { tone: "ok", label: "Vale de la ronda anterior" };
   }
   return null;
@@ -822,7 +872,8 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
     case "pr_waits_predecessor":
       return {
         ...waiting(`PR tras fusionar ${phase.package}`),
-        detail: "Sus etapas, commit y push siguen; cuando se fusione, Tinto la rebasa sobre la base y el PR va allí.",
+        detail:
+          "Sus etapas, commit y push siguen; cuando se fusione, Tinto la rebasa sobre la base y el PR va allí.",
       };
     case "merged_failing_ci":
       return {
@@ -968,4 +1019,76 @@ export function parseStatuses(text: string): string[] {
     .split(/[,→\n]/)
     .map((status) => status.trim())
     .filter(Boolean);
+}
+
+/** What an Alcance job has done so far, in plain language, from its log:
+ *  the files it read grouped by service or package, its searches, and the
+ *  commands it ran with their outcome. */
+export interface ScopeActivity {
+  files: { group: string; paths: string[] }[];
+  searches: string[];
+  commands: { command: string; outcome: string | null }[];
+}
+
+/** Folders whose children are each a service or package of their own. */
+const CONTAINERS = new Set(["services", "packages", "apps", "crates", "libs", "modules"]);
+
+function relative(path: string, worktree: string): string {
+  const slashes = (text: string) => text.replace(/\\/g, "/");
+  const root = slashes(worktree).replace(/\/+$/, "");
+  const file = slashes(path);
+  return file.toLowerCase().startsWith(`${root.toLowerCase()}/`)
+    ? file.slice(root.length + 1)
+    : file;
+}
+
+function groupOf(path: string): string {
+  const parts = path.split("/");
+  if (parts.length === 1) return "raíz";
+  return CONTAINERS.has(parts[0]) && parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts[0];
+}
+
+export function scopeActivity(
+  entries: { kind: string; text: string }[],
+  worktree: string,
+): ScopeActivity {
+  const groups = new Map<string, string[]>();
+  const searches: string[] = [];
+  const commands: ScopeActivity["commands"] = [];
+  for (const entry of entries) {
+    if (entry.kind !== "command") continue;
+    const tool = /^(\w+): ([\s\S]*)$/.exec(entry.text.trim());
+    const name = tool?.[1];
+    const detail = tool?.[2].trim() ?? "";
+    if (name === "Read" && detail) {
+      const path = relative(detail, worktree);
+      const group = groupOf(path);
+      const paths = groups.get(group) ?? [];
+      if (!paths.includes(path)) paths.push(path);
+      groups.set(group, paths);
+    } else if ((name === "Grep" || name === "Glob") && detail) {
+      const search =
+        name === "Grep"
+          ? `Buscando «${detail}»`
+          : `Buscando archivos «${relative(detail, worktree)}»`;
+      if (!searches.includes(search)) searches.push(search);
+    } else if (name !== "TodoWrite") {
+      // A Bash call, or a command as Codex reports it: "cmd  → code".
+      const text = name === "Bash" ? detail : entry.text.trim();
+      const exit = /^([\s\S]*?)\s+→ (-?\d+)$/.exec(text);
+      commands.push(
+        exit
+          ? {
+              command: exit[1],
+              outcome: exit[2] === "0" ? "terminó bien" : `falló (código ${exit[2]})`,
+            }
+          : { command: text, outcome: null },
+      );
+    }
+  }
+  return {
+    files: [...groups].map(([group, paths]) => ({ group, paths })),
+    searches,
+    commands,
+  };
 }

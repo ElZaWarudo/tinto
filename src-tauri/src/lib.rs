@@ -164,6 +164,7 @@ pub fn run() {
             delivery::commands::delivery_archived_tasks,
             delivery::commands::delivery_unarchive_task,
             delivery::commands::delivery_update_task,
+            delivery::commands::delivery_skip_scope,
             delivery::commands::delivery_add_blocker,
             delivery::commands::delivery_clear_blockers,
             delivery::commands::delivery_dispatch_job,

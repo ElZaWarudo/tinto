@@ -433,6 +433,7 @@ pub(super) fn settle_round(store: &DeliveryStore, task_id: &str) -> Result<(), D
             &task.setup,
             &task.checks,
             skips_qa(store.repo_settings(&task.repo)?.has_qa(), &job_refs),
+            false,
             &job_refs,
             &approval_refs,
         )

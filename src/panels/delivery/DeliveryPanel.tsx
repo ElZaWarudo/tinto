@@ -74,7 +74,6 @@ import {
   getDeliveryMergeMethod,
   getDeliveryPrReviewers,
   getDeliveryQaScreenshots,
-  getDeliveryJobLog,
   getDeliveryOverview,
   getOpencodeModels,
   getDeliveryRepoSettings,
@@ -102,7 +101,6 @@ import type {
   DeliveryFixCommit,
   DeliveryEnvironmentCheck,
   DeliveryJob,
-  DeliveryJobLog,
   DeliveryOverview,
   DeliveryPr,
   DeliveryQueueWait,
@@ -110,6 +108,7 @@ import type {
   DeliveryRun,
   DeliveryStageAgent,
   DeliveryTask,
+  DeliveryDecision,
   DeliveryTiming,
   DeliveryUsage,
 } from "../../delivery/types";
@@ -153,6 +152,8 @@ import {
   lastHandoff,
   latestApproval,
   latestOfRole,
+  SCOPE_ROLE,
+  scopeOutcome,
   lower,
   nextStageOf,
   latestStep,
@@ -195,6 +196,8 @@ import {
 } from "./taskStatus";
 import "./delivery.css";
 import { CodeThreads } from "./DeliveryCodeThread";
+import { MAX_LOG_ENTRIES, useJobLog } from "./useJobLog";
+import { ScopeSection } from "./DeliveryScope";
 import { ExternalLink } from "./ExternalLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
@@ -2865,6 +2868,8 @@ function TaskDetail({
       {qaRecord && <QaRecordNotice job={qaRecord} />}
 
       <StageTrack
+        task={task}
+        decisions={taskDecisions}
         repo={task.repo}
         jobs={jobs}
         approvals={approvals}
@@ -2873,6 +2878,14 @@ function TaskDetail({
         next={next}
         round={round}
         onFocus={focusStage}
+      />
+
+      <ScopeSection
+        task={task}
+        jobs={jobs}
+        decisions={taskDecisions}
+        blocked={blocked}
+        onLaunch={() => dispatch(SCOPE_ROLE, false)}
       />
 
       <div className="delivery-actions">
@@ -3196,6 +3209,8 @@ function StageAgentEditor({ repo, role }: { repo: string; role: string }) {
 }
 
 function StageTrack({
+  task,
+  decisions,
   repo,
   jobs,
   approvals,
@@ -3205,6 +3220,9 @@ function StageTrack({
   round,
   onFocus,
 }: {
+  /** Alcance reads its skip from the task and its questions from its decisions. */
+  task: DeliveryTask;
+  decisions: DeliveryDecision[];
   /** The task's repo, whose settings say who runs each stage. */
   repo: string;
   jobs: DeliveryJob[];
@@ -3226,11 +3244,14 @@ function StageTrack({
           {rolesOf(jobs).map((role) => {
             const job = latestOfRole(jobs, role);
             const inRound = roundStage(role, job, jobs, round);
-            const outcome = inRound
+            const scope = role === SCOPE_ROLE ? scopeOutcome(task, job, jobs, decisions) : null;
+            const outcome: { tone: Tone | "todo"; label: string; title?: string } = inRound
               ? { ...inRound, label: role === next ? "Siguiente" : inRound.label }
-              : job
-                ? attemptOutcome(job, jobs)
-                : { tone: "todo" as const, label: role === next ? "Siguiente" : "—" };
+              : scope
+                ? scope
+                : job
+                  ? attemptOutcome(job, jobs)
+                  : { tone: "todo" as const, label: role === next ? "Siguiente" : "—" };
             const tone = outcome.tone;
             const content = (
               <>
@@ -3238,8 +3259,11 @@ function StageTrack({
                   <StatusMark icon={tone === "todo" ? "ring" : TONE_ICON[tone]} />
                   {stageLabel(role)}
                 </span>
-                <small>{outcome.label}</small>
+                <small title={outcome.title}>{outcome.label}</small>
                 {job?.visual_record && !inRound && <small>Con registro visual ↓</small>}
+                {job && isOpen(job) && job.activity && (
+                  <small className="delivery-node__activity">{job.activity}</small>
+                )}
                 {job && job.agent !== "shell" && (
                   <small className="delivery-node__runtime">{runtimeLabel(job)}</small>
                 )}
@@ -4879,42 +4903,9 @@ function JobRow({
   );
 }
 
-/** The latest log entries a job shows: a check's whole output (a test suite
- * prints hundreds of thousands of lines) froze WebKit drawing it. */
-const MAX_LOG_ENTRIES = 500;
-
 function JobLog({ job }: { job: DeliveryJob }) {
-  const [log, setLog] = useState<(DeliveryJobLog & { skipped: number }) | null>(null);
+  const log = useJobLog(job);
   const live = isOpen(job);
-  const nextLine = useRef(0);
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try {
-        const chunk = await getDeliveryJobLog(job.id, nextLine.current);
-        if (!active) return;
-        nextLine.current = chunk.next_line;
-        setLog((previous) => {
-          const entries = [...(previous?.entries ?? []), ...chunk.entries];
-          const over = Math.max(0, entries.length - MAX_LOG_ENTRIES);
-          return {
-            entries: entries.slice(over),
-            skipped: (previous?.skipped ?? 0) + over,
-            next_line: chunk.next_line,
-            stderr_tail: chunk.stderr_tail,
-          };
-        });
-      } catch {
-        // The log appears once the job has started.
-      }
-    };
-    void load();
-    const timer = live ? setInterval(() => void load(), 1500) : null;
-    return () => {
-      active = false;
-      if (timer) clearInterval(timer);
-    };
-  }, [job.id, live]);
   if (!log || (log.entries.length === 0 && !log.stderr_tail.trim())) return null;
   return (
     <details className="delivery-log" open={live}>

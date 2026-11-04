@@ -85,6 +85,10 @@ export const updateDeliveryTask = (
     title: changes.title ?? null,
   });
 
+/** Skips Alcance on the task, with the reason its tab shows. */
+export const skipDeliveryScope = (taskId: string, reason: string) =>
+  invoke<DeliveryTask>("delivery_skip_scope", { taskId, reason });
+
 /** Adds a blocker to the task; Tinto clears it when it resolves. */
 export const addDeliveryBlocker = (taskId: string, blocker: NewDeliveryBlocker) =>
   invoke<DeliveryTask>("delivery_add_blocker", { taskId, blocker });

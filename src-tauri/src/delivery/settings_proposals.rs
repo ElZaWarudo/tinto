@@ -458,6 +458,8 @@ mod tests {
             parent_read_at_ms: None,
             restack_from: None,
             skip_ci: false,
+            plans: Vec::new(),
+            scope_skip: None,
         }
     }
 

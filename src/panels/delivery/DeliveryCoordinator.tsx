@@ -21,6 +21,7 @@ import { openDetachedTerminalWindow } from "../terminal/detachTerminalWindow";
 import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import { WorkspaceActionsContext, useWorkspaceActions } from "../../workspace/actions";
 
+import { confirm } from "../../workbench/confirmDialog";
 import { ActionButton } from "./ActionButton";
 import { errorText } from "./errorText";
 import {
@@ -103,6 +104,8 @@ export function CoordinatorDock({
   const [resumed, setResumed] = useState<Record<string, string>>({});
   const [detached, setDetached] = useState<string | null>(null);
   const [choice, setChoice] = useState<AgentChoice | null>(null);
+  // Full access: no sandbox and no permission prompts, as the user allows.
+  const [fullAccess, setFullAccess] = useState<boolean | null>(null);
   // The batches a new coordinator takes; the one shown until the user ticks others.
   const [picked, setPicked] = useState<string[] | null>(null);
   // The conversation stays folded until the user opens it.
@@ -214,10 +217,26 @@ export function CoordinatorDock({
   const shown = agentChoice(choice ?? rememberedChoice(run.repo));
   const chosen = (picked ?? [run.id]).filter((id) => runs.some((candidate) => candidate.id === id));
 
+  const privileged = fullAccess ?? rememberedFullAccess(run.repo);
+
   const start = async () => {
     setError(null);
-    const id = await startAgentSession(run.repo, shown.agent, "workspace", runtimeOptions(shown));
-    rememberChoice(run.repo, shown);
+    if (
+      privileged &&
+      !(await confirm(
+        "El coordinador correrá sin sandbox ni confirmaciones: podrá ejecutar cualquier comando y cambiar archivos fuera del repositorio con tus permisos.",
+        { title: "Coordinador con acceso completo", kind: "warning", okLabel: "Iniciar" },
+      ))
+    ) {
+      return false;
+    }
+    const id = await startAgentSession(
+      run.repo,
+      shown.agent,
+      privileged ? "full_access" : "workspace",
+      runtimeOptions(shown),
+    );
+    rememberChoice(run.repo, shown, privileged);
     setStarted({ runIds: chosen, sessionId: id });
     setPicked(null);
   };
@@ -255,6 +274,7 @@ export function CoordinatorDock({
     ? [
         AGENT_LABEL[conversation.agent_type] ?? conversation.agent_type,
         conversation.runtime_options?.model,
+        conversation.permission_mode === "full_access" ? "acceso completo" : null,
       ]
         .filter(Boolean)
         .join(" · ")
@@ -455,6 +475,14 @@ export function CoordinatorDock({
                     ))}
                   </select>
                 </label>
+                <label title="Sin sandbox ni confirmaciones de permisos: puede ejecutar cualquier comando con tus permisos.">
+                  <input
+                    type="checkbox"
+                    checked={privileged}
+                    onChange={(event) => setFullAccess(event.target.checked)}
+                  />
+                  Acceso completo
+                </label>
                 <ActionButton
                   className="delivery-button--primary"
                   disabled={chosen.length === 0}
@@ -485,13 +513,31 @@ function rememberedChoice(repo: string): AgentChoice {
   return agentChoice({ agent: "claude", model: null, reasoning: null });
 }
 
-function rememberChoice(repo: string, choice: AgentChoice) {
+/** Whether the coordinator last started for a repo had full access. */
+function rememberedFullAccess(repo: string): boolean {
   try {
     const saved = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? "{}") as Record<
       string,
-      DeliveryStageAgent
+      { full_access?: boolean }
     >;
-    saved[repo] = { agent: choice.agent, model: choice.model, reasoning: choice.reasoning };
+    return saved[repo]?.full_access === true;
+  } catch {
+    return false;
+  }
+}
+
+function rememberChoice(repo: string, choice: AgentChoice, fullAccess: boolean) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? "{}") as Record<
+      string,
+      DeliveryStageAgent & { full_access?: boolean }
+    >;
+    saved[repo] = {
+      agent: choice.agent,
+      model: choice.model,
+      reasoning: choice.reasoning,
+      full_access: fullAccess,
+    };
     localStorage.setItem(CHOICE_KEY, JSON.stringify(saved));
   } catch {
     // Not remembered: the next start offers the defaults.

@@ -135,7 +135,42 @@ export interface DeliveryTask {
   setup?: string[];
   /** Its issue's parent in Jira (an epic, a story), as last read. */
   parent?: { key: string; summary: string } | null;
+  /** Its plan (Alcance), every version, oldest first. */
+  plans?: DeliveryScopePlan[];
+  /** Alcance skipped on purpose, and why. */
+  scope_skip?: DeliveryScopeSkip | null;
 }
+
+/** One version of a task's plan, in the sections every stage reads. Its
+ *  checks are the task's and its questions the task's decisions. */
+export interface DeliveryScopePlan {
+  /** The contract version it was written for. */
+  version: number;
+  at_ms: number;
+  /** `agent`: written after an Alcance job explored; `coordinator`: directly. */
+  author: "agent" | "coordinator" | string;
+  job_id?: string | null;
+  /** Why it replaced the previous version; empty for the first. */
+  reason?: string;
+  /** What changed from the previous version. */
+  changed?: string;
+  what: string;
+  places?: { path: string; note?: string }[];
+  risk_level?: string;
+  risks?: string[];
+  tests?: { requirement: string; layer?: string; file?: string }[];
+  out_of_scope?: string[];
+}
+
+export interface DeliveryScopeSkip {
+  reason: string;
+  /** `user` or `coordinator`. */
+  by: string;
+  at_ms: number;
+}
+
+/** Whether a repo's tasks run Alcance. */
+export type DeliveryScopeMode = "always" | "coordinator" | "never";
 
 /** How a task's last open blocker cleared. */
 export interface DeliveryUnblock {
@@ -272,6 +307,8 @@ export interface DeliveryJob {
   qa_browser?: boolean;
   /** The task's answered decisions as the job received them. */
   decisions?: string[];
+  /** The task's plan when the job was dispatched, as its instructions state it. */
+  scope_plan?: string[];
   /** What the job was told about the task's checks when it started. */
   task_checks?: string[];
   /** What the job was told about the task's round when it was dispatched in one. */
@@ -674,6 +711,8 @@ export interface DeliveryRepoSettings {
   ci_on_push?: "run" | "skip";
   /** Which steps Tinto takes on its own past the brainstorm. */
   autonomy?: DeliveryAutonomy;
+  /** Whether its tasks run Alcance; `coordinator` when unset. */
+  scope?: DeliveryScopeMode;
   /** The checks the user marked as environment probes, run by the "Entorno" check. */
   environment_probes?: string[];
   /** Commands Tinto runs, in order, when the "Entorno" check fails, then checks again. */

@@ -12688,3 +12688,47 @@ fn commands_that_start_the_environment_wait_for_the_user_then_run_when_it_fails(
     let started = h.service.check_environment(h.repo.path(), None).unwrap();
     assert!(started.iter().all(|check| check.ok), "{started:?}");
 }
+
+#[test]
+fn a_plan_is_versioned_with_its_contract_and_reaches_the_next_stage_even_skipped() {
+    let h = harness();
+    let task = h.task("K-PLAN");
+    let plan = |what: &str| super::scope::PlanInput {
+        what: what.into(),
+        tests: vec![super::model::DeliveryScopeTest {
+            requirement: "rechaza nombres con /".into(),
+            layer: "unit".into(),
+            file: "src/name.test.ts".into(),
+        }],
+        ..Default::default()
+    };
+    // Skipping needs a reason.
+    let refused = h.service.skip_scope(&task.id, "  ", false).unwrap_err();
+    assert_eq!(refused.category, "scope_reason_required");
+    h.service
+        .skip_scope(&task.id, "cambio de una línea", false)
+        .unwrap();
+    let first = h.service.set_task_plan(&task.id, plan("v1"), None).unwrap();
+    assert_eq!(first.plans[0].version, 1);
+    assert_eq!(first.plans[0].author, "coordinator");
+    // A later version is never silent: it needs a reason and raises the contract.
+    let silent = h
+        .service
+        .set_task_plan(&task.id, plan("v2"), None)
+        .unwrap_err();
+    assert_eq!(silent.category, "plan_reason_required");
+    let second = h
+        .service
+        .set_task_plan(&task.id, plan("v2"), Some("QA cambió la regla".into()))
+        .unwrap();
+    assert_eq!(second.contract_version, 2);
+    assert_eq!(second.plans.len(), 2);
+    assert_eq!(second.plans[0].what, "v1");
+
+    let job = h.dispatch(&task, "tests", "events=codex-ok");
+    assert!(job.scope_plan[0].contains("v2"));
+    assert!(job.scope_plan.contains(
+        &"- Tests (requirement → test): rechaza nombres con / → unit, src/name.test.ts".to_string()
+    ));
+    h.wait(&job.id);
+}
