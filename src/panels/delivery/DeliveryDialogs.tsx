@@ -27,6 +27,7 @@ import { ExternalLink } from "./ExternalLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import type {
   DeliveryAutonomy,
+  DeliveryScopeMode,
   DeliveryAccess,
   DeliveryAgent,
   DeliveryArchivedTask,
@@ -243,6 +244,11 @@ export function NewTaskDialog({
 }
 
 const DELIVERY_ROLES = [
+  {
+    value: "explore",
+    label: "Alcance",
+    hint: "Solo lectura: lee el código del issue y deja el plan (qué cambia, dónde, riesgos, pruebas y preguntas).",
+  },
   { value: "tests", label: "Tests", hint: "Escribe las pruebas que fallan antes del cambio." },
   {
     value: "implementation",
@@ -842,6 +848,7 @@ function RepoSettings({
 }) {
   const [loaded, setLoaded] = useState<DeliveryRepoSettings | null>(null);
   const [autonomy, setAutonomy] = useState<DeliveryAutonomy>(DEFAULT_AUTONOMY);
+  const [scope, setScope] = useState<DeliveryScopeMode>("coordinator");
   // The section in sight, marked in the list; the list scrolls the page to one.
   const page = useRef<HTMLDivElement>(null);
   const [current, setCurrent] = useState(section ?? SETTINGS_SECTIONS[0].id);
@@ -934,6 +941,7 @@ function RepoSettings({
         setPrWithoutReviewer(settings.pr_without_reviewer ?? false);
         setSkipCiOnPush(settings.ci_on_push === "skip");
         setAutonomy({ ...DEFAULT_AUTONOMY, ...settings.autonomy });
+        setScope(settings.scope ?? "coordinator");
         setProbes(settings.environment_probes ?? []);
         setJiraHost(settings.jira?.host ?? "");
         setJiraProject(settings.jira?.project ?? "");
@@ -1023,6 +1031,7 @@ function RepoSettings({
                 pr_without_reviewer: prWithoutReviewer,
                 ci_on_push: skipCiOnPush ? "skip" : "run",
                 autonomy,
+                scope,
                 environment_probes: probes,
                 environment_up: parseChecks(environmentUp),
                 jira: jiraHost.trim()
@@ -1082,6 +1091,22 @@ function RepoSettings({
           Con qué agente, modelo y razonamiento corre cada etapa. El diálogo de lanzar etapa parte
           de aquí y los coordinadores lo usan en lugar de elegir ellos.
         </p>
+        <Field
+          label="Alcance"
+          hint="Si cada tarea empieza leyendo el código y dejando su plan. Con «el coordinador decide», el coordinador puede omitirlo dando un motivo."
+        >
+          <select
+            value={scope}
+            onChange={(event) => {
+              setScope(event.target.value as DeliveryScopeMode);
+              markEdited();
+            }}
+          >
+            <option value="always">Lanzarlo siempre</option>
+            <option value="coordinator">El coordinador decide</option>
+            <option value="never">No lanzarlo nunca</option>
+          </select>
+        </Field>
         {DELIVERY_ROLES.map((stage) => (
           <StageAgentRow
             key={stage.value}

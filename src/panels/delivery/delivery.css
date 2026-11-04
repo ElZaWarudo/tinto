@@ -3086,3 +3086,46 @@
   color: var(--fg-muted);
   font-weight: normal;
 }
+
+/* Alcance: the task's plan, square like the rest of the view. */
+.delivery-scope h4 {
+  margin: 12px 0 4px;
+  font-size: inherit;
+}
+.delivery-scope ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.delivery-scope__what {
+  white-space: pre-wrap;
+  margin: 0;
+}
+.delivery-scope__tests {
+  border-collapse: collapse;
+  width: 100%;
+}
+.delivery-scope__tests th,
+.delivery-scope__tests td {
+  border: 1px solid var(--border, currentColor);
+  padding: 2px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.delivery-scope__live ul {
+  margin-top: 4px;
+}
+.delivery-scope__skip {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.delivery-scope__skip input {
+  min-width: 320px;
+}
+.delivery-node__activity {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

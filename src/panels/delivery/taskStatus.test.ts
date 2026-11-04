@@ -31,6 +31,8 @@ import {
   roundHistory,
   roundRung,
   roundStage,
+  scopeActivity,
+  scopeOutcome,
   stageLabel,
   stepsOf,
   taskLabel,
@@ -808,5 +810,74 @@ describe("a task in a round", () => {
       "Ronda 1 · entrega inicial",
     ]);
     expect(roundHistory(overview(), "t1")).toEqual([]);
+  });
+});
+
+describe("Alcance", () => {
+  const decision = (status: "pending" | "answered") =>
+    ({ kind: "choice", status }) as unknown as import("../../delivery/types").DeliveryDecision;
+  const scope = (status: "pass" | "findings" | "blocked", findings: string[] = []) =>
+    job({
+      role: "explore",
+      writes: false,
+      result: { status, summary: "", changed_paths: [], checks: [], findings, handoff: "" },
+    });
+
+  it("reads its questions as a normal outcome, never as findings", () => {
+    const asked = scope("findings", ["¿Carpeta?", "¿Límite?", "¿Mensaje?"]);
+    expect(attemptOutcome(asked)).toEqual({ tone: "ok", label: "Listo · 3 preguntas" });
+    expect(
+      scopeOutcome(
+        task,
+        asked,
+        [asked],
+        [decision("answered"), decision("answered"), decision("pending")],
+      ),
+    ).toEqual({ tone: "ok", label: "Listo · 3 preguntas · 2 decididas" });
+    expect(attemptOutcome(scope("blocked")).tone).toBe("danger");
+  });
+
+  it("shows a skip with who and why", () => {
+    const skipped = {
+      ...task,
+      scope_skip: { reason: "cambio de una línea", by: "user", at_ms: 1 },
+    };
+    expect(scopeOutcome(skipped, undefined, [], [])).toEqual({
+      tone: "idle",
+      label: "Omitido",
+      title: "Omitido por ti: cambio de una línea",
+    });
+  });
+
+  it("is the first stage", () => {
+    expect(stageLabel("explore")).toBe("Alcance");
+  });
+
+  it("tells files read by service, searches and commands with their outcome", () => {
+    const seen = scopeActivity(
+      [
+        {
+          kind: "command",
+          text: "Read: C:\\work\\agentos-wt\\AGOS-501\\services\\session-executor\\src\\a.ts",
+        },
+        { kind: "command", text: "Read: services/session-executor/src/b.ts" },
+        { kind: "command", text: "Read: README.md" },
+        { kind: "command", text: "Grep: ApplyGuardrail" },
+        { kind: "command", text: "npm test --prefix services/session-executor  → 0" },
+        { kind: "message", text: "Leyendo" },
+      ],
+      task.worktree,
+    );
+    expect(seen.files).toEqual([
+      {
+        group: "services/session-executor",
+        paths: ["services/session-executor/src/a.ts", "services/session-executor/src/b.ts"],
+      },
+      { group: "raíz", paths: ["README.md"] },
+    ]);
+    expect(seen.searches).toEqual(["Buscando «ApplyGuardrail»"]);
+    expect(seen.commands).toEqual([
+      { command: "npm test --prefix services/session-executor", outcome: "terminó bien" },
+    ]);
   });
 });

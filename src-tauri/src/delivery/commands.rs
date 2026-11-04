@@ -152,6 +152,18 @@ pub fn delivery_update_task(
         .map_err(CommandError::from)
 }
 
+/// The user skips Alcance on a task, with the reason its tab shows.
+#[tauri::command]
+pub fn delivery_skip_scope(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+    reason: String,
+) -> Result<DeliveryTask, CommandError> {
+    service
+        .skip_scope(&task_id, &reason, true)
+        .map_err(CommandError::from)
+}
+
 /// The user blocks a task on something more.
 #[tauri::command]
 pub fn delivery_add_blocker(
@@ -507,6 +519,7 @@ pub fn delivery_set_repo_settings(
         pr_without_reviewer: settings.pr_without_reviewer,
         ci_on_push: settings.ci_on_push,
         autonomy: settings.autonomy,
+        scope: settings.scope,
         environment_probes,
         environment_up: settings
             .environment_up

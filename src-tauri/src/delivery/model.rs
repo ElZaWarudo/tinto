@@ -77,6 +77,92 @@ pub struct DeliveryTask {
     /// it is published again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restack_from: Option<String>,
+    /// Its plan (Alcance), every version kept, oldest first: the latest is
+    /// the one later stages are given.
+    #[serde(default)]
+    pub plans: Vec<DeliveryScopePlan>,
+    /// Alcance was skipped on purpose, and why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_skip: Option<DeliveryScopeSkip>,
+}
+
+/// The role of the Alcance stage: a read-only scoping job.
+pub const SCOPE_ROLE: &str = "explore";
+
+/// One version of a task's plan, in the fixed sections every stage reads.
+/// Its checks and questions are the task's own (its checks, its decisions).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryScopePlan {
+    /// The task's contract version it was written for.
+    pub version: u32,
+    pub at_ms: u64,
+    /// `agent` (written after an Alcance job explored) or `coordinator`
+    /// (written directly).
+    pub author: String,
+    /// The Alcance job it came from, when an agent explored.
+    #[serde(default)]
+    pub job_id: Option<String>,
+    /// Why this version replaced the previous one; empty for the first.
+    #[serde(default)]
+    pub reason: String,
+    /// What changed from the previous version, in a line.
+    #[serde(default)]
+    pub changed: String,
+    /// Qué cambia: two or three lines in plain language.
+    pub what: String,
+    /// Dónde: the files and services touched.
+    #[serde(default)]
+    pub places: Vec<DeliveryScopePlace>,
+    /// `bajo`, `medio` or `alto`.
+    #[serde(default)]
+    pub risk_level: String,
+    #[serde(default)]
+    pub risks: Vec<String>,
+    /// Pruebas: requirement → test.
+    #[serde(default)]
+    pub tests: Vec<DeliveryScopeTest>,
+    #[serde(default)]
+    pub out_of_scope: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryScopePlace {
+    /// Relative to the worktree.
+    pub path: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryScopeTest {
+    pub requirement: String,
+    /// `unit`, `integration`, `e2e`…
+    #[serde(default)]
+    pub layer: String,
+    #[serde(default)]
+    pub file: String,
+}
+
+/// Alcance skipped on a task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryScopeSkip {
+    pub reason: String,
+    /// `user` or `coordinator`.
+    pub by: String,
+    pub at_ms: u64,
+}
+
+/// Whether a repo's tasks run Alcance.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryScopeMode {
+    /// Every task runs it before its other stages, unless the user skips it.
+    Always,
+    /// The coordinator runs it or skips it with a reason.
+    #[default]
+    Coordinator,
+    /// No task runs it.
+    Never,
 }
 
 /// A task's place among the pull requests of its issue: "2 of 3".
@@ -404,6 +490,10 @@ pub struct DeliveryJob {
     /// job's instructions state them.
     #[serde(default)]
     pub decisions: Vec<String>,
+    /// The task's plan (Alcance) when the job was dispatched, as its
+    /// instructions state it; empty for Alcance itself and Tinto's commands.
+    #[serde(default)]
+    pub scope_plan: Vec<String>,
     /// QA jobs only: the problems to check again and the ones not to
     /// report, when the job was dispatched.
     #[serde(default)]
@@ -1440,6 +1530,9 @@ pub struct DeliveryRepoSettings {
     /// brainstorm, and which still wait for the user.
     #[serde(default)]
     pub autonomy: DeliveryAutonomy,
+    /// Whether its tasks run Alcance.
+    #[serde(default)]
+    pub scope: DeliveryScopeMode,
 }
 
 /// Whether Tinto's pushes and merges start the repo's CI.

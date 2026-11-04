@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry,
     DeliveryPlanItem, DeliveryPlatform, DeliveryQuota, DeliverySlowCommand, DeliveryTask,
-    DeliveryTiming, DeliveryUsage,
+    DeliveryTiming, DeliveryUsage, SCOPE_ROLE,
 };
 use super::service::{style_check, QA_CLI_LEASE, QA_ROLE};
 use super::tasks::{git, plain_path, Place};
@@ -383,6 +383,10 @@ pub fn job_prompt(
     if job.role == QA_ROLE && !job.qa_followup.is_empty() {
         lines.push("Problems from earlier QA the user decided on:".to_string());
         lines.extend(job.qa_followup.iter().map(|note| format!("- {note}")));
+    }
+    lines.extend(job.scope_plan.iter().cloned());
+    if job.role == SCOPE_ROLE {
+        lines.push("This is the scoping stage (Alcance): read the code the issue touches and change nothing. Say what you are looking at as you go. Write your handoff in these sections, in this order, so the coordinator records it as the task's plan: What changes (two or three plain lines); Where (the services and files, paths relative to the worktree); Risks (what could break, and the level: low, medium or high); Tests (each requirement → the test that covers it, with its layer and file); Checks (the repo's checks that fit); Questions (what the user has to decide; put each one in findings too); Out of scope (what is left out on purpose). Questions are not defects: with none, the status is pass.".to_string());
     }
     if !job.decisions.is_empty() {
         lines.push("Decisions the user made for this task (follow them):".to_string());
@@ -2804,6 +2808,8 @@ pub(crate) mod tests {
             parent_read_at_ms: None,
             restack_from: None,
             skip_ci: false,
+            plans: Vec::new(),
+            scope_skip: None,
         }
     }
 
@@ -2878,6 +2884,7 @@ pub(crate) mod tests {
             visual_record_warnings: Vec::new(),
             substituted: None,
             retry_of: None,
+            scope_plan: Vec::new(),
         }
     }
 

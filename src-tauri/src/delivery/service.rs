@@ -22,9 +22,9 @@ use super::model::{
     DeliveryDecision, DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy,
     DeliveryJob, DeliveryJobLog, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
     DeliveryOverview, DeliveryPackage, DeliveryPlatform, DeliveryPreparedStack, DeliveryQaPrepare,
-    DeliveryQaStack, DeliveryRepoSettings, DeliveryResultState, DeliverySettings,
-    DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
-    NewBlocker,
+    DeliveryQaStack, DeliveryRepoSettings, DeliveryResultState, DeliveryScopeMode,
+    DeliverySettings, DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone,
+    DeliveryTiming, NewBlocker, SCOPE_ROLE,
 };
 use super::phase::{
     check_fails, current_checks, current_setup, has_open_findings, is_broken, last_change,
@@ -913,6 +913,15 @@ impl DeliveryService {
             })
             .map(|task| task.id.clone())
             .collect();
+        let scope_always: HashSet<String> = tasks
+            .iter()
+            .filter(|task| {
+                store
+                    .repo_settings(&task.repo)
+                    .is_ok_and(|settings| settings.scope == DeliveryScopeMode::Always)
+            })
+            .map(|task| task.id.clone())
+            .collect();
         let pr_waits: BTreeMap<String, String> = tasks
             .iter()
             .filter_map(|task| {
@@ -936,6 +945,7 @@ impl DeliveryService {
             review_optional: &review_optional,
             no_qa: &no_qa,
             pr_waits: &pr_waits,
+            scope_always: &scope_always,
         };
         let phases = tasks
             .iter()
@@ -1226,6 +1236,8 @@ impl DeliveryService {
             parent_read_at_ms: None,
             restack_from: None,
             skip_ci: false,
+            plans: Vec::new(),
+            scope_skip: None,
         };
         {
             let store = self.store()?;
@@ -1856,6 +1868,28 @@ impl DeliveryService {
         let settings = store.repo_settings(&task.repo)?;
         let qa = role == QA_ROLE;
         let decisions = store.task_decisions(&task.id)?;
+        // Alcance, by the repo's setting; the stages after it get its plan.
+        let scope_plan = match request.agent {
+            DeliveryAgent::Shell => Vec::new(),
+            _ => {
+                super::scope::check_dispatch(
+                    settings.scope,
+                    &role,
+                    &task,
+                    &store.task_jobs(&task.id)?,
+                )?;
+                match role.as_str() {
+                    SCOPE_ROLE | CHECKS_ROLE | SETUP_ROLE => Vec::new(),
+                    _ => super::scope::plan_notes(&task, &decisions),
+                }
+            }
+        };
+        // Launching Alcance takes back a skip.
+        if role == SCOPE_ROLE && task.scope_skip.is_some() {
+            let mut unskipped = task.clone();
+            unskipped.scope_skip = None;
+            store.put_task(&unskipped)?;
+        }
         if request.agent != DeliveryAgent::Shell {
             let pending = decisions
                 .iter()
@@ -2060,6 +2094,7 @@ impl DeliveryService {
             visual_record_warnings: Vec::new(),
             substituted,
             retry_of: retry_of.map(str::to_string),
+            scope_plan,
         };
         store.put_job(&job)?;
         store.record_event(
