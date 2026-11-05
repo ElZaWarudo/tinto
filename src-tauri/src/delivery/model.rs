@@ -508,10 +508,14 @@ pub struct DeliveryJob {
     /// What Tinto's preparation of the QA stack did, once it ran.
     #[serde(default)]
     pub prepare: Option<DeliveryQaPrepare>,
-    /// QA jobs only: files of the worktree the job changed, which Tinto put
-    /// back as they were when it started.
+    /// QA, setup and check jobs: files of the worktree the job changed,
+    /// which Tinto put back as they were when it started.
     #[serde(default)]
     pub reverted: Vec<String>,
+    /// Setup and check jobs: the tracked files the worktree had changed when
+    /// the job started, which Tinto leaves as they are when it ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracked_before: Option<Vec<String>>,
     /// The task's checks when the job started and how they did on the code
     /// it started from, as the job's instructions state them.
     #[serde(default)]

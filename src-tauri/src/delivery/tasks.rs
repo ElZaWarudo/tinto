@@ -283,6 +283,15 @@ pub struct WorktreeState {
     pub has_upstream: bool,
 }
 
+/// Tracked files the worktree changed against HEAD, staged or not.
+pub fn changed_tracked(place: Place<'_>, worktree: &Path) -> Result<Vec<String>, DeliveryError> {
+    Ok(git(place, worktree, &["diff", "--name-only", "HEAD"])?
+        .lines()
+        .map(str::to_string)
+        .filter(|path| !path.is_empty())
+        .collect())
+}
+
 pub fn worktree_state(
     place: Place<'_>,
     worktree: &Path,

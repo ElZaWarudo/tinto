@@ -2068,6 +2068,7 @@ impl DeliveryService {
             qa_stack,
             prepare: None,
             reverted: Vec::new(),
+            tracked_before: None,
             task_checks: Vec::new(),
             round,
             guide_rules,
@@ -2918,6 +2919,15 @@ impl DeliveryService {
             job.task_checks = self.checks_note(&task, &job)?;
             self.store()?.put_job(&job)?;
         }
+        // A setup or check command may rewrite tracked files (npm install
+        // a package-lock.json): what it changed is put back when it ends, so
+        // it never holds a sync, a commit or a push.
+        let place = Place::of(task.distro.as_deref());
+        if job.agent == DeliveryAgent::Shell && (job.role == SETUP_ROLE || job.role == CHECKS_ROLE)
+        {
+            job.tracked_before = tasks::changed_tracked(place, &task.worktree).ok();
+            self.store()?.put_job(&job)?;
+        }
         let paths = (self.inner.paths_for)(&job.id)?;
         paths.prepare()?;
         // Submodules a sync, a restack or a checkout brought in and the
@@ -3223,6 +3233,9 @@ impl DeliveryService {
         // QA only reads the worktree: what it changed there (a lockfile a
         // build rewrote) goes back as it was, so it never reaches a commit.
         let mut reverted = Vec::new();
+        if let Some(before) = &job.tracked_before {
+            reverted = self.put_back_command_changes(&task, &job.id, before)?;
+        }
         if let (Some(start), Some(found)) = (&start, &end) {
             if job.role == QA_ROLE && !found.changes.is_empty() {
                 for change in to_changes(found) {
@@ -4268,6 +4281,40 @@ impl DeliveryService {
                 }
             }
         }
+    }
+
+    /// Puts back the tracked files a setup or check command changed (those
+    /// not in `before`, what the worktree had changed when it started), and
+    /// returns them. Nothing is put back while an agent of the task writes in
+    /// the worktree: the change may be its own.
+    fn put_back_command_changes(
+        &self,
+        task: &DeliveryTask,
+        job_id: &str,
+        before: &[String],
+    ) -> Result<Vec<String>, DeliveryError> {
+        let agent_writing = self.store()?.jobs()?.iter().any(|other| {
+            other.task_id == task.id
+                && other.id != job_id
+                && other.agent != DeliveryAgent::Shell
+                && other.writes
+                && other.status.is_active()
+        });
+        if agent_writing {
+            return Ok(Vec::new());
+        }
+        let place = Place::of(task.distro.as_deref());
+        let changed: Vec<String> = tasks::changed_tracked(place, &task.worktree)?
+            .into_iter()
+            .filter(|path| !before.contains(path))
+            .collect();
+        if changed.is_empty() {
+            return Ok(changed);
+        }
+        let mut args = vec!["checkout", "HEAD", "--"];
+        args.extend(changed.iter().map(String::as_str));
+        tasks::git(place, &task.worktree, &args)?;
+        Ok(changed)
     }
 
     fn revert_file(

@@ -12917,3 +12917,30 @@ fn a_restack_after_a_squash_drops_the_predecessors_commits_the_follower_synced_i
         "restack_from_not_on_branch"
     );
 }
+
+#[test]
+fn files_a_setup_command_rewrote_are_put_back_and_reported() {
+    let h = harness();
+    set_repo_setup(&h, &["touch=package-lock.json"]);
+    let task = h.task("K-95");
+    write_files(&task, &["package-lock.json", "notes.txt"]);
+    commit_outside(&task, "lockfile");
+    // A change already in the worktree is left as it is.
+    std::fs::write(task.worktree.join("notes.txt"), "mine\n").unwrap();
+    h.service
+        .set_task_setup(&task.id, vec!["touch=package-lock.json".into()])
+        .unwrap();
+    let setup = ended_jobs(&h, &task, "setup", 1);
+    assert_eq!(setup[0].status, DeliveryJobStatus::Finished);
+    assert_eq!(setup[0].reverted, ["package-lock.json"]);
+    assert!(setup[0]
+        .result_note
+        .as_deref()
+        .unwrap()
+        .contains("package-lock.json"));
+    assert_eq!(
+        in_worktree(&task, &["status", "--porcelain"]),
+        "M notes.txt",
+        "the lockfile is as committed, the user's change stays"
+    );
+}

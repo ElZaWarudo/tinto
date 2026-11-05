@@ -344,6 +344,7 @@ export interface DeliveryJob {
   /** What Tinto's preparation of the QA stack did, once it ran. */
   prepare?: DeliveryQaPrepare | null;
   /** QA: worktree files the job changed, which Tinto put back. */
+  /** QA, setup and check jobs: files the job changed, which Tinto put back. */
   reverted?: string[];
   /** The agent's own task list, as it last wrote it. */
   plan?: DeliveryPlanItem[];
