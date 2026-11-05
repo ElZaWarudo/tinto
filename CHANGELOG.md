@@ -4,6 +4,19 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.2.2] - 2026-11-05
+
+### Features
+
+- **delivery:** send the fields a Jira transition requires
+- **delivery:** mark tests that fail only because of the environment
+
+### Fixes
+
+- **delivery:** start tasks from the remote base and set up again after a sync
+- **delivery:** put back lockfiles a setup or check command rewrote
+- **delivery:** restack a package from its predecessor's merged head
+
 ## [1.2.1] - 2026-11-05
 
 ### Features
