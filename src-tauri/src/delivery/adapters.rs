@@ -2854,6 +2854,7 @@ pub(crate) mod tests {
             qa_stack: None,
             prepare: None,
             reverted: Vec::new(),
+            tracked_before: None,
             task_checks: Vec::new(),
             round: Vec::new(),
             guide_rules: Vec::new(),

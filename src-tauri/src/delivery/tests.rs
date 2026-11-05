@@ -3414,7 +3414,7 @@ fn a_package_whose_pr_waits_for_its_predecessor_works_meanwhile_and_opens_it_on_
         let task = h.service.task(&task.id).unwrap();
         assert_eq!(
             (task.base_ref.as_str(), task.restack_from.as_deref()),
-            ("main", None)
+            ("origin/main", None)
         );
         assert_eq!(
             in_worktree(&task, &["rev-parse", "HEAD^"]),
@@ -6009,7 +6009,11 @@ impl super::jira::Jira for FakeJira {
                     .find(|(from, tid, ..)| *from == status.as_str() && *tid == id)
                     .unwrap();
                 *status = to.to_string();
-                self.writes.lock().unwrap().push(format!("transition {id}"));
+                let fields = &body.unwrap()["fields"];
+                self.writes.lock().unwrap().push(match fields.is_null() {
+                    true => format!("transition {id}"),
+                    false => format!("transition {id} {fields}"),
+                });
                 Ok(serde_json::Value::Null)
             }
             ("POST", "/rest/api/2/issue/AGOS-455/remotelink") => {
@@ -6076,6 +6080,7 @@ fn tinto_reads_a_tasks_issue_from_the_repos_jira() {
         after_pr: Vec::new(),
         after_merge: Vec::new(),
         has_token: false,
+        transition_fields: Default::default(),
     });
     store.set_repo_settings(h.repo.path(), &settings).unwrap();
     drop(store);
@@ -6181,6 +6186,12 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         after_pr: vec!["En ejecución".into(), "In Review".into()],
         after_merge: vec!["Cerrada".into()],
         has_token: false,
+        // "Start Work" requires a field the team always sets to NO.
+        transition_fields: [(
+            "start work".to_string(),
+            json!({"customfield_10617": {"value": "NO"}}),
+        )]
+        .into(),
     });
     h.service
         .store()
@@ -6242,7 +6253,7 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         jira.writes.lock().unwrap().as_slice(),
         [
             "link github-pr=https://github.com/o/r/pull/279",
-            "transition 11",
+            "transition 11 {\"customfield_10617\":{\"value\":\"NO\"}}",
             "transition 151",
             "transition 161"
         ]
@@ -8183,6 +8194,7 @@ fn past_the_brainstorm_the_jira_steps_go_through() {
         after_pr: vec!["In Review".into()],
         after_merge: vec!["Cerrada".into()],
         has_token: false,
+        transition_fields: Default::default(),
     });
     h.service
         .store()
@@ -12185,7 +12197,7 @@ fn a_task_on_another_tasks_branch_follows_it_and_is_restacked_when_it_merges_squ
     h.service.store().unwrap().put_approval(&merge).unwrap();
     assert_eq!(h.service.retarget_packages().unwrap(), 1);
     let moved = h.service.task(&second.id).unwrap();
-    assert_eq!(moved.base_ref, "main");
+    assert_eq!(moved.base_ref, "origin/main");
     let first_tip = in_worktree(&first, &["rev-parse", "HEAD"]);
     assert_eq!(moved.restack_from.as_deref(), Some(first_tip.as_str()));
 
@@ -12515,6 +12527,7 @@ fn past_the_brainstorm_tinto_asks_the_push_and_jira_steps_itself() {
         after_pr: vec!["In Review".into()],
         after_merge: vec!["Cerrada".into()],
         has_token: false,
+        transition_fields: Default::default(),
     });
     h.service
         .store()
@@ -12810,4 +12823,209 @@ fn a_merge_tinto_runs_is_left_to_it_and_one_cut_by_closing_tinto_is_settled_at_s
         .outcome
         .unwrap()
         .contains("Tinto se cerró mientras fusionaba (fusionando en github)"));
+}
+
+#[test]
+fn a_restack_after_a_squash_drops_the_predecessors_commits_the_follower_synced_in() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let create = |index: u32| {
+        h.service
+            .create_task(NewTask {
+                repo: h.repo.path().to_path_buf(),
+                distro: None,
+                key: "K-80".into(),
+                title: "K-80".into(),
+                read_dirs: Vec::new(),
+                base: None,
+                branch: None,
+                run_id: None,
+                package: Some(NewPackage {
+                    index,
+                    of: 2,
+                    title: format!("Parte {index}"),
+                    builds_on: (index > 1).then_some(index - 1),
+                    until: None,
+                    pr_after_merge: index > 1,
+                }),
+            })
+            .unwrap()
+    };
+    let first = create(1);
+    let second = create(2);
+    let push = |task: &DeliveryTask| git(&task.worktree, &["push", "-q", "origin", &task.branch]);
+    write_files(&first, &["one.txt"]);
+    commit_outside(&first, "one");
+    push(&first);
+    write_files(&second, &["two.txt"]);
+    commit_outside(&second, "two");
+    // Package 1 goes on; package 2 brings it in twice through syncs.
+    for name in ["one-b.txt", "one-c.txt"] {
+        write_files(&first, &[name]);
+        commit_outside(&first, name);
+        push(&first);
+        git(&second.worktree, &["fetch", "-q", "origin"]);
+        let theirs = format!("origin/{}", first.branch);
+        git(&second.worktree, &["merge", "-q", "--no-edit", &theirs]);
+    }
+    write_files(&second, &["two-b.txt"]);
+    commit_outside(&second, "two-b");
+
+    // Package 1's PR merges squashed: main gets its files in one commit.
+    let head = in_worktree(&first, &["rev-parse", "HEAD"]);
+    let mut pr = super::prs::DeliveryPr::linked(
+        &first.id,
+        &super::prs::parse_pr_url("https://github.com/o/r/pull/1").unwrap(),
+    );
+    pr.state = "merged".into();
+    pr.head = Some(head.clone());
+    h.service.store().unwrap().put_pr(&pr).unwrap();
+    for name in ["one.txt", "one-b.txt", "one-c.txt"] {
+        std::fs::write(h.repo.path().join(name), format!("{name}\n")).unwrap();
+    }
+    git(h.repo.path(), &["add", "--all"]);
+    git(h.repo.path(), &["commit", "-q", "-m", "K-80 1/2 (#1)"]);
+    git(h.repo.path(), &["push", "-q", "origin", "main"]);
+    let mut merge = executed_step(&first.id, "merge");
+    merge.merge_method = Some("squash".into());
+    h.service.store().unwrap().put_approval(&merge).unwrap();
+
+    // The restack starts at package 1's head as merged, not at the base the
+    // chain started from.
+    assert_eq!(h.service.retarget_packages().unwrap(), 1);
+    let second = h.service.task(&second.id).unwrap();
+    assert_eq!(second.restack_from.as_deref(), Some(head.as_str()));
+    let sync = h
+        .service
+        .request_approval(step(&second, DeliveryRung::Sync, "Restack"))
+        .unwrap();
+    let done = h.service.decide_approval(&sync.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert_eq!(
+        in_worktree(&second, &["diff", "--name-only", "origin/main", "HEAD"]),
+        "two-b.txt\ntwo.txt"
+    );
+    assert_eq!(
+        in_worktree(&second, &["rev-list", "--count", "origin/main..HEAD"]),
+        "2",
+        "only package 2's own commits, without the syncs' merges"
+    );
+
+    // A wrong old base can be set right without leaving Tinto, but only to a
+    // commit of the branch.
+    let base = in_worktree(&second, &["rev-parse", "HEAD~1"]);
+    let marked = h.service.set_restack_from(&second.id, &base).unwrap();
+    assert_eq!(marked.restack_from.as_deref(), Some(base.as_str()));
+    // Nor from HEAD, which would leave the branch nothing of its own.
+    let head = in_worktree(&second, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        h.service
+            .set_restack_from(&second.id, &head)
+            .unwrap_err()
+            .category,
+        "restack_from_not_on_branch"
+    );
+    let stranger = in_worktree(&first, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        h.service
+            .set_restack_from(&second.id, &stranger)
+            .unwrap_err()
+            .category,
+        "restack_from_not_on_branch"
+    );
+}
+
+#[test]
+fn files_a_setup_command_rewrote_are_put_back_and_reported() {
+    let h = harness();
+    set_repo_setup(&h, &["touch=package-lock.json"]);
+    let task = h.task("K-95");
+    write_files(&task, &["package-lock.json", "notes.txt"]);
+    commit_outside(&task, "lockfile");
+    // A change already in the worktree is left as it is.
+    std::fs::write(task.worktree.join("notes.txt"), "mine\n").unwrap();
+    h.service
+        .set_task_setup(&task.id, vec!["touch=package-lock.json".into()])
+        .unwrap();
+    let setup = ended_jobs(&h, &task, "setup", 1);
+    assert_eq!(setup[0].status, DeliveryJobStatus::Finished);
+    assert_eq!(setup[0].reverted, ["package-lock.json"]);
+    assert!(setup[0]
+        .result_note
+        .as_deref()
+        .unwrap()
+        .contains("package-lock.json"));
+    assert_eq!(
+        in_worktree(&task, &["status", "--porcelain"]),
+        "M notes.txt",
+        "the lockfile is as committed, the user's change stays"
+    );
+}
+
+#[test]
+fn a_task_on_a_local_branch_behind_its_remote_starts_from_the_remote() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let repo = h.repo.path();
+    let head = |reference: &str| {
+        String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", reference])
+                .current_dir(repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string()
+    };
+    // Someone else's work reached origin; the local main stayed behind.
+    std::fs::write(repo.join("theirs.txt"), "theirs\n").unwrap();
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "theirs"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    let remote = head("HEAD");
+    git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    let behind = h.task("K-96");
+    assert_eq!(
+        (behind.base_ref.as_str(), behind.base_commit.as_str()),
+        ("origin/main", remote.as_str())
+    );
+    // A local branch with commits of its own stays the base.
+    std::fs::write(repo.join("mine.txt"), "mine\n").unwrap();
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "mine"]);
+    let ahead = h.task("K-97");
+    assert_eq!(ahead.base_ref, "main");
+    assert_eq!(ahead.base_commit, head("main"));
+}
+
+#[test]
+fn new_dependencies_queue_the_setup_of_their_package_again() {
+    let h = harness();
+    let (a, b) = ("touch=services/a/deps.txt", "touch=services/b/deps.txt");
+    set_repo_setup(&h, &[a, b]);
+    let task = h.task("K-98");
+    std::fs::create_dir_all(task.worktree.join("services/a")).unwrap();
+    std::fs::create_dir_all(task.worktree.join("services/b")).unwrap();
+    let task = h
+        .service
+        .set_task_setup(&task.id, vec![a.into(), b.into()])
+        .unwrap();
+    ended_jobs(&h, &task, "setup", 2);
+    let again = |changed: &[&str]| {
+        let changed: Vec<String> = changed.iter().map(|path| path.to_string()).collect();
+        h.service.rerun_setup_for(&task, &changed).unwrap()
+    };
+    assert!(again(&["services/a/src/index.ts", "README.md"]).is_empty());
+    assert_eq!(again(&["services/a/package-lock.json"]), [a]);
+    ended_jobs(&h, &task, "setup", 3);
+    assert_eq!(again(&["package.json"]), [a, b]);
+    ended_jobs(&h, &task, "setup", 5);
 }

@@ -1179,8 +1179,13 @@ impl DeliveryService {
             Some(other) => Some(other.branch.as_str()),
             None => request.base.as_deref(),
         };
-        let (base_ref, base_commit) =
+        let resolved =
             tasks::resolve_base(place, &request.repo, base, settings.default_base.as_deref())?;
+        // A package's base is the branch of the one it builds on, as it is.
+        let (base_ref, base_commit) = match &builds_on {
+            Some(_) => resolved,
+            None => tasks::prefer_remote(place, &request.repo, resolved),
+        };
         let branch = request
             .branch
             .filter(|branch| !branch.trim().is_empty())
@@ -1494,6 +1499,95 @@ impl DeliveryService {
     /// later, each one that has not passed nor is queued or running. One the
     /// task's bootstrap runs too (one of its `&&` parts) is left out: the
     /// worktree has it already, or will.
+    /// Queues again the task's setup commands for the packages whose
+    /// manifest or lockfile `changed` (a sync brought new dependencies):
+    /// those naming the package's folder, or all of them for the repo's
+    /// root. Returns the commands queued.
+    pub(super) fn rerun_setup_for(
+        &self,
+        task: &DeliveryTask,
+        changed: &[String],
+    ) -> Result<Vec<String>, DeliveryError> {
+        const MANIFESTS: [&str; 5] = [
+            "package.json",
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+        ];
+        let folders: Vec<&str> = changed
+            .iter()
+            .filter_map(|path| {
+                let (folder, name) = path.rsplit_once('/').unwrap_or(("", path));
+                MANIFESTS.contains(&name).then_some(folder)
+            })
+            .collect();
+        if folders.is_empty() {
+            return Ok(Vec::new());
+        }
+        let open: Vec<String> = self
+            .store()?
+            .task_jobs(&task.id)?
+            .into_iter()
+            .filter(|job| job.role == SETUP_ROLE && job.status.is_open())
+            .map(|job| job.prompt)
+            .collect();
+        // A command names a package by its folder, with either separator
+        // and up to a boundary (`services/rag`, not `services/rag-x`); one
+        // that names no folder (a workspace install) runs for any of them.
+        let scoped = |command: &str, folder: &str| {
+            let command = command.replace('\\', "/");
+            command.match_indices(folder).any(|(at, _)| {
+                let after = command[at + folder.len()..].chars().next();
+                let before = command[..at].chars().last();
+                after.is_none_or(|c| c.is_whitespace() || matches!(c, '/' | '"' | '\'' | ';' | '&'))
+                    && before
+                        .is_none_or(|c| c.is_whitespace() || matches!(c, '/' | '"' | '\'' | '='))
+            })
+        };
+        let names_a_folder = |command: &str| command.replace('\\', "/").contains('/');
+        let again: Vec<String> = task
+            .setup
+            .iter()
+            .filter(|command| {
+                !names_a_folder(command)
+                    || folders
+                        .iter()
+                        .any(|folder| folder.is_empty() || scoped(command, folder))
+            })
+            .filter(|command| !open.contains(command))
+            .cloned()
+            .collect();
+        for command in &again {
+            self.dispatch(NewJob {
+                task_id: task.id.clone(),
+                role: SETUP_ROLE.to_string(),
+                agent: DeliveryAgent::Shell,
+                model: None,
+                access: DeliveryAccess::Workspace,
+                prompt: command.clone(),
+                writes: None,
+                lease: None,
+                timeout_minutes: None,
+                reasoning: None,
+                platform: None,
+                read_dirs: Vec::new(),
+                stage_default: false,
+                needs_environment: false,
+            })?;
+        }
+        if !again.is_empty() {
+            self.store()?.record_event(
+                now_ms(),
+                "setup_requeued",
+                Some(&task.id),
+                None,
+                &format!("dependencias cambiadas: {}", again.join("; ")),
+            )?;
+        }
+        Ok(again)
+    }
+
     pub fn set_task_setup(
         &self,
         task_id: &str,
@@ -2068,6 +2162,7 @@ impl DeliveryService {
             qa_stack,
             prepare: None,
             reverted: Vec::new(),
+            tracked_before: None,
             task_checks: Vec::new(),
             round,
             guide_rules,
@@ -2918,6 +3013,15 @@ impl DeliveryService {
             job.task_checks = self.checks_note(&task, &job)?;
             self.store()?.put_job(&job)?;
         }
+        // A setup or check command may rewrite tracked files (npm install
+        // a package-lock.json): what it changed is put back when it ends, so
+        // it never holds a sync, a commit or a push.
+        let place = Place::of(task.distro.as_deref());
+        if job.agent == DeliveryAgent::Shell && (job.role == SETUP_ROLE || job.role == CHECKS_ROLE)
+        {
+            job.tracked_before = tasks::changed_lockfiles(place, &task.worktree).ok();
+            self.store()?.put_job(&job)?;
+        }
         let paths = (self.inner.paths_for)(&job.id)?;
         paths.prepare()?;
         // Submodules a sync, a restack or a checkout brought in and the
@@ -3223,6 +3327,9 @@ impl DeliveryService {
         // QA only reads the worktree: what it changed there (a lockfile a
         // build rewrote) goes back as it was, so it never reaches a commit.
         let mut reverted = Vec::new();
+        if let Some(before) = &job.tracked_before {
+            reverted = self.put_back_command_changes(&task, &job.id, before)?;
+        }
         if let (Some(start), Some(found)) = (&start, &end) {
             if job.role == QA_ROLE && !found.changes.is_empty() {
                 for change in to_changes(found) {
@@ -4000,6 +4107,56 @@ impl DeliveryService {
                 ));
             }
         }
+        // A check that failed only on tests the user marked as failing
+        // because of the environment counts as settled: no round opens.
+        // Only a single command that ended on its own: a timeout's or a
+        // composite command's output may not account for every failure.
+        if job.agent == DeliveryAgent::Shell
+            && job.role == CHECKS_ROLE
+            && job.status == DeliveryJobStatus::Failed
+            && !ending.timed_out
+            && !ending.cancelled
+            && !["&&", "||", ";", "|"]
+                .iter()
+                .any(|joint| job.prompt.contains(joint))
+        {
+            if let Some(task) = &task {
+                let known = store.repo_settings(&task.repo)?.known_failures;
+                let output = (self.inner.paths_for)(&job.id)
+                    .ok()
+                    .map(|paths| {
+                        [paths.events, paths.stderr]
+                            .iter()
+                            .map(|file| std::fs::read_to_string(file).unwrap_or_default())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                if let Some(found) = super::known_failures::only_known(&job.prompt, &output, &known)
+                {
+                    let note = format!(
+                        "Solo fallaron pruebas conocidas del entorno: {}",
+                        found
+                            .iter()
+                            .map(|failure| match failure.reason.is_empty() {
+                                true => failure.test.clone(),
+                                false => format!("{} ({})", failure.test, failure.reason),
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    );
+                    job.resolved_at_ms = Some(now_ms());
+                    job.resolved_note = Some(note.clone());
+                    store.record_event(
+                        now_ms(),
+                        "check_known_failures",
+                        Some(&job.task_id),
+                        Some(&job.id),
+                        &note,
+                    )?;
+                }
+            }
+        }
         if !job.reverted.is_empty() {
             let note = format!(
                 "Tinto deshizo lo que el trabajo cambió en el worktree: {}.",
@@ -4268,6 +4425,41 @@ impl DeliveryService {
                 }
             }
         }
+    }
+
+    /// Puts back the lockfiles a setup or check command rewrote (those not
+    /// in `before`, what the worktree had changed when it started), and
+    /// returns them. Only lockfiles, which installs rewrite as a side effect:
+    /// any other file may be someone's edit. Nothing is put back while
+    /// another job of the task that writes is open (an agent, another setup
+    /// command still installing): the last of them puts them back.
+    fn put_back_command_changes(
+        &self,
+        task: &DeliveryTask,
+        job_id: &str,
+        before: &[String],
+    ) -> Result<Vec<String>, DeliveryError> {
+        let writing = self.store()?.jobs()?.iter().any(|other| {
+            other.task_id == task.id
+                && other.id != job_id
+                && (other.writes || other.role == SETUP_ROLE)
+                && other.status.is_active()
+        });
+        if writing {
+            return Ok(Vec::new());
+        }
+        let place = Place::of(task.distro.as_deref());
+        let changed: Vec<String> = tasks::changed_lockfiles(place, &task.worktree)?
+            .into_iter()
+            .filter(|path| !before.contains(path))
+            .collect();
+        if changed.is_empty() {
+            return Ok(changed);
+        }
+        let mut args = vec!["checkout", "HEAD", "--"];
+        args.extend(changed.iter().map(String::as_str));
+        tasks::git(place, &task.worktree, &args)?;
+        Ok(changed)
     }
 
     fn revert_file(

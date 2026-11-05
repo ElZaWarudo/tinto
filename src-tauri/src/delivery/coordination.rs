@@ -1258,6 +1258,21 @@ impl DeliveryService {
                 // A sync runs as it is asked; a restack waits for the user,
                 // who may reject it.
                 self.sync_prerequisites(&task, task.restack_from.is_none())?;
+                // A restack drops the branch's merge commits: what resolving
+                // their conflicts changed is lost, so the user sees it first.
+                if let Some(from) = &task.restack_from {
+                    let merges = tasks::git(
+                        Place::of(task.distro.as_deref()),
+                        &task.worktree,
+                        &["rev-list", "--merges", "--count", &format!("{from}..HEAD")],
+                    )
+                    .unwrap_or_default();
+                    if merges.parse::<u32>().is_ok_and(|count| count > 0) {
+                        notice = Some(format!(
+                            "El restack quita {merges} commit(s) de merge de la rama: lo que se cambió al resolver sus conflictos se pierde y hay que rehacerlo si hacía falta. Los checks corren después."
+                        ));
+                    }
+                }
             }
             DeliveryRung::Merge => {
                 // The base's own history picks the method when none is asked.
@@ -1623,9 +1638,27 @@ impl DeliveryService {
         if approval.rung == DeliveryRung::Sync
             && approval.status == DeliveryApprovalStatus::Executed
             && approval.conflicts.is_empty()
-            && !approval.created.is_empty()
             && !self.same_tree(&approval.task_id, approval.before.as_deref())?
         {
+            // New dependencies came in: the packages' setup runs again first,
+            // and the checks wait for it.
+            let task = self.task(&approval.task_id)?;
+            let from = approval
+                .before
+                .clone()
+                .or_else(|| approval.created.last().map(|merge| format!("{merge}^1")));
+            if let Some(from) = from {
+                let changed: Vec<String> = tasks::git(
+                    Place::of(task.distro.as_deref()),
+                    &task.worktree,
+                    &["diff", "--name-only", &from, "HEAD"],
+                )
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect();
+                self.rerun_setup_for(&task, &changed)?;
+            }
             self.queue_task_checks(&approval.task_id, None)?;
         } else if approval.rung == DeliveryRung::Sync && approval.conflicts.is_empty() {
             // Nothing changed, or it failed: the checks it cancelled run
@@ -2341,6 +2374,65 @@ impl DeliveryService {
         Ok((name, commit))
     }
 
+    /// The coordinator corrects where a restack starts: `from` must be a
+    /// commit on the task's branch (the last one of the merged package it
+    /// carries). Marks the task for a restack when it was not.
+    pub fn set_restack_from(
+        &self,
+        task_id: &str,
+        from: &str,
+    ) -> Result<DeliveryTask, DeliveryError> {
+        let mut task = self.task(task_id)?;
+        let place = Place::of(task.distro.as_deref());
+        let commit = tasks::git(
+            place,
+            &task.worktree,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{from}^{{commit}}"),
+            ],
+        )
+        .ok()
+        .filter(|commit| !commit.is_empty())
+        .filter(|commit| tasks::on_branch(place, &task.worktree, commit))
+        // From HEAD the branch would keep nothing of its own.
+        .filter(|commit| tasks::head(place, &task.worktree).is_ok_and(|head| head != *commit))
+        .ok_or_else(|| {
+            DeliveryError::new(
+                "restack_from_not_on_branch",
+                format!("{from} no es un commit de la rama {}", task.branch),
+            )
+        })?;
+        task.restack_from = Some(commit.clone());
+        task.updated_at_ms = now_ms();
+        let store = self.store()?;
+        store.put_task(&task)?;
+        store.record_event(
+            now_ms(),
+            "restack_from_set",
+            Some(&task.id),
+            None,
+            &format!("el restack partirá de {}", short(&commit)),
+        )?;
+        drop(store);
+        self.notify();
+        Ok(task)
+    }
+
+    /// Whether the task has a step of `rung` pending or approved.
+    pub fn has_open_step(&self, task_id: &str, rung: DeliveryRung) -> Result<bool, DeliveryError> {
+        Ok(self.store()?.approvals()?.iter().any(|approval| {
+            approval.task_id == task_id
+                && approval.rung == rung
+                && matches!(
+                    approval.status,
+                    DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                )
+        }))
+    }
+
     /// Fetches the task's base and merges it into the branch. Without
     /// conflicts the step leaves a merge commit; with them it leaves the
     /// merge in progress for an implementation job to resolve and a commit
@@ -2811,7 +2903,7 @@ impl DeliveryService {
             return Err(DeliveryError::new(
                 "restack_conflicts",
                 format!(
-                    "El restack sobre {name} tiene conflictos en: {}. La rama quedó como estaba: rebásala a mano (rebase --onto {name} {}) y publícala con el paso push.",
+                    "El restack sobre {name} tiene conflictos en: {}. La rama quedó como estaba. Si {} no es el último commit del paquete fusionado que la rama trae, pide el sync de nuevo con restack_from en el bueno; si lo es, los conflictos son reales.",
                     files.join(", "),
                     short(from)
                 ),
@@ -3242,6 +3334,12 @@ impl DeliveryService {
             &task.key,
             pr.as_ref().map(|pr| (pr.url.as_str(), pr.number)),
             &approval.jira_statuses,
+            &self
+                .store()?
+                .repo_settings(&task.repo)?
+                .jira
+                .map(|jira| jira.transition_fields)
+                .unwrap_or_default(),
         )
     }
 

@@ -4717,7 +4717,8 @@ function JobRow({
           )}
           {(job.reverted ?? []).length > 0 && (
             <p className="delivery-job__note">
-              Tinto deshizo lo que la QA cambió en el worktree: {job.reverted!.join(", ")}.
+              Tinto deshizo lo que {job.role === "qa" ? "la QA" : "el comando"} cambió en el
+              worktree: {job.reverted!.join(", ")}.
             </p>
           )}
           {job.status === "queued" && job.waits_environment && (

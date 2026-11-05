@@ -159,6 +159,39 @@ pub fn resolve_base(
     ))
 }
 
+/// A local branch as a base is often behind its remote (AGOS: develop
+/// 1,075 commits behind): after fetching it, the remote-tracking branch is
+/// the base when the local one has nothing of its own. A remote ref, HEAD,
+/// a branch without remote or one with its own commits stays as it is.
+pub fn prefer_remote(place: Place<'_>, repo: &Path, base: (String, String)) -> (String, String) {
+    let (name, commit) = &base;
+    if name.starts_with("origin/")
+        || name == "HEAD"
+        || name.starts_with('-')
+        || !git_ok(place, repo, &["remote", "get-url", "origin"])
+    {
+        return base;
+    }
+    let tracking = format!("refs/remotes/origin/{name}");
+    // A fetch that does not answer in time leaves the ref as it was.
+    let refspec = format!("+refs/heads/{name}:{tracking}");
+    let mut fetch = git_command(place, repo, &["fetch", "--quiet", "origin", &refspec]);
+    fetch.stdin(std::process::Stdio::null());
+    let _ = super::prs::output_within(&mut fetch, std::time::Duration::from_secs(30));
+    match verify_commit(place, repo, &tracking) {
+        Some(remote)
+            if git_ok(
+                place,
+                repo,
+                &["merge-base", "--is-ancestor", commit, &remote],
+            ) =>
+        {
+            (format!("origin/{name}"), remote)
+        }
+        _ => base,
+    }
+}
+
 fn verify_commit(place: Place<'_>, repo: &Path, reference: &str) -> Option<String> {
     if reference.starts_with('-') {
         return None;
@@ -281,6 +314,37 @@ pub struct WorktreeState {
     /// not on the base commit).
     pub unpublished: u32,
     pub has_upstream: bool,
+}
+
+/// Whether `commit` is an ancestor of `of`.
+pub fn is_ancestor(place: Place<'_>, dir: &Path, commit: &str, of: &str) -> bool {
+    git_ok(place, dir, &["merge-base", "--is-ancestor", commit, of])
+}
+
+/// Lockfiles an install rewrites as a side effect: the only files Tinto
+/// puts back after a setup or check command.
+pub const LOCKFILES: [&str; 4] = [
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+];
+
+/// Lockfiles the worktree has modified against HEAD, staged or not, as git
+/// names them (unquoted).
+pub fn changed_lockfiles(place: Place<'_>, worktree: &Path) -> Result<Vec<String>, DeliveryError> {
+    Ok(git(
+        place,
+        worktree,
+        &["diff", "--name-only", "-z", "--diff-filter=M", "HEAD"],
+    )?
+    .split('\0')
+    .filter(|path| {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        LOCKFILES.contains(&name)
+    })
+    .map(str::to_string)
+    .collect())
 }
 
 pub fn worktree_state(

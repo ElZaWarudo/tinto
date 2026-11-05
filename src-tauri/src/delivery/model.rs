@@ -508,10 +508,14 @@ pub struct DeliveryJob {
     /// What Tinto's preparation of the QA stack did, once it ran.
     #[serde(default)]
     pub prepare: Option<DeliveryQaPrepare>,
-    /// QA jobs only: files of the worktree the job changed, which Tinto put
-    /// back as they were when it started.
+    /// QA, setup and check jobs: files of the worktree the job changed,
+    /// which Tinto put back as they were when it started.
     #[serde(default)]
     pub reverted: Vec<String>,
+    /// Setup and check jobs: the tracked files the worktree had changed when
+    /// the job started, which Tinto leaves as they are when it ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracked_before: Option<Vec<String>>,
     /// The task's checks when the job started and how they did on the code
     /// it started from, as the job's instructions state them.
     #[serde(default)]
@@ -1616,6 +1620,23 @@ pub struct DeliveryRepoSettings {
     /// Whether its tasks run Alcance.
     #[serde(default)]
     pub scope: DeliveryScopeMode,
+    /// Tests that fail only because of the environment: a check whose every
+    /// failure is one of them opens no round (see `known_failures`).
+    #[serde(default)]
+    pub known_failures: Vec<DeliveryKnownFailure>,
+}
+
+/// A test the user marked as failing only because of the environment, for
+/// one verification command.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryKnownFailure {
+    /// The verification command, exactly as in `checks`.
+    pub check: String,
+    /// The test's name, as the command's output shows it.
+    pub test: String,
+    /// Why it fails here, in the user's words.
+    #[serde(default)]
+    pub reason: String,
 }
 
 /// Whether Tinto's pushes and merges start the repo's CI.
@@ -1731,6 +1752,11 @@ pub struct DeliveryJiraSettings {
     /// Whether a token is saved. Tinto fills it when it reads the settings.
     #[serde(default)]
     pub has_token: bool,
+    /// Field values a transition requires, sent with it: by transition id,
+    /// transition name or target status (any case), e.g. `{"Start Work":
+    /// {"customfield_10617": {"value": "NO"}}}`.
+    #[serde(default)]
+    pub transition_fields: BTreeMap<String, serde_json::Value>,
 }
 
 /// Who runs a stage: the agent, its model and its reasoning effort.

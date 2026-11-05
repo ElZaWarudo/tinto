@@ -1380,7 +1380,7 @@ pub fn github_log() -> Vec<GhCall> {
 
 /// Runs `program` with `args`, stopping it after `timeout`: an output, or
 /// `None` when it did not finish in time.
-fn output_within(
+pub(super) fn output_within(
     command: &mut std::process::Command,
     timeout: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
@@ -2126,10 +2126,25 @@ impl DeliveryService {
                 .package
                 .as_ref()
                 .is_some_and(|package| package.pr_after_merge);
-            let restack_from = match rewritten {
-                _ if gated => Some(task.base_commit.clone()),
-                false => None,
-                true => tasks::git(
+            // The old base of the restack is the merged one's last commit
+            // this branch has: where its PR's head (as merged) and this
+            // branch last met. Commits of it the branch brought in by syncs
+            // are then left out, and the syncs' merge commits dropped.
+            let follower = Place::of(task.distro.as_deref());
+            let met = self
+                .task_pr(&other.id)?
+                .and_then(|pr| pr.head)
+                .and_then(|head| {
+                    tasks::git(follower, &task.worktree, &["merge-base", "HEAD", &head]).ok()
+                })
+                .filter(|commit| !commit.is_empty());
+            // Else, as before: a gated package's start, or what Tinto last
+            // had of the merged branch (local, else published).
+            let last_known = || -> Result<Option<String>, DeliveryError> {
+                if gated {
+                    return Ok(Some(task.base_commit.clone()));
+                }
+                Ok(tasks::git(
                     place,
                     &other.repo,
                     &[
@@ -2143,7 +2158,21 @@ impl DeliveryService {
                 .filter(|commit| !commit.is_empty())
                 .or(self
                     .latest_approval(&other.id, DeliveryRung::Push)?
-                    .and_then(|push| push.tip)),
+                    .and_then(|push| push.tip)))
+            };
+            // A gated package never restacks from before where it started:
+            // a predecessor rewritten under it meets it further back.
+            let met = met.filter(|met| {
+                !gated
+                    || *met == task.base_commit
+                    || !tasks::is_ancestor(follower, &task.worktree, met, &task.base_commit)
+            });
+            let restack_from = match gated || rewritten {
+                false => None,
+                true => match met {
+                    Some(met) => Some(met),
+                    None => last_known()?,
+                },
             };
             let target = other.base_ref.clone();
             let branch = target.trim_start_matches("origin/").to_string();

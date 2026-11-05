@@ -344,6 +344,7 @@ export interface DeliveryJob {
   /** What Tinto's preparation of the QA stack did, once it ran. */
   prepare?: DeliveryQaPrepare | null;
   /** QA: worktree files the job changed, which Tinto put back. */
+  /** QA, setup and check jobs: files the job changed, which Tinto put back. */
   reverted?: string[];
   /** The agent's own task list, as it last wrote it. */
   plan?: DeliveryPlanItem[];
@@ -734,6 +735,15 @@ export interface DeliveryRepoSettings {
   environment_up?: string[];
   /** The reviewers whose comments make the repo's guides. */
   guides?: DeliveryGuidePerson[];
+  /** Tests failing only because of the environment: a check failing only on them opens no round. */
+  known_failures?: DeliveryKnownFailure[];
+}
+
+/** A test the user marked as failing only because of the environment, for one check. */
+export interface DeliveryKnownFailure {
+  check: string;
+  test: string;
+  reason: string;
 }
 
 /** One line of a repo's "Entorno" check: Docker or a probe. */
@@ -753,6 +763,8 @@ export interface DeliveryJiraSettings {
   after_merge: string[];
   /** Whether a token is saved (read only). */
   has_token?: boolean;
+  /** Fields sent with a transition, by transition id, name or target status. */
+  transition_fields?: Record<string, unknown>;
 }
 
 /** Who runs a stage; the CLI's defaults where null. */

@@ -33,6 +33,7 @@ import type {
   DeliveryArchivedTask,
   DeliveryCoordinatorEndpoint,
   DeliveryPlatform,
+  DeliveryKnownFailure,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryStageAgent,
@@ -829,6 +830,31 @@ export function StageAgentRow({
 
 /** What QA can use in a repo and who runs each stage, set once so
  *  coordinators read it instead of asking on every task. */
+/** `check | test | reason` lines → known failures; a line without a test is dropped. */
+function parseKnownFailures(text: string): DeliveryKnownFailure[] {
+  return text
+    .split("\n")
+    .map((line) => line.split("|").map((part) => part.trim()))
+    .filter(([check, test]) => check && test)
+    .map(([check, test, ...reason]) => ({ check, test, reason: reason.join(" | ") }));
+}
+
+/** The JSON of fields per transition; null when it is not an object of objects. */
+function parseTransitionFields(text: string): Record<string, unknown> | null {
+  if (!text.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const object = (value: unknown) =>
+      typeof value === "object" && value !== null && !Array.isArray(value);
+    if (!object(parsed)) return null;
+    return Object.values(parsed as object).every(object)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function RepoSettings({
   repo,
   label,
@@ -866,6 +892,8 @@ function RepoSettings({
   const [commands, setCommands] = useState("");
   const [setup, setSetup] = useState("");
   const [environmentUp, setEnvironmentUp] = useState("");
+  // `check | test | reason` lines.
+  const [knownFailures, setKnownFailures] = useState("");
   // `NAME=value` lines.
   const [checkEnv, setCheckEnv] = useState("");
   const [environment, setEnvironment] = useState("");
@@ -894,6 +922,8 @@ function RepoSettings({
   const [jiraToken, setJiraToken] = useState("");
   const [afterPr, setAfterPr] = useState("");
   const [afterMerge, setAfterMerge] = useState("");
+  // JSON: { "<transition>": { "<field>": <value> } }.
+  const [transitionFields, setTransitionFields] = useState("");
   const [jiraCheck, setJiraCheck] = useState("");
   const [status, setStatus] = useState("");
   // Changed since it was read or saved: every field's change bubbles up to the section.
@@ -908,6 +938,13 @@ function RepoSettings({
         setCommands((settings.qa_commands ?? []).join("\n"));
         setSetup((settings.setup ?? []).join("\n"));
         setEnvironmentUp((settings.environment_up ?? []).join("\n"));
+        setKnownFailures(
+          (settings.known_failures ?? [])
+            .map((failure) =>
+              [failure.check, failure.test, failure.reason].filter(Boolean).join(" | "),
+            )
+            .join("\n"),
+        );
         setCheckEnv(
           Object.entries(settings.check_env ?? {})
             .map(([name, value]) => `${name}=${value}`)
@@ -947,6 +984,8 @@ function RepoSettings({
         setJiraProject(settings.jira?.project ?? "");
         setAfterPr((settings.jira?.after_pr ?? []).join(", "));
         setAfterMerge((settings.jira?.after_merge ?? []).join(", "));
+        const fields = settings.jira?.transition_fields ?? {};
+        setTransitionFields(Object.keys(fields).length > 0 ? JSON.stringify(fields, null, 2) : "");
         setJiraToken("");
         setJiraCheck("");
         setStatus("");
@@ -1002,9 +1041,16 @@ function RepoSettings({
           <ActionButton
             className="delivery-button--primary"
             disabled={!loaded}
-            onAction={async () =>
-              loaded &&
-              setDeliveryRepoSettings(repo, {
+            onAction={async () => {
+              if (!loaded) return;
+              const fieldsByTransition = parseTransitionFields(transitionFields);
+              if (!fieldsByTransition) {
+                setStatus(
+                  "No se pudo guardar: los campos por transición no son un objeto JSON de transición → campos.",
+                );
+                return;
+              }
+              return setDeliveryRepoSettings(repo, {
                 ...loaded,
                 qa_browser: browser,
                 qa_commands: parseChecks(commands),
@@ -1034,12 +1080,14 @@ function RepoSettings({
                 scope,
                 environment_probes: probes,
                 environment_up: parseChecks(environmentUp),
+                known_failures: parseKnownFailures(knownFailures),
                 jira: jiraHost.trim()
                   ? {
                       host: jiraHost.trim(),
                       project: jiraProject.trim(),
                       after_pr: parseStatuses(afterPr),
                       after_merge: parseStatuses(afterMerge),
+                      transition_fields: fieldsByTransition,
                     }
                   : null,
               })
@@ -1054,8 +1102,8 @@ function RepoSettings({
                 })
                 .catch((cause) =>
                   setStatus(`No se pudo guardar: ${String(cause?.message ?? cause)}`),
-                )
-            }
+                );
+            }}
           >
             Guardar
           </ActionButton>
@@ -1188,6 +1236,17 @@ function RepoSettings({
             onChange={(event) => setEnvironmentUp(event.target.value)}
             rows={2}
             placeholder="docker compose -f deploy/test-services.yml up -d"
+          />
+        </Field>
+        <Field
+          label="Fallos conocidos del entorno"
+          hint="Uno por línea: comando de verificación | nombre de la prueba | por qué. Una comprobación que solo falla en estas pruebas no abre ronda ni manda a implementación; cualquier otro fallo sí."
+        >
+          <GrowingTextarea
+            value={knownFailures}
+            onChange={(event) => setKnownFailures(event.target.value)}
+            rows={2}
+            placeholder="npm --prefix services/session-executor test | reads opened files through /proc | Windows no tiene /proc"
           />
         </Field>
         <h3 data-section="qa">QA</h3>
@@ -1415,6 +1474,17 @@ function RepoSettings({
         </Field>
         <Field label="Estados al fusionar el PR" hint="Por ejemplo: Cerrada">
           <input value={afterMerge} onChange={(event) => setAfterMerge(event.target.value)} />
+        </Field>
+        <Field
+          label="Campos por transición"
+          hint="Los campos que una transición exige, en JSON, por id, nombre de la transición o estado al que lleva. Tinto los envía con ella."
+        >
+          <GrowingTextarea
+            value={transitionFields}
+            onChange={(event) => setTransitionFields(event.target.value)}
+            rows={3}
+            placeholder={'{ "Start Work": { "customfield_10617": { "value": "NO" } } }'}
+          />
         </Field>
         <div className="delivery-actions delivery-settings__aside">
           <ActionButton
