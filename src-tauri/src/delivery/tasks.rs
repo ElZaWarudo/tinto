@@ -159,6 +159,44 @@ pub fn resolve_base(
     ))
 }
 
+/// A local branch as a base is often behind its remote (AGOS: develop
+/// 1,075 commits behind): after fetching it, the remote-tracking branch is
+/// the base when the local one has nothing of its own. A remote ref, HEAD,
+/// a branch without remote or one with its own commits stays as it is.
+pub fn prefer_remote(place: Place<'_>, repo: &Path, base: (String, String)) -> (String, String) {
+    let (name, commit) = &base;
+    if name.starts_with("origin/")
+        || name == "HEAD"
+        || name.starts_with('-')
+        || !git_ok(place, repo, &["remote", "get-url", "origin"])
+    {
+        return base;
+    }
+    let tracking = format!("refs/remotes/origin/{name}");
+    let _ = git(
+        place,
+        repo,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            &format!("+refs/heads/{name}:{tracking}"),
+        ],
+    );
+    match verify_commit(place, repo, &tracking) {
+        Some(remote)
+            if git_ok(
+                place,
+                repo,
+                &["merge-base", "--is-ancestor", commit, &remote],
+            ) =>
+        {
+            (format!("origin/{name}"), remote)
+        }
+        _ => base,
+    }
+}
+
 fn verify_commit(place: Place<'_>, repo: &Path, reference: &str) -> Option<String> {
     if reference.starts_with('-') {
         return None;

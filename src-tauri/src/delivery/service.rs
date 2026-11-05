@@ -1179,8 +1179,13 @@ impl DeliveryService {
             Some(other) => Some(other.branch.as_str()),
             None => request.base.as_deref(),
         };
-        let (base_ref, base_commit) =
+        let resolved =
             tasks::resolve_base(place, &request.repo, base, settings.default_base.as_deref())?;
+        // A package's base is the branch of the one it builds on, as it is.
+        let (base_ref, base_commit) = match &builds_on {
+            Some(_) => resolved,
+            None => tasks::prefer_remote(place, &request.repo, resolved),
+        };
         let branch = request
             .branch
             .filter(|branch| !branch.trim().is_empty())
@@ -1494,6 +1499,80 @@ impl DeliveryService {
     /// later, each one that has not passed nor is queued or running. One the
     /// task's bootstrap runs too (one of its `&&` parts) is left out: the
     /// worktree has it already, or will.
+    /// Queues again the task's setup commands for the packages whose
+    /// manifest or lockfile `changed` (a sync brought new dependencies):
+    /// those naming the package's folder, or all of them for the repo's
+    /// root. Returns the commands queued.
+    pub(super) fn rerun_setup_for(
+        &self,
+        task: &DeliveryTask,
+        changed: &[String],
+    ) -> Result<Vec<String>, DeliveryError> {
+        const MANIFESTS: [&str; 5] = [
+            "package.json",
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+        ];
+        let folders: Vec<&str> = changed
+            .iter()
+            .filter_map(|path| {
+                let (folder, name) = path.rsplit_once('/').unwrap_or(("", path));
+                MANIFESTS.contains(&name).then_some(folder)
+            })
+            .collect();
+        if folders.is_empty() {
+            return Ok(Vec::new());
+        }
+        let open: Vec<String> = self
+            .store()?
+            .task_jobs(&task.id)?
+            .into_iter()
+            .filter(|job| job.role == SETUP_ROLE && job.status.is_open())
+            .map(|job| job.prompt)
+            .collect();
+        let again: Vec<String> = task
+            .setup
+            .iter()
+            .filter(|command| {
+                folders
+                    .iter()
+                    .any(|folder| folder.is_empty() || command.contains(folder))
+            })
+            .filter(|command| !open.contains(command))
+            .cloned()
+            .collect();
+        for command in &again {
+            self.dispatch(NewJob {
+                task_id: task.id.clone(),
+                role: SETUP_ROLE.to_string(),
+                agent: DeliveryAgent::Shell,
+                model: None,
+                access: DeliveryAccess::Workspace,
+                prompt: command.clone(),
+                writes: None,
+                lease: None,
+                timeout_minutes: None,
+                reasoning: None,
+                platform: None,
+                read_dirs: Vec::new(),
+                stage_default: false,
+                needs_environment: false,
+            })?;
+        }
+        if !again.is_empty() {
+            self.store()?.record_event(
+                now_ms(),
+                "setup_requeued",
+                Some(&task.id),
+                None,
+                &format!("dependencias cambiadas: {}", again.join("; ")),
+            )?;
+        }
+        Ok(again)
+    }
+
     pub fn set_task_setup(
         &self,
         task_id: &str,

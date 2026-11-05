@@ -3414,7 +3414,7 @@ fn a_package_whose_pr_waits_for_its_predecessor_works_meanwhile_and_opens_it_on_
         let task = h.service.task(&task.id).unwrap();
         assert_eq!(
             (task.base_ref.as_str(), task.restack_from.as_deref()),
-            ("main", None)
+            ("origin/main", None)
         );
         assert_eq!(
             in_worktree(&task, &["rev-parse", "HEAD^"]),
@@ -12185,7 +12185,7 @@ fn a_task_on_another_tasks_branch_follows_it_and_is_restacked_when_it_merges_squ
     h.service.store().unwrap().put_approval(&merge).unwrap();
     assert_eq!(h.service.retarget_packages().unwrap(), 1);
     let moved = h.service.task(&second.id).unwrap();
-    assert_eq!(moved.base_ref, "main");
+    assert_eq!(moved.base_ref, "origin/main");
     let first_tip = in_worktree(&first, &["rev-parse", "HEAD"]);
     assert_eq!(moved.restack_from.as_deref(), Some(first_tip.as_str()));
 
@@ -12943,4 +12943,67 @@ fn files_a_setup_command_rewrote_are_put_back_and_reported() {
         "M notes.txt",
         "the lockfile is as committed, the user's change stays"
     );
+}
+
+#[test]
+fn a_task_on_a_local_branch_behind_its_remote_starts_from_the_remote() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let repo = h.repo.path();
+    let head = |reference: &str| {
+        String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", reference])
+                .current_dir(repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string()
+    };
+    // Someone else's work reached origin; the local main stayed behind.
+    std::fs::write(repo.join("theirs.txt"), "theirs\n").unwrap();
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "theirs"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    let remote = head("HEAD");
+    git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    let behind = h.task("K-96");
+    assert_eq!(
+        (behind.base_ref.as_str(), behind.base_commit.as_str()),
+        ("origin/main", remote.as_str())
+    );
+    // A local branch with commits of its own stays the base.
+    std::fs::write(repo.join("mine.txt"), "mine\n").unwrap();
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "mine"]);
+    let ahead = h.task("K-97");
+    assert_eq!(ahead.base_ref, "main");
+    assert_eq!(ahead.base_commit, head("main"));
+}
+
+#[test]
+fn new_dependencies_queue_the_setup_of_their_package_again() {
+    let h = harness();
+    let (a, b) = ("touch=services/a/deps.txt", "touch=services/b/deps.txt");
+    set_repo_setup(&h, &[a, b]);
+    let task = h.task("K-98");
+    std::fs::create_dir_all(task.worktree.join("services/a")).unwrap();
+    std::fs::create_dir_all(task.worktree.join("services/b")).unwrap();
+    let task = h
+        .service
+        .set_task_setup(&task.id, vec![a.into(), b.into()])
+        .unwrap();
+    ended_jobs(&h, &task, "setup", 2);
+    let again = |changed: &[&str]| {
+        let changed: Vec<String> = changed.iter().map(|path| path.to_string()).collect();
+        h.service.rerun_setup_for(&task, &changed).unwrap()
+    };
+    assert!(again(&["services/a/src/index.ts", "README.md"]).is_empty());
+    assert_eq!(again(&["services/a/package-lock.json"]), [a]);
+    ended_jobs(&h, &task, "setup", 3);
+    assert_eq!(again(&["package.json"]), [a, b]);
+    ended_jobs(&h, &task, "setup", 5);
 }

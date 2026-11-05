@@ -1626,6 +1626,25 @@ impl DeliveryService {
             && !approval.created.is_empty()
             && !self.same_tree(&approval.task_id, approval.before.as_deref())?
         {
+            // New dependencies came in: the packages' setup runs again first,
+            // and the checks wait for it.
+            let task = self.task(&approval.task_id)?;
+            let from = approval
+                .before
+                .clone()
+                .or_else(|| approval.created.last().map(|merge| format!("{merge}^1")));
+            if let Some(from) = from {
+                let changed: Vec<String> = tasks::git(
+                    Place::of(task.distro.as_deref()),
+                    &task.worktree,
+                    &["diff", "--name-only", &from, "HEAD"],
+                )
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect();
+                self.rerun_setup_for(&task, &changed)?;
+            }
             self.queue_task_checks(&approval.task_id, None)?;
         } else if approval.rung == DeliveryRung::Sync && approval.conflicts.is_empty() {
             // Nothing changed, or it failed: the checks it cancelled run
