@@ -4,6 +4,13 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.2.1] - 2026-11-05
+
+### Features
+
+- **delivery:** run an approved merge apart and show its checks, progress and errors
+- **delivery:** state machines for delivery steps and PR reviewers
+
 ## [1.2.0] - 2026-11-04
 
 ### Features
