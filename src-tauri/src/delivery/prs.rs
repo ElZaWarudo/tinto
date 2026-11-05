@@ -24,8 +24,9 @@ use serde_json::Value;
 use super::coordination::found_step;
 use super::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryFixCommit, DeliveryRung,
-    DeliveryTask,
+    DeliveryTask, StepEvent,
 };
+use super::reviews::ReviewEvent;
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
@@ -247,6 +248,9 @@ pub struct DeliveryPr {
     /// Who GitHub is still waiting on for a review.
     #[serde(default)]
     pub requested_reviewers: Vec<String>,
+    /// Teams GitHub is still waiting on for a review, by name.
+    #[serde(default)]
+    pub requested_teams: Vec<String>,
     /// The branch it merges into, as GitHub last said.
     #[serde(default)]
     pub base: Option<String>,
@@ -276,6 +280,10 @@ pub struct DeliveryPr {
     /// Who asks for changes in their latest review.
     #[serde(default)]
     pub changes_requested_by: Vec<String>,
+    /// Where each of `reviewers` is: asked, reviewed, answered, approved.
+    /// What the PR waits on comes from it.
+    #[serde(default)]
+    pub review_states: Vec<super::reviews::ReviewerState>,
 }
 
 impl DeliveryPr {
@@ -304,6 +312,7 @@ impl DeliveryPr {
             merge_commit: None,
             approved_by: Vec::new(),
             requested_reviewers: Vec::new(),
+            requested_teams: Vec::new(),
             base: None,
             head: None,
             labels: Vec::new(),
@@ -313,6 +322,7 @@ impl DeliveryPr {
             asked_on_github: Vec::new(),
             removed_in_tinto: Vec::new(),
             changes_requested_by: Vec::new(),
+            review_states: Vec::new(),
         }
     }
 
@@ -368,6 +378,7 @@ impl DeliveryPr {
             {
                 self.reviewers.push(login.clone());
             }
+            super::reviews::apply(&mut self.review_states, login, ReviewEvent::Asked);
         }
     }
 
@@ -808,7 +819,15 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) -> Vec<St
         .filter(|login| !login.is_empty())
         .map(str::to_string)
         .collect();
-    let changes = follow_reviewers(pr, snapshot, &verdicts, requested);
+    pr.requested_teams = snapshot["reviewRequests"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|request| request["login"].as_str().is_none_or(str::is_empty))
+        .filter_map(|request| request["name"].as_str().or(request["slug"].as_str()))
+        .map(str::to_string)
+        .collect();
+    let changes = follow_reviewers(pr, snapshot, &verdicts, requested, me);
 
     // (time, author, is_review, line) of everything others did on the PR.
     let mut activity: Vec<(String, String, bool, String)> = Vec::new();
@@ -902,6 +921,7 @@ fn follow_reviewers(
     snapshot: &Value,
     verdicts: &[(&str, &str, &str)],
     requested: Vec<String>,
+    me: &str,
 ) -> Vec<String> {
     let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
     let latest_verdict = |login: &str| {
@@ -990,6 +1010,13 @@ fn follow_reviewers(
         ));
     }
     pr.requested_reviewers = requested;
+    super::reviews::follow(
+        &mut pr.review_states,
+        &pr.reviewers,
+        &pr.requested_reviewers,
+        snapshot,
+        me,
+    );
     if pr.seen_until.is_none() {
         changes.clear();
     }
@@ -2213,7 +2240,7 @@ impl DeliveryService {
                     DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
                 ) =>
             {
-                merge.status = DeliveryApprovalStatus::Executed;
+                merge.advance(StepEvent::DoneOutside)?;
                 merge.executed_at_ms = Some(now_ms());
                 merge.outcome = Some(merged_outside(pr));
                 Some(merge)
@@ -2970,11 +2997,11 @@ impl DeliveryService {
             Some(step) if step.status == DeliveryApprovalStatus::Pending => return Ok(()),
             Some(mut step) if step.status.was_done() => {
                 // Another PR of the branch puts right a drift on the old one.
-                step.status = DeliveryApprovalStatus::Executed;
+                step.advance(StepEvent::Holds)?;
                 step
             }
             Some(mut step) if step.status == DeliveryApprovalStatus::Approved => {
-                step.status = DeliveryApprovalStatus::Executed;
+                step.advance(StepEvent::DoneOutside)?;
                 step.executed_at_ms = Some(now_ms());
                 step.outcome = Some(found.url.clone());
                 // Found on GitHub rather than opened by Tinto: say so when it

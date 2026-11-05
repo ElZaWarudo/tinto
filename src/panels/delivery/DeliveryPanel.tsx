@@ -177,6 +177,7 @@ import {
   splitIssueOf,
   taskListGroups,
   type TaskListEntry,
+  stepName,
   stepOf,
   type DeliveryCurrentRound,
   type DeliveryStep,
@@ -2417,7 +2418,7 @@ function TaskDetail({
   const copy = (text: string) => void navigator.clipboard?.writeText(text).catch(() => {});
   const menuEntries: (ContextItem | null | false | undefined)[] = [
     pendingStep && {
-      label: `Aprobar ${lower(stepOf(pendingStep).label)}…`,
+      label: `Aprobar ${stepName(stepOf(pendingStep), pr)}…`,
       onSelect: () => setExpanded(pendingStep.id),
     },
     blocked && {
@@ -2828,6 +2829,7 @@ function TaskDetail({
           <ApprovalBar
             key={approval.id}
             approval={approval}
+            pr={pr}
             open={expanded === approval.id}
             onToggle={() => toggleStep(approval.id)}
           >
@@ -3752,16 +3754,18 @@ function RejectedStep({
 /** An open step as one line in the task; its text and buttons open in place. */
 function ApprovalBar({
   approval,
+  pr,
   open,
   onToggle,
   children,
 }: {
   approval: DeliveryApproval;
+  pr: DeliveryPr | null | undefined;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
 }) {
-  const name = lower(stepOf(approval).label);
+  const name = stepName(stepOf(approval), pr);
   const pending = approval.status === "pending";
   const commits = approval.commits ?? [];
   const summary =
@@ -4098,7 +4102,8 @@ function ApprovalBanner({
   pr: DeliveryPr | undefined;
 }) {
   const [outcome, setOutcome] = useState("");
-  const name = lower(stepOf(approval).label);
+  const name = stepName(stepOf(approval), pr);
+  const updatesPr = approval.rung === "pr" && pr?.state === "open" ? pr : null;
   const pending = approval.status === "pending";
   const choosesReviewers = pending && approval.rung === "pr";
   const [reviewers, setReviewers] = useState<string[]>(approval.reviewers ?? []);
@@ -4162,15 +4167,17 @@ function ApprovalBanner({
         ? `Al aprobar, Tinto trae la base y la fusiona en ${task.branch} con este mensaje: un commit de merge, sin publicar. Si hay conflictos, el merge queda en curso, un job de implementación los resuelve y el paso commit lo concluye.`
         : approval.rung === "push"
           ? `Al aprobar, Tinto publica la rama ${task.branch}.`
-          : approval.rung === "pr"
-            ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos (o se los pone al PR abierto de la rama). Desde entonces lo sigue y pide la revisión a quienes elijas.${reviewerOptional ? "" : " Sin una revisión aprobada no se podrá fusionar."}`
-            : approval.rung === "merge"
-              ? `Al aprobar, Tinto comprueba que la CI pasó en el último commit del PR y que la base no avanzó, fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
-              : approval.jira_link_only
-                ? `Al aprobar, Tinto enlaza este PR en ${task.key} sin cambiar su estado: otro paquete del issue ya lo movió.`
-                : approval.jira_statuses?.length
-                  ? `Al aprobar, Tinto ${approval.stage === "after_merge" ? "" : "enlaza el PR en la issue y "}lleva ${task.key} a ${approval.jira_statuses.join(" → ")} en Jira, y comprueba el estado final.`
-                  : "Al aprobar, el coordinador hace estas operaciones en Jira y las informa; no tienes que hacer nada más.";
+          : updatesPr
+            ? `El PR #${updatesPr.number} ya está abierto: al aprobar, Tinto le pone este título y cuerpo exactos y pide la revisión a quienes elijas. No abre otro PR.`
+            : approval.rung === "pr"
+              ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos. Desde entonces lo sigue y pide la revisión a quienes elijas.${reviewerOptional ? "" : " Sin una revisión aprobada no se podrá fusionar."}`
+              : approval.rung === "merge"
+                ? `Al aprobar, Tinto comprueba que la CI pasó en el último commit del PR y que la base no avanzó, fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
+                : approval.jira_link_only
+                  ? `Al aprobar, Tinto enlaza este PR en ${task.key} sin cambiar su estado: otro paquete del issue ya lo movió.`
+                  : approval.jira_statuses?.length
+                    ? `Al aprobar, Tinto ${approval.stage === "after_merge" ? "" : "enlaza el PR en la issue y "}lleva ${task.key} a ${approval.jira_statuses.join(" → ")} en Jira, y comprueba el estado final.`
+                    : "Al aprobar, el coordinador hace estas operaciones en Jira y las informa; no tienes que hacer nada más.";
   return (
     <div
       className="delivery-banner delivery-banner--step"
@@ -4330,9 +4337,11 @@ function ApprovalBanner({
                     ? "Aprobar y publicar"
                     : approval.rung === "merge"
                       ? "Aprobar y fusionar"
-                      : approval.rung === "pr"
-                        ? "Aprobar y abrir el PR"
-                        : "Aprobar"}
+                      : updatesPr
+                        ? `Aprobar y actualizar el PR #${updatesPr.number}`
+                        : approval.rung === "pr"
+                          ? "Aprobar y abrir el PR"
+                          : "Aprobar"}
             </ActionButton>
             <ActionButton
               title={rejectionScope(approval, task, pr)}

@@ -9820,13 +9820,14 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
     }))
     .unwrap();
     h.service.store().unwrap().put_pr(&pr).unwrap();
-    assert_eq!(
+    assert!(matches!(
         h.service.overview().unwrap().phases[&task.id].phase,
         Phase::Pr {
             number: 308,
-            ci: None
+            ci: None,
+            ..
         }
-    );
+    ));
 
     // The coordinator sends the work back: the stage answers the PR.
     let fix = h.dispatch(&task, "implementation", "events=codex-ok touch=fix.txt");
@@ -9871,13 +9872,14 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
     assert_eq!(phase(&h).round.unwrap().at, "push");
     step_done_now(&h, &task, "p1", "push");
     assert!(phase(&h).round.is_none());
-    assert_eq!(
+    assert!(matches!(
         phase(&h).phase,
         Phase::Pr {
             number: 308,
-            ci: None
+            ci: None,
+            ..
         }
-    );
+    ));
     assert_eq!(
         h.service.overview().unwrap().rounds[0].outcome.as_deref(),
         Some("cambios publicados")
@@ -10638,24 +10640,26 @@ fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
             .message,
         not_run
     );
-    assert_eq!(
+    assert!(matches!(
         h.service.overview().unwrap().phases[&task.id].phase,
         super::phase::Phase::Pr {
             number: 7,
-            ci: Some(super::prs::CiState::NotRun)
+            ci: Some(super::prs::CiState::NotRun),
+            ..
         }
-    );
+    ));
     // A change the coordinator said needs no CI merges without it; checks
     // that did run still count.
     h.service.set_task_needs_ci(&task.id, false).unwrap();
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
-    assert_eq!(
+    assert!(matches!(
         h.service.overview().unwrap().phases[&task.id].phase,
         super::phase::Phase::Pr {
             number: 7,
-            ci: None
+            ci: None,
+            ..
         }
-    );
+    ));
     assert!(refused(json!([])).is_none());
     let asked = h
         .service

@@ -870,6 +870,49 @@ impl DeliveryApprovalStatus {
     pub fn was_done(self) -> bool {
         matches!(self, Self::Executed | Self::Drifted)
     }
+
+    /// Where a step goes on `event`, or `None` when the event cannot happen
+    /// to a step in this status. Rejected and undone steps are final, and
+    /// failed ones but for undoing what they left: the step is asked again
+    /// as a new one.
+    pub fn on(self, event: StepEvent) -> Option<Self> {
+        use DeliveryApprovalStatus::*;
+        use StepEvent::*;
+        match (self, event) {
+            (Pending, Approve) => Some(Approved),
+            (Pending, Reject) => Some(Rejected),
+            (Approved, Ran { ok: true }) => Some(Executed),
+            (Approved, Ran { ok: false }) => Some(Failed),
+            (Pending | Approved, DoneOutside) => Some(Executed),
+            (Executed | Drifted, Drift) => Some(Drifted),
+            (Executed | Drifted, Holds) => Some(Executed),
+            // A commit plan that failed halfway leaves commits to take back.
+            (Executed | Failed, Undo) => Some(Undone),
+            _ => None,
+        }
+    }
+}
+
+/// What happens to a delivery step: the only way its status changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepEvent {
+    /// The user approves it.
+    Approve,
+    /// The user rejects it.
+    Reject,
+    /// It ran, by Tinto or as the coordinator reports.
+    Ran { ok: bool },
+    /// It got done outside Tinto before it ran: the PR merged on GitHub, a
+    /// PR found for the branch.
+    DoneOutside,
+    /// Git or GitHub no longer bear out what it recorded.
+    Drift,
+    /// What it recorded holds (again), or Tinto takes what git or GitHub
+    /// show now as it: a branch rewritten with the same content, another PR
+    /// of the branch, the user's correction.
+    Holds,
+    /// Its commits were taken back.
+    Undo,
 }
 
 /// A merge of the task's base stopped on conflicts, as a job is told.
@@ -998,6 +1041,35 @@ pub struct DeliveryApproval {
     /// since the review comment, newest first: the fix the reply is about.
     #[serde(default)]
     pub fix_commits: Vec<DeliveryFixCommit>,
+}
+
+impl DeliveryApproval {
+    /// Moves the step on `event`, refusing an event its status does not
+    /// allow (see [`DeliveryApprovalStatus::on`]).
+    pub fn advance(&mut self, event: StepEvent) -> Result<(), super::DeliveryError> {
+        let next = self.status.on(event).ok_or_else(|| {
+            super::DeliveryError::new(
+                "step_transition",
+                format!(
+                    "el paso {:?} está {:?} y no admite {event:?}",
+                    self.rung, self.status
+                )
+                .to_ascii_lowercase(),
+            )
+        })?;
+        self.status = next;
+        Ok(())
+    }
+
+    /// The reviewer a reply answers: the author of the review comment.
+    pub fn reply_to(&self) -> Option<&str> {
+        self.thread
+            .as_ref()?
+            .comment
+            .as_ref()
+            .map(|comment| comment.author.as_str())
+            .filter(|author| !author.is_empty())
+    }
 }
 
 /// A commit of the task's branch, as a reply to a reviewer refers to it.
@@ -1807,4 +1879,38 @@ pub struct DeliveryJobLog {
 /// Decisions from before `blocking` existed were all the user's.
 fn blocking_by_default() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeliveryApprovalStatus::*;
+    use super::StepEvent::*;
+
+    #[test]
+    fn a_step_moves_only_through_its_lifecycle() {
+        // Approved, then run; a done step drifts and holds again.
+        assert_eq!(Pending.on(Approve), Some(Approved));
+        assert_eq!(Approved.on(Ran { ok: false }), Some(Failed));
+        assert_eq!(Executed.on(Drift).and_then(|s| s.on(Holds)), Some(Executed));
+        // Done on GitHub while waiting for the user.
+        assert_eq!(Pending.on(DoneOutside), Some(Executed));
+        // Nothing runs or is reported before the user approves it.
+        assert_eq!(Pending.on(Ran { ok: true }), None);
+        // A commit plan that failed halfway can be undone; a push cannot.
+        assert_eq!(Failed.on(Undo), Some(Undone));
+        assert_eq!(Pending.on(Undo), None);
+        // Rejected and undone steps are asked again as new ones.
+        for event in [
+            Approve,
+            Reject,
+            Ran { ok: true },
+            DoneOutside,
+            Drift,
+            Holds,
+            Undo,
+        ] {
+            assert_eq!(Rejected.on(event), None, "{event:?}");
+            assert_eq!(Undone.on(event), None, "{event:?}");
+        }
+    }
 }

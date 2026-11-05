@@ -3521,7 +3521,7 @@ describe("DeliveryPanel", () => {
           job({ id: `j${index}`, role }),
         ),
         approvals: [done("commit"), done("push"), done("pr"), done("jira")],
-        phases: { t1: phase({ kind: "pr", number: 279 }, "coordinator") },
+        phases: { t1: phase({ kind: "pr", number: 279, wait: { kind: "ready" } }, "coordinator") },
         prs: [
           {
             task_id: "t1",
@@ -4032,7 +4032,7 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
         prs: [pr],
-        phases: { t1: phase({ kind: "pr", number: pr.number }) },
+        phases: { t1: phase({ kind: "pr", number: pr.number, wait: { kind: "trouble" } }) },
         approvals: [executed("commit"), executed("push"), executed("pr"), executed("jira")],
       }),
     );

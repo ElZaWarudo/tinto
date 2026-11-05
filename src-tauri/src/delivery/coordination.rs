@@ -24,7 +24,7 @@ use super::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryBlockerKind, DeliveryCommit,
     DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJob,
     DeliveryMergeConflicts, DeliveryRound, DeliveryRun, DeliveryRung,
-    DeliverySettingsProposalStatus, DeliveryTask, NewBlocker, SINGLE_COMMIT_MAX_FILES,
+    DeliverySettingsProposalStatus, DeliveryTask, NewBlocker, StepEvent, SINGLE_COMMIT_MAX_FILES,
     SINGLE_COMMIT_MAX_LINES,
 };
 use super::service::DeliveryService;
@@ -1490,12 +1490,12 @@ impl DeliveryService {
         }
         approval.decided_at_ms = Some(now_ms());
         if !approve {
-            approval.status = DeliveryApprovalStatus::Rejected;
+            approval.advance(StepEvent::Reject)?;
             approval.outcome = note.filter(|note| !note.trim().is_empty());
             self.save_approval(&approval, "approval_rejected")?;
             return Ok(approval);
         }
-        approval.status = DeliveryApprovalStatus::Approved;
+        approval.advance(StepEvent::Approve)?;
         let tinto_runs_jira = !approval.jira_statuses.is_empty()
             || (approval.jira_link_only
                 && self
@@ -1506,11 +1506,11 @@ impl DeliveryService {
             approval.executed_at_ms = Some(now_ms());
             match executed {
                 Ok(outcome) => {
-                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.advance(StepEvent::Ran { ok: true })?;
                     approval.outcome = Some(outcome);
                 }
                 Err(error) => {
-                    approval.status = DeliveryApprovalStatus::Failed;
+                    approval.advance(StepEvent::Ran { ok: false })?;
                     approval.outcome = Some(error.message);
                 }
             }
@@ -1522,7 +1522,7 @@ impl DeliveryService {
         if approval.rung == DeliveryRung::Pr {
             match self.open_approved_pr(&mut approval) {
                 Ok(found) => {
-                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.advance(StepEvent::Ran { ok: true })?;
                     approval.executed_at_ms = Some(now_ms());
                     approval.outcome = Some(found.url.clone());
                     opened = Some(found);
@@ -1540,11 +1540,11 @@ impl DeliveryService {
             approval.executed_at_ms = Some(now_ms());
             match executed {
                 Ok(outcome) => {
-                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.advance(StepEvent::Ran { ok: true })?;
                     approval.outcome = Some(outcome);
                 }
                 Err(error) => {
-                    approval.status = DeliveryApprovalStatus::Failed;
+                    approval.advance(StepEvent::Ran { ok: false })?;
                     approval.outcome = Some(error.message);
                 }
             }
@@ -1556,12 +1556,12 @@ impl DeliveryService {
             approval.executed_at_ms = Some(now_ms());
             match posted {
                 Ok((url, notice)) => {
-                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.advance(StepEvent::Ran { ok: true })?;
                     approval.outcome = Some(url);
                     approval.notice = notice;
                 }
                 Err(error) => {
-                    approval.status = DeliveryApprovalStatus::Failed;
+                    approval.advance(StepEvent::Ran { ok: false })?;
                     approval.outcome = Some(error.message);
                     approval.notice = None;
                 }
@@ -1584,11 +1584,11 @@ impl DeliveryService {
             approval.executed_at_ms = Some(now_ms());
             match executed {
                 Ok(outcome) => {
-                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.advance(StepEvent::Ran { ok: true })?;
                     approval.outcome = Some(outcome);
                 }
                 Err(error) => {
-                    approval.status = DeliveryApprovalStatus::Failed;
+                    approval.advance(StepEvent::Ran { ok: false })?;
                     approval.outcome = Some(error.message);
                 }
             }
@@ -1603,6 +1603,22 @@ impl DeliveryService {
             }
         }
         self.save_approval(&approval, "approval_approved")?;
+        // A posted reply answers its reviewer.
+        if approval.rung == DeliveryRung::PrReply
+            && approval.status == DeliveryApprovalStatus::Executed
+        {
+            if let Some(reviewer) = approval.reply_to() {
+                let store = self.store()?;
+                if let Some(mut pr) = store.pr(&approval.task_id)? {
+                    super::reviews::apply(
+                        &mut pr.review_states,
+                        reviewer,
+                        super::reviews::ReviewEvent::Answered,
+                    );
+                    store.put_pr(&pr)?;
+                }
+            }
+        }
         // A sync that merged cleanly changed the code no stage made: Tinto's
         // checks verify it, not an agent.
         if approval.rung == DeliveryRung::Sync
@@ -1647,7 +1663,7 @@ impl DeliveryService {
             ));
         }
         let found = self.open_approved_pr(&mut approval)?;
-        approval.status = DeliveryApprovalStatus::Executed;
+        approval.advance(StepEvent::Ran { ok: true })?;
         approval.executed_at_ms = Some(now_ms());
         approval.outcome = Some(found.url.clone());
         approval.notice = None;
@@ -1742,11 +1758,7 @@ impl DeliveryService {
             }
             opened = Some((task, found));
         }
-        approval.status = if success {
-            DeliveryApprovalStatus::Executed
-        } else {
-            DeliveryApprovalStatus::Failed
-        };
+        approval.advance(StepEvent::Ran { ok: success })?;
         approval.executed_at_ms = Some(now_ms());
         approval.outcome = Some(outcome.trim().to_string())
             .filter(|text| !text.is_empty())
@@ -1800,7 +1812,7 @@ impl DeliveryService {
         };
         if linked.is_some() {
             // The user's word on which PR it is.
-            approval.status = DeliveryApprovalStatus::Executed;
+            approval.advance(StepEvent::Holds)?;
             approval.notice = None;
         }
         self.save_approval(&approval, "approval_corrected")?;
@@ -1888,7 +1900,7 @@ impl DeliveryService {
             .clone()
             .unwrap_or_else(|| format!("{}^", created[0]));
         tasks::uncommit_to(place, &task.worktree, &before)?;
-        approval.status = DeliveryApprovalStatus::Undone;
+        approval.advance(StepEvent::Undo)?;
         approval.outcome = Some(format!(
             "Deshecho: los cambios de {} volvieron al worktree, sin confirmar.",
             match created.len() {
@@ -2773,7 +2785,7 @@ impl DeliveryService {
         if !still_done {
             return Ok(true);
         }
-        approval.status = DeliveryApprovalStatus::Undone;
+        approval.advance(StepEvent::Undo)?;
         approval.outcome = Some(format!(
             "Los commits que hizo Tinto ({}) ya no están en la rama: se deshicieron o reescribieron fuera de Tinto (reset, amend o rebase). Hay que volver a preparar el commit.",
             created
@@ -2859,7 +2871,7 @@ impl DeliveryService {
             short(tip)
         ));
         push.tip = Some(tip.to_string());
-        push.status = DeliveryApprovalStatus::Executed;
+        push.advance(StepEvent::Holds)?;
         push.notice = None;
         self.save_approval(&push, "step_adopted")
     }
@@ -2874,11 +2886,11 @@ impl DeliveryService {
         let before = step.clone();
         match drift {
             Some(why) => {
-                step.status = DeliveryApprovalStatus::Drifted;
+                step.advance(StepEvent::Drift)?;
                 step.notice = Some(why);
             }
             None if step.status == DeliveryApprovalStatus::Drifted => {
-                step.status = DeliveryApprovalStatus::Executed;
+                step.advance(StepEvent::Holds)?;
                 step.notice = None;
             }
             None => {}

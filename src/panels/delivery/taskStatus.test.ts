@@ -6,6 +6,7 @@ import type {
   DeliveryQaProblem,
   DeliveryPhase,
   DeliveryPr,
+  DeliveryPrWait,
   DeliveryRound,
   DeliveryTask,
   DeliveryTaskPhase,
@@ -432,10 +433,27 @@ describe("a followed PR", () => {
   const upToJira = (["commit", "push", "pr", "jira"] as const).map((rung) =>
     approval({ id: rung, rung, status: "executed" }),
   );
-  const withPr = (over: Partial<DeliveryPr>, approvals = upToJira) =>
-    status({ kind: "pr", number: 5 }, { prs: [pr(over)], approvals });
+  // The PR as Tinto says it waits: `wait` and who acts come from the phase.
+  const prWorld = (
+    over: Partial<DeliveryPr>,
+    wait: DeliveryPrWait,
+    waits_on: DeliveryTaskPhase["waits_on"],
+    approvals = upToJira,
+  ) =>
+    overview({
+      prs: [pr(over)],
+      approvals,
+      phases: { t1: { kind: "pr", number: 5, wait, waits_on, next_stage: null } },
+    });
+  const withPr = (
+    over: Partial<DeliveryPr>,
+    wait: DeliveryPrWait = { kind: "trouble" },
+    waits_on: DeliveryTaskPhase["waits_on"] = "user",
+    approvals = upToJira,
+  ) => taskStatus(task, prWorld(over, wait, waits_on, approvals), 76_000);
+  const ci = { ci: "passing", head: "abc1234ef" } as const;
 
-  it("brings the task back when the PR needs the user", () => {
+  it("brings the task back only when the PR waits on the user", () => {
     expect(withPr({ new_reviews: 1, new_comments: 1, new_authors: ["ana"] })).toEqual({
       group: "attention",
       tone: "attention",
@@ -445,41 +463,58 @@ describe("a followed PR", () => {
     expect(withPr({ checks: { passing: 1, failing: 1, pending: 0 } }).label).toBe(
       "PR: checks fallando",
     );
-    expect(withPr({ conflicts: true }).group).toBe("attention");
     expect(withPr({ review_decision: "changes_requested" }).label).toBe("PR: cambios pedidos");
+    const unrun = withPr({ ...ci, ci: "not_run", checks: { passing: 0, failing: 0, pending: 0 } });
+    expect(unrun).toMatchObject({
+      label: "PR: CI sin ejecutar",
+      detail: "CI sin ejecutar en abc1234",
+    });
+    // Past the brainstorm the coordinator takes the trouble: not the user's.
+    expect(withPr({ conflicts: true }, { kind: "trouble" }, "coordinator").group).toBe("waiting");
   });
 
-  it("says the CI of the PR's head and keeps a CI that never ran in sight", () => {
-    const unrun = withPr({
-      ci: "not_run",
-      head: "abc1234ef",
-      checks: { passing: 0, failing: 0, pending: 0 },
+  it("words what the PR waits on, as Tinto says it", () => {
+    // AGOS-651: Sn4pe commented, GitHub dropped the request, the reply waits.
+    expect(withPr(ci, { kind: "reply", reviewers: ["Sn4pe"] })).toMatchObject({
+      group: "attention",
+      label: "Aprobar respuesta a Sn4pe",
+      detail: "CI pasa en abc1234",
     });
-    expect(unrun.label).toBe("PR: CI sin ejecutar");
-    expect(unrun.group).toBe("attention");
-    expect(unrun.detail).toBe("CI sin ejecutar en abc1234");
-    expect(withPr({ ci: "passing", head: "abc1234ef" }).detail).toBe(
-      "Nadie tiene pedida la revisión · CI pasa en abc1234",
+    expect(withPr(ci, { kind: "answer", reviewers: ["ana"] }, "coordinator")).toMatchObject({
+      group: "waiting",
+      label: "PR: responder a ana",
+    });
+    expect(withPr(ci, { kind: "review", reviewers: ["ana", "luis"] }, "reviewers")).toMatchObject({
+      group: "waiting",
+      label: "PR: espera aprobación",
+      detail: "Revisión pedida a ana, luis · CI pasa en abc1234",
+    });
+    expect(withPr(ci, { kind: "nobody" })).toMatchObject({
+      group: "attention",
+      label: "PR: nadie tiene pedida la revisión",
+    });
+    expect(withPr(ci, { kind: "checks" }, "external").label).toBe("PR aprobado · checks en curso");
+    expect(withPr(ci, { kind: "draft" })).toMatchObject({
+      group: "attention",
+      label: "PR aprobado · borrador: márcalo como listo",
+    });
+    expect(
+      waitsOnLabel(prWorld({}, { kind: "review", reviewers: ["ana"] }, "reviewers"), "t1"),
+    ).toBe("ana");
+    expect(waitsOnLabel(prWorld({}, { kind: "review", reviewers: [] }, "reviewers"), "t1")).toBe(
+      "los revisores",
     );
+    expect(waitsOnLabel(prWorld({}, { kind: "checks" }, "external"), "t1")).toBe("la CI");
   });
 
-  it("says who a PR waiting for approval waits on", () => {
-    const asked = withPr({
-      requested_reviewers: ["ana", "luis"],
-      ci: "passing",
-      head: "abc1234ef",
-    });
-    expect(asked.label).toBe("PR: espera aprobación");
-    expect(asked.detail).toBe("Revisión pedida a ana, luis · CI pasa en abc1234");
-    expect(withPr({}).detail).toBe("Nadie tiene pedida la revisión");
-    const world = (waits_on: DeliveryTaskPhase["waits_on"]) =>
-      overview({
-        prs: [pr({ requested_reviewers: ["ana"] })],
-        phases: { t1: { kind: "pr", number: 5, waits_on, next_stage: null } },
-      });
-    expect(waitsOnLabel(world("reviewers"), "t1")).toBe("ana");
-    expect(waitsOnLabel(world("coordinator"), "t1")).toBe("el coordinador");
-    expect(waitsOnLabel(world("agent"), "t1")).toBeNull();
+  it("asks a PR step on an open PR as setting that PR's text", () => {
+    const step = approval({ id: "pr2", rung: "pr", status: "pending" });
+    expect(
+      status(
+        { kind: "approval", rung: "pr", stage: null },
+        { prs: [pr()], approvals: [...upToJira, step] },
+      ).label,
+    ).toBe("Aprobar texto del PR #5");
   });
 
   it("words a merge in progress and a PR merged with CI not green", () => {
@@ -498,22 +533,24 @@ describe("a followed PR", () => {
   });
 
   it("waits while others review it, and offers the merge once approved", () => {
-    expect(withPr({})).toMatchObject({ group: "waiting", label: "PR: espera aprobación" });
-    expect(withPr({ checks: { passing: 1, failing: 0, pending: 2 } }).label).toBe(
-      "PR: checks en curso",
-    );
-    expect(withPr({ review_decision: "approved" })).toMatchObject({
+    const ready = { kind: "ready" } as const;
+    expect(withPr({}, { kind: "review", reviewers: [] }, "reviewers")).toMatchObject({
+      group: "waiting",
+      label: "PR: espera aprobación",
+      detail: "GitHub espera una revisión",
+    });
+    expect(withPr({ review_decision: "approved" }, ready, "coordinator")).toMatchObject({
       group: "idle",
       label: "PR aprobado · siguiente: merge",
     });
     const merged = [...upToJira, approval({ id: "m", rung: "merge", status: "executed" })];
-    expect(withPr({ state: "merged" }, merged).label).toBe(
+    expect(withPr({ state: "merged" }, ready, "coordinator", merged).label).toBe(
       "PR fusionado · siguiente: Jira (merge)",
     );
     // Without the PR's Jira step, that one comes before the merge.
-    expect(withPr({ review_decision: "approved" }, upToJira.slice(0, 3)).label).toBe(
-      "PR aprobado · siguiente: Jira (PR)",
-    );
+    expect(
+      withPr({ review_decision: "approved" }, ready, "coordinator", upToJira.slice(0, 3)).label,
+    ).toBe("PR aprobado · siguiente: Jira (PR)");
     expect(prSummary(pr({ state: "closed" })).label).toBe("Cerrado sin fusionar");
     expect(nextStep(upToJira)?.label).toBe("Merge");
   });
