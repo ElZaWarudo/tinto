@@ -80,6 +80,14 @@ export function stepOf(approval: DeliveryApproval): DeliveryStep {
   );
 }
 
+/** How a step reads where it is asked: a PR step on a branch whose PR is
+ *  already open sets its text on that PR instead of opening one. */
+export function stepName(step: DeliveryStep, pr: DeliveryPr | null | undefined): string {
+  return step.rung === "pr" && pr?.state === "open"
+    ? `texto del PR #${pr.number}`
+    : lower(step.label);
+}
+
 /** A key that tells the two Jira steps apart. */
 export function stepKey(step: DeliveryStep): string {
   return step.stage ? `${step.rung}-${step.stage}` : step.rung;
@@ -503,6 +511,40 @@ export function entryTasks(entries: TaskListEntry[]): DeliveryTask[] {
   return entries.flatMap((entry) => (entry.kind === "task" ? [entry.task] : entry.packages));
 }
 
+/** How long since `since` (ms), as a clock: "1:05". */
+export function elapsed(since: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - since) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** What the merge needs of the PR, each with whether it holds as Tinto last
+ *  read GitHub: the CI of its last commit, its approvals, no conflicts, not a
+ *  draft. Tinto checks them again when the merge is approved. */
+export function mergeChecks(pr: DeliveryPr): { ok: boolean; label: string }[] {
+  const missing = missingApprovals(pr);
+  const approvedBy = pr.approved_by ?? [];
+  const base = pr.base ?? "la base";
+  return [
+    {
+      ok: pr.ci === "passing" || pr.ci == null,
+      label: pr.ci == null ? "Sin CI en este repositorio" : (ciLine(pr) ?? "CI"),
+    },
+    missing.length > 0
+      ? { ok: false, label: `Falta la aprobación de ${missing.join(", ")}` }
+      : pr.review_decision === "changes_requested"
+        ? { ok: false, label: "Hay cambios pedidos" }
+        : pr.review_decision === "review_required"
+          ? { ok: false, label: "GitHub aún pide una revisión aprobada" }
+          : approvedBy.length > 0
+            ? { ok: true, label: `Aprobado por ${approvedBy.join(", ")}` }
+            : { ok: pr.review_decision !== "review_required", label: "Sin revisión aprobada" },
+    pr.conflicts
+      ? { ok: false, label: `Conflictos con ${base}` }
+      : { ok: true, label: `Sin conflictos con ${base}` },
+    ...(pr.draft ? [{ ok: false, label: "Es un borrador" }] : []),
+  ];
+}
+
 function clock(job: DeliveryJob, now: number): string {
   if (!job.started_at_ms) return "";
   const seconds = Math.max(0, Math.round(((job.ended_at_ms ?? now) - job.started_at_ms) / 1000));
@@ -781,8 +823,17 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
       return attention(
         phase.count === 1 ? "1 decisión pendiente" : `${phase.count} decisiones pendientes`,
       );
-    case "approval":
-      return step(`Aprobar ${lower(phaseStep(phase.rung, phase.stage).label)}`);
+    case "approval": {
+      const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
+      return step(`Aprobar ${stepName(phaseStep(phase.rung, phase.stage), pr)}`);
+    }
+    case "step_running":
+      return {
+        group: "running",
+        tone: "live",
+        icon: "live",
+        label: `${phase.step} · ${elapsed(phase.since_ms, now)}`,
+      };
     case "record":
       // Approved: running it and reporting it is the coordinator's turn.
       return waiting(
@@ -889,19 +940,67 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
       );
       const then = next ? ` · siguiente: ${lower(next.label)}` : "";
       if (pr.state === "merged") return idle(`PR fusionado${then}`);
-      const summary = prSummary(pr);
-      const needsYou = summary.tone === "attention" || summary.tone === "danger";
-      const ready = summary.label === "Aprobado";
-      return {
-        group: needsYou ? "attention" : ready ? "idle" : "waiting",
-        tone: summary.tone,
-        icon: summary.icon,
-        label: ready ? `PR aprobado${then}` : `PR: ${lower(summary.label)}`,
-        detail:
-          [summary.label === "Espera aprobación" ? reviewLine(pr) : null, ciLine(pr)]
-            .filter(Boolean)
-            .join(" · ") || undefined,
-      };
+      // Tinto says what the PR waits on and who acts; this only words it,
+      // and only what waits on the user asks for them.
+      const wait = phase.wait;
+      const ci = ciLine(pr);
+      const line = (...parts: (string | null)[]) => parts.filter(Boolean).join(" · ") || undefined;
+      const group = phaseOf(overview, task.id)?.waits_on === "user" ? "attention" : "waiting";
+      switch (wait.kind) {
+        case "reply":
+          return {
+            ...step(
+              wait.reviewers.length > 0
+                ? `Aprobar respuesta a ${wait.reviewers.join(", ")}`
+                : `Aprobar ${lower(REPLY_STEP.label)}`,
+            ),
+            detail: line(ci),
+          };
+        case "trouble": {
+          const summary = prSummary(pr);
+          return {
+            group,
+            tone: summary.tone,
+            icon: summary.icon,
+            label: `PR: ${lower(summary.label)}`,
+            detail: line(ci),
+          };
+        }
+        case "answer":
+          return {
+            ...waiting(`PR: responder a ${wait.reviewers.join(", ")}`),
+            group,
+            detail: line(ci),
+          };
+        case "review":
+          return {
+            ...waiting("PR: espera aprobación"),
+            group,
+            detail: line(
+              wait.reviewers.length > 0
+                ? `Revisión pedida a ${wait.reviewers.join(", ")}`
+                : "GitHub espera una revisión",
+              ci,
+            ),
+          };
+        case "checks":
+          return { ...waiting("PR aprobado · checks en curso"), group, detail: line(ci) };
+        case "draft":
+          return {
+            ...attention("PR aprobado · borrador: márcalo como listo"),
+            group,
+            detail: line(ci),
+          };
+        case "ready":
+          return { ...idle(`PR aprobado${then}`), detail: line(ci) };
+        case "nobody":
+          return {
+            ...attention("PR: nadie tiene pedida la revisión"),
+            group,
+            detail: line(ci),
+          };
+      }
+      return waiting("PR");
     }
     case "next_stage":
       return idle(`Siguiente: ${lower(stageLabel(phase.role))}`);
@@ -929,19 +1028,6 @@ export function missingApprovals(pr: DeliveryPr): string[] {
   return (pr.reviewers ?? []).filter((login) => !approved.includes(login.toLowerCase()));
 }
 
-/** Who the PR's review waits on: "Revisión pedida a ana, luis", or that
- *  nobody was asked (then nobody can approve it). */
-export function reviewLine(pr: DeliveryPr): string | null {
-  if (pr.state !== "open") return null;
-  const missing = missingApprovals(pr);
-  if (missing.length > 0 && (pr.approved_by?.length ?? 0) > 0) {
-    return `Falta la aprobación de ${missing.join(", ")}`;
-  }
-  const asked = pr.requested_reviewers ?? [];
-  if (asked.length > 0) return `Revisión pedida a ${asked.join(", ")}`;
-  return (pr.approved_by?.length ?? 0) > 0 ? null : "Nadie tiene pedida la revisión";
-}
-
 /** Who the task waits on, as its row says it after its state: "ti", "el
  *  coordinador", the reviewers by name… Nothing while an agent works on it or
  *  nobody has to act. */
@@ -955,14 +1041,13 @@ export function waitsOnLabel(overview: DeliveryOverview, taskId: string): string
     case "queue":
       return "su turno";
     case "reviewers": {
-      const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === taskId);
-      const asked = pr?.requested_reviewers ?? [];
+      const asked = phase.kind === "pr" && phase.wait.kind === "review" ? phase.wait.reviewers : [];
       return asked.length > 0 ? asked.join(", ") : "los revisores";
     }
     case "dependency":
       return "otra tarea";
     case "external":
-      return "algo fuera de Tinto";
+      return phase.kind === "pr" ? "la CI" : "algo fuera de Tinto";
     default:
       return null;
   }

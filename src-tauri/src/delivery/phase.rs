@@ -20,6 +20,7 @@ use super::model::{
     DeliveryRun, DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
 use super::prs::{CiState, DeliveryPr};
+use super::reviews::ReviewState;
 use super::service::{CHECKS_ROLE, SETUP_ROLE};
 
 /// The built-in stages, in flow order.
@@ -65,6 +66,13 @@ pub enum Phase {
     Approval {
         rung: DeliveryRung,
         stage: Option<String>,
+    },
+    /// An approved step Tinto is running apart (a merge): what it is doing
+    /// and since when. Nobody has to act.
+    StepRunning {
+        rung: DeliveryRung,
+        step: String,
+        since_ms: u64,
     },
     /// An approved PR or Jira step the coordinator still has to report.
     Record {
@@ -145,10 +153,12 @@ pub enum Phase {
         blocked: bool,
     },
     Delivered,
-    /// Its PR is followed on GitHub, with the CI of its head.
+    /// Its PR is followed on GitHub, with the CI of its head and what it
+    /// waits on.
     Pr {
         number: u64,
         ci: Option<CiState>,
+        wait: PrWait,
     },
     /// A sync's merge is in progress and its conflicts are resolved (or
     /// work waits on it): the commit that concludes it comes before any
@@ -179,6 +189,50 @@ pub enum Phase {
         rung: DeliveryRung,
         stage: Option<String>,
     },
+}
+
+/// What an open PR waits on, from its reviewers' states and its trouble,
+/// most urgent first. Its `waits_on` follows from it, so the two never
+/// disagree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PrWait {
+    /// The user approves replies to these reviewers (empty: a general
+    /// comment).
+    Reply { reviewers: Vec<String> },
+    /// Unread reviews or comments, failing checks or a CI that did not run,
+    /// conflicts, changes asked by someone Tinto does not follow, or closed:
+    /// the user, or the coordinator past the brainstorm.
+    Trouble,
+    /// These reviewers reviewed and wait for an answer: the coordinator
+    /// prepares it.
+    Answer { reviewers: Vec<String> },
+    /// These reviewers have to review (again); empty when only GitHub knows
+    /// who (a team).
+    Review { reviewers: Vec<String> },
+    /// Its reviews let it merge but its checks still run.
+    Checks,
+    /// Its reviews let it merge but it is a draft: the user marks it ready.
+    Draft,
+    /// Its reviews let it merge, or it merged: the next step is the
+    /// coordinator's.
+    Ready,
+    /// Nobody is asked to review it and it needs a review: the user asks
+    /// someone.
+    Nobody,
+}
+
+impl PrWait {
+    fn waiter(&self, unattended: bool) -> Waiter {
+        match self {
+            PrWait::Reply { .. } | PrWait::Draft | PrWait::Nobody => Waiter::User,
+            PrWait::Trouble if unattended => Waiter::Coordinator,
+            PrWait::Trouble => Waiter::User,
+            PrWait::Answer { .. } | PrWait::Ready => Waiter::Coordinator,
+            PrWait::Review { .. } => Waiter::Reviewers,
+            PrWait::Checks => Waiter::External,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -866,26 +920,66 @@ pub fn split_issues(
     issues
 }
 
-/// Who a followed PR waits on: the user when it has news or trouble, the
-/// coordinator once its reviews let it merge or it merged (the next step),
-/// else its reviewers. Past the brainstorm the coordinator takes the news and
-/// trouble too.
-fn pr_waits_on(pr: &DeliveryPr, unattended: bool, review_optional: bool) -> Waiter {
+/// What a followed PR waits on. `replies` are the user's pending replies to
+/// its reviewers, `None` for a general comment.
+pub fn pr_wait(pr: &DeliveryPr, replies: &[Option<&str>], review_optional: bool) -> PrWait {
+    if pr.state == "merged" {
+        return PrWait::Ready;
+    }
+    let logins = |keep: fn(ReviewState) -> bool| -> Vec<String> {
+        pr.review_states
+            .iter()
+            .filter(|reviewer| keep(reviewer.state))
+            .map(|reviewer| reviewer.login.clone())
+            .collect()
+    };
+    if pr.state == "open" && !replies.is_empty() {
+        let mut reviewers: Vec<String> = replies
+            .iter()
+            .flatten()
+            .map(|login| login.to_string())
+            .collect();
+        reviewers.sort();
+        reviewers.dedup();
+        return PrWait::Reply { reviewers };
+    }
+    // Changes asked by someone Tinto does not follow as a reviewer have no
+    // state to answer: they block it as trouble.
+    let tracked = |login: &String| {
+        pr.reviewers
+            .iter()
+            .any(|reviewer| reviewer.eq_ignore_ascii_case(login))
+    };
+    let untracked_changes = pr.review_decision.as_deref() == Some("changes_requested")
+        && (pr.changes_requested_by.is_empty() || !pr.changes_requested_by.iter().all(tracked));
     let trouble = pr.state == "closed"
         || pr.new_reviews + pr.new_comments > 0
         || pr.checks.failing > 0
+        || pr.ci == Some(CiState::NotRun)
         || pr.conflicts
-        || pr.review_decision.as_deref() == Some("changes_requested");
-    let approved = pr.review_allows_merge(review_optional);
-    if trouble && unattended {
-        Waiter::Coordinator
-    } else if trouble {
-        Waiter::User
-    } else if pr.state == "merged" || (approved && pr.checks.pending == 0 && !pr.draft) {
-        Waiter::Coordinator
-    } else {
-        Waiter::Reviewers
+        || untracked_changes;
+    if trouble {
+        return PrWait::Trouble;
     }
+    let answer = logins(|state| state.awaits_answer());
+    if !answer.is_empty() {
+        return PrWait::Answer { reviewers: answer };
+    }
+    if pr.review_allows_merge(review_optional) {
+        return if pr.draft {
+            PrWait::Draft
+        } else if pr.checks.pending > 0 {
+            PrWait::Checks
+        } else {
+            PrWait::Ready
+        };
+    }
+    let mut review = logins(|state| state.awaits_review());
+    review.extend(pr.requested_teams.iter().cloned());
+    if !review.is_empty() || !pr.reviewers.is_empty() {
+        return PrWait::Review { reviewers: review };
+    }
+    PrWait::Nobody
 }
 
 /// The delivery step a round still has to do again: its commit, then its
@@ -932,6 +1026,7 @@ fn round_at(phase: &DeliveryTaskPhase) -> String {
         | Phase::Broken { role, .. }
         | Phase::NextStage { role } => role.clone(),
         Phase::Approval { rung, .. }
+        | Phase::StepRunning { rung, .. }
         | Phase::Record { rung, .. }
         | Phase::Drifted { rung, .. }
         | Phase::NextStep { rung, .. } => format!("{rung:?}").to_ascii_lowercase(),
@@ -1040,6 +1135,25 @@ fn phase_in_round(
                 stage: stage_of(step),
             },
             Waiter::User,
+        );
+    }
+    // Approved, or done and still cleaning up after it (its branch).
+    if let Some((step, progress)) = approvals.iter().find_map(|approval| {
+        matches!(
+            approval.status,
+            DeliveryApprovalStatus::Approved | DeliveryApprovalStatus::Executed
+        )
+        .then_some(approval.progress.as_ref())
+        .flatten()
+        .map(|progress| (approval, progress))
+    }) {
+        return phase(
+            Phase::StepRunning {
+                rung: step.rung,
+                step: progress.step.clone(),
+                since_ms: progress.since_ms,
+            },
+            Waiter::Nobody,
         );
     }
     if let Some(step) = approvals
@@ -1332,12 +1446,27 @@ fn phase_in_round(
         }
     }
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
+        // Replies to reviewers are outside the ladder, but waiting for the
+        // user's approval they are what the PR waits on.
+        let replies: Vec<Option<&str>> = facts
+            .approvals
+            .iter()
+            .filter(|approval| {
+                approval.task_id == task.id
+                    && approval.rung == DeliveryRung::PrReply
+                    && approval.status == DeliveryApprovalStatus::Pending
+            })
+            .map(|approval| approval.reply_to())
+            .collect();
+        let wait = pr_wait(pr, &replies, facts.review_optional.contains(&task.id));
+        let waits_on = wait.waiter(unattended);
         return phase(
             Phase::Pr {
                 number: pr.number,
                 ci: pr.ci,
+                wait,
             },
-            pr_waits_on(pr, unattended, facts.review_optional.contains(&task.id)),
+            waits_on,
         );
     }
     if let Some(role) = next.clone() {
@@ -1853,83 +1982,235 @@ mod tests {
 
     #[test]
     fn a_pr_waits_on_whoever_has_to_act_on_it() {
+        use serde_json::json;
+        let ana = |state: &str| json!({"reviewers": ["ana"], "review_states": [{"login": "ana", "state": state}]});
+        let names = |logins: &[&str]| logins.iter().map(|login| login.to_string()).collect();
+        let approved = json!({"review_decision": "approved", "reviewers": ["ana"], "approved_by": ["ana"], "review_states": [{"login": "ana", "state": "approved"}]});
+        let with = |base: &serde_json::Value, over: serde_json::Value| {
+            let mut value = base.clone();
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(over.as_object().unwrap().clone());
+            value
+        };
+        // (PR, replies waiting for the user, review optional) → wait, waiter
+        // while the user follows the batch, waiter past the brainstorm.
+        type Case<'a> = (
+            serde_json::Value,
+            Vec<Option<&'a str>>,
+            bool,
+            PrWait,
+            Waiter,
+            Waiter,
+        );
+        let cases: Vec<Case> = vec![
+            // AGOS-651: ana commented, GitHub dropped her request, the reply
+            // waits for the user.
+            (
+                ana("commented"),
+                vec![Some("ana")],
+                false,
+                PrWait::Reply {
+                    reviewers: names(&["ana"]),
+                },
+                Waiter::User,
+                Waiter::User,
+            ),
+            (
+                ana("commented"),
+                vec![],
+                false,
+                PrWait::Answer {
+                    reviewers: names(&["ana"]),
+                },
+                Waiter::Coordinator,
+                Waiter::Coordinator,
+            ),
+            (
+                ana("changes_requested"),
+                vec![],
+                false,
+                PrWait::Answer {
+                    reviewers: names(&["ana"]),
+                },
+                Waiter::Coordinator,
+                Waiter::Coordinator,
+            ),
+            (
+                ana("asked"),
+                vec![],
+                false,
+                PrWait::Review {
+                    reviewers: names(&["ana"]),
+                },
+                Waiter::Reviewers,
+                Waiter::Reviewers,
+            ),
+            (
+                ana("answered"),
+                vec![],
+                false,
+                PrWait::Review {
+                    reviewers: names(&["ana"]),
+                },
+                Waiter::Reviewers,
+                Waiter::Reviewers,
+            ),
+            (
+                with(&ana("asked"), json!({"new_comments": 1})),
+                vec![],
+                false,
+                PrWait::Trouble,
+                Waiter::User,
+                Waiter::Coordinator,
+            ),
+            (
+                with(&ana("asked"), json!({"conflicts": true})),
+                vec![],
+                false,
+                PrWait::Trouble,
+                Waiter::User,
+                Waiter::Coordinator,
+            ),
+            (
+                with(&ana("asked"), json!({"ci": "not_run"})),
+                vec![],
+                false,
+                PrWait::Trouble,
+                Waiter::User,
+                Waiter::Coordinator,
+            ),
+            (
+                json!({}),
+                vec![],
+                false,
+                PrWait::Nobody,
+                Waiter::User,
+                Waiter::User,
+            ),
+            // Changes asked by someone Tinto does not follow still block it.
+            (
+                json!({"review_decision": "changes_requested"}),
+                vec![],
+                true,
+                PrWait::Trouble,
+                Waiter::User,
+                Waiter::Coordinator,
+            ),
+            (
+                approved.clone(),
+                vec![],
+                false,
+                PrWait::Ready,
+                Waiter::Coordinator,
+                Waiter::Coordinator,
+            ),
+            (
+                with(
+                    &approved,
+                    json!({"checks": {"passing": 1, "failing": 0, "pending": 1}}),
+                ),
+                vec![],
+                false,
+                PrWait::Checks,
+                Waiter::External,
+                Waiter::External,
+            ),
+            (
+                with(&approved, json!({"draft": true})),
+                vec![],
+                false,
+                PrWait::Draft,
+                Waiter::User,
+                Waiter::User,
+            ),
+            // A team asked on GitHub is someone asked.
+            (
+                json!({"requested_teams": ["core"]}),
+                vec![],
+                false,
+                PrWait::Review {
+                    reviewers: names(&["core"]),
+                },
+                Waiter::Reviewers,
+                Waiter::Reviewers,
+            ),
+            // Bob, whom Tinto does not follow, asks for changes while ana is
+            // still asked: his block is not hidden behind her review.
+            (
+                with(
+                    &ana("asked"),
+                    json!({"review_decision": "changes_requested", "changes_requested_by": ["bob"]}),
+                ),
+                vec![],
+                false,
+                PrWait::Trouble,
+                Waiter::User,
+                Waiter::Coordinator,
+            ),
+            (
+                json!({"state": "merged"}),
+                vec![],
+                false,
+                PrWait::Ready,
+                Waiter::Coordinator,
+                Waiter::Coordinator,
+            ),
+            // A repo that merges without a review waits only on the
+            // reviewers it chose.
+            (
+                json!({"review_decision": null}),
+                vec![],
+                true,
+                PrWait::Ready,
+                Waiter::Coordinator,
+                Waiter::Coordinator,
+            ),
+            (
+                with(&ana("asked"), json!({"review_decision": null})),
+                vec![],
+                true,
+                PrWait::Review {
+                    reviewers: names(&["ana"]),
+                },
+                Waiter::Reviewers,
+                Waiter::Reviewers,
+            ),
+        ];
+        for (over, replies, optional, wait, attended, unattended) in cases {
+            let got = pr_wait(&pr(over.clone()), &replies, optional);
+            assert_eq!(got, wait, "{over}");
+            assert_eq!(got.waiter(false), attended, "{over}");
+            assert_eq!(got.waiter(true), unattended, "{over}");
+        }
+
+        // Through the phase: a pending reply puts the PR on the user.
         let mut world = World::new(vec![job("j1", "qa", Finished, Some("pass"))]);
         for rung in ["commit", "push", "pr"] {
             world.approvals.push(step(rung, "executed", Some(9_000)));
         }
-        let mut waits = |over: serde_json::Value| {
-            world.prs = vec![pr(over)];
-            (world.phase().phase, world.phase().waits_on)
-        };
+        world.prs = vec![pr(ana("commented"))];
+        let mut reply = step("pr_reply", "pending", None);
+        reply.thread = serde_json::from_value(json!({
+            "kind": "pr_comment", "path": "a.rs", "lines": [],
+            "comment": {"author": "ana", "body": "x", "created_at": "", "replies": 0},
+        }))
+        .unwrap();
+        world.approvals.push(reply);
+        let phase = world.phase();
         assert_eq!(
-            waits(serde_json::json!({})),
+            (phase.phase, phase.waits_on),
             (
                 Phase::Pr {
                     number: 5,
-                    ci: None
+                    ci: None,
+                    wait: PrWait::Reply {
+                        reviewers: names(&["ana"])
+                    },
                 },
-                Waiter::Reviewers
+                Waiter::User
             )
-        );
-        assert_eq!(
-            waits(serde_json::json!({"new_comments": 1})).1,
-            Waiter::User
-        );
-        assert_eq!(
-            waits(serde_json::json!({"conflicts": true})).1,
-            Waiter::User
-        );
-        assert_eq!(
-            waits(serde_json::json!({"review_decision": "approved"})).1,
-            Waiter::Coordinator
-        );
-        assert_eq!(
-            waits(serde_json::json!({
-                "review_decision": "approved",
-                "checks": {"passing": 1, "failing": 0, "pending": 1},
-            }))
-            .1,
-            Waiter::Reviewers
-        );
-        assert_eq!(
-            waits(serde_json::json!({"state": "merged"})).1,
-            Waiter::Coordinator
-        );
-        // Past the brainstorm the coordinator takes news and trouble.
-        for trouble in [
-            serde_json::json!({"new_comments": 1}),
-            serde_json::json!({"conflicts": true}),
-            serde_json::json!({"review_decision": "changes_requested"}),
-        ] {
-            assert_eq!(pr_waits_on(&pr(trouble), true, false), Waiter::Coordinator);
-        }
-        assert_eq!(
-            pr_waits_on(&pr(serde_json::json!({})), true, false),
-            Waiter::Reviewers
-        );
-        // A repo that merges without a review waits only on the reviewers
-        // it chose or GitHub requires, and still not past changes requested.
-        let unreviewed = serde_json::json!({"review_decision": null});
-        assert_eq!(
-            pr_waits_on(&pr(unreviewed), false, true),
-            Waiter::Coordinator
-        );
-        for waits_review in [
-            serde_json::json!({"review_decision": null, "reviewers": ["ana"]}),
-            serde_json::json!({"review_decision": "review_required"}),
-        ] {
-            assert_eq!(
-                pr_waits_on(&pr(waits_review), false, true),
-                Waiter::Reviewers
-            );
-        }
-        assert_eq!(
-            pr_waits_on(
-                &pr(serde_json::json!({"review_decision": "changes_requested"})),
-                false,
-                true
-            ),
-            Waiter::User
         );
     }
 

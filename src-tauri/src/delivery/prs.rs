@@ -13,8 +13,8 @@
 //! - Activity newer than what the user last saw counts as new; reading it
 //!   (or starting a stage on the task) moves that mark.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -24,8 +24,9 @@ use serde_json::Value;
 use super::coordination::found_step;
 use super::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryFixCommit, DeliveryRung,
-    DeliveryTask,
+    DeliveryTask, StepEvent,
 };
+use super::reviews::ReviewEvent;
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
@@ -247,6 +248,9 @@ pub struct DeliveryPr {
     /// Who GitHub is still waiting on for a review.
     #[serde(default)]
     pub requested_reviewers: Vec<String>,
+    /// Teams GitHub is still waiting on for a review, by name.
+    #[serde(default)]
+    pub requested_teams: Vec<String>,
     /// The branch it merges into, as GitHub last said.
     #[serde(default)]
     pub base: Option<String>,
@@ -276,6 +280,10 @@ pub struct DeliveryPr {
     /// Who asks for changes in their latest review.
     #[serde(default)]
     pub changes_requested_by: Vec<String>,
+    /// Where each of `reviewers` is: asked, reviewed, answered, approved.
+    /// What the PR waits on comes from it.
+    #[serde(default)]
+    pub review_states: Vec<super::reviews::ReviewerState>,
 }
 
 impl DeliveryPr {
@@ -304,6 +312,7 @@ impl DeliveryPr {
             merge_commit: None,
             approved_by: Vec::new(),
             requested_reviewers: Vec::new(),
+            requested_teams: Vec::new(),
             base: None,
             head: None,
             labels: Vec::new(),
@@ -313,6 +322,7 @@ impl DeliveryPr {
             asked_on_github: Vec::new(),
             removed_in_tinto: Vec::new(),
             changes_requested_by: Vec::new(),
+            review_states: Vec::new(),
         }
     }
 
@@ -368,6 +378,7 @@ impl DeliveryPr {
             {
                 self.reviewers.push(login.clone());
             }
+            super::reviews::apply(&mut self.review_states, login, ReviewEvent::Asked);
         }
     }
 
@@ -808,7 +819,15 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) -> Vec<St
         .filter(|login| !login.is_empty())
         .map(str::to_string)
         .collect();
-    let changes = follow_reviewers(pr, snapshot, &verdicts, requested);
+    pr.requested_teams = snapshot["reviewRequests"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|request| request["login"].as_str().is_none_or(str::is_empty))
+        .filter_map(|request| request["name"].as_str().or(request["slug"].as_str()))
+        .map(str::to_string)
+        .collect();
+    let changes = follow_reviewers(pr, snapshot, &verdicts, requested, me);
 
     // (time, author, is_review, line) of everything others did on the PR.
     let mut activity: Vec<(String, String, bool, String)> = Vec::new();
@@ -902,6 +921,7 @@ fn follow_reviewers(
     snapshot: &Value,
     verdicts: &[(&str, &str, &str)],
     requested: Vec<String>,
+    me: &str,
 ) -> Vec<String> {
     let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
     let latest_verdict = |login: &str| {
@@ -990,6 +1010,13 @@ fn follow_reviewers(
         ));
     }
     pr.requested_reviewers = requested;
+    super::reviews::follow(
+        &mut pr.review_states,
+        &pr.reviewers,
+        &pr.requested_reviewers,
+        snapshot,
+        me,
+    );
     if pr.seen_until.is_none() {
         changes.clear();
     }
@@ -1296,6 +1323,112 @@ impl GitHub for Offline {
     }
 }
 
+/// How long one `gh` call may take before Tinto stops it: past it GitHub is
+/// taken as not answering, and the step that asked fails saying so.
+const GH_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// How a `gh` call ended, as the GitHub log shows it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GhCallOutcome {
+    Ok,
+    /// gh answered with an error: its first line.
+    Failed {
+        error: String,
+    },
+    /// Stopped after `GH_TIMEOUT` without an answer.
+    TimedOut,
+    /// Not a call: a read that waited for another read of the same PR.
+    Waited,
+}
+
+/// One `gh` call Tinto made, for the GitHub log.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GhCall {
+    pub at_ms: u64,
+    pub command: String,
+    pub duration_ms: u64,
+    pub outcome: GhCallOutcome,
+}
+
+/// The latest calls, oldest first; only the last `GH_LOG_SIZE` are kept.
+static GH_LOG: Mutex<VecDeque<GhCall>> = Mutex::new(VecDeque::new());
+const GH_LOG_SIZE: usize = 200;
+
+fn log_github_call(command: String, took: Duration, outcome: GhCallOutcome) {
+    let mut log = GH_LOG
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if log.len() == GH_LOG_SIZE {
+        log.pop_front();
+    }
+    log.push_back(GhCall {
+        at_ms: now_ms().saturating_sub(took.as_millis() as u64),
+        command,
+        duration_ms: took.as_millis() as u64,
+        outcome,
+    });
+}
+
+/// The GitHub log, newest first.
+pub fn github_log() -> Vec<GhCall> {
+    let log = GH_LOG
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    log.iter().rev().cloned().collect()
+}
+
+/// Runs `program` with `args`, stopping it after `timeout`: an output, or
+/// `None` when it did not finish in time.
+fn output_within(
+    command: &mut std::process::Command,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::Output>> {
+    use std::io::Read;
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = read(
+        child
+            .stdout
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    );
+    let stderr = read(
+        child
+            .stderr
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    );
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    Ok(Some(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    }))
+}
+
 /// GitHub through the user's `gh` login.
 pub struct GhCli;
 
@@ -1309,12 +1442,59 @@ impl GhCli {
             .stdin(std::process::Stdio::null());
         #[cfg(target_os = "windows")]
         crate::windows_process::hide_console(&mut command);
-        command.output().map_err(|error| {
-            DeliveryError::new(
-                "github_unavailable",
-                format!("no se pudo ejecutar gh (GitHub CLI): {error}"),
-            )
-        })
+        // Long arguments (a body, a jq filter) are cut in the log.
+        let shown = args
+            .iter()
+            .map(|arg| match arg.chars().count() > 80 {
+                true => format!("{}…", arg.chars().take(80).collect::<String>()),
+                false => arg.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let started = std::time::Instant::now();
+        let output = output_within(&mut command, GH_TIMEOUT);
+        let took = started.elapsed();
+        match output {
+            Ok(Some(output)) => {
+                let outcome = match output.status.success() {
+                    true => GhCallOutcome::Ok,
+                    false => GhCallOutcome::Failed {
+                        error: String::from_utf8_lossy(&output.stderr)
+                            .lines()
+                            .map(str::trim)
+                            .find(|line| !line.is_empty())
+                            .unwrap_or("sin mensaje")
+                            .to_string(),
+                    },
+                };
+                log_github_call(format!("gh {shown}"), took, outcome);
+                Ok(output)
+            }
+            Ok(None) => {
+                log_github_call(format!("gh {shown}"), took, GhCallOutcome::TimedOut);
+                Err(DeliveryError::new(
+                    "github_timeout",
+                    format!(
+                        "GitHub no respondió en {} s (gh {}): Tinto detuvo la llamada",
+                        GH_TIMEOUT.as_secs(),
+                        args.first().copied().unwrap_or_default()
+                    ),
+                ))
+            }
+            Err(error) => {
+                log_github_call(
+                    format!("gh {shown}"),
+                    took,
+                    GhCallOutcome::Failed {
+                        error: error.to_string(),
+                    },
+                );
+                Err(DeliveryError::new(
+                    "github_unavailable",
+                    format!("no se pudo ejecutar gh (GitHub CLI): {error}"),
+                ))
+            }
+        }
     }
 
     /// Runs `gh` for its effect; its stdout on success.
@@ -2101,13 +2281,27 @@ impl DeliveryService {
         task_id: &str,
         max_age: Duration,
     ) -> Result<Option<DeliveryPr>, DeliveryError> {
-        // One read at a time: two at once (the background read a link starts
-        // and the watch, say) would both record a merge found on GitHub.
-        let _reading = self
+        // One read of this PR at a time: two at once (the background read a
+        // link starts and the watch, say) would both record a merge found on
+        // GitHub. Reads of other PRs go on meanwhile.
+        let lock = self
             .inner
             .pr_reads
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(task_id.to_string())
+            .or_default()
+            .clone();
+        let waiting = std::time::Instant::now();
+        let _reading = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let waited = waiting.elapsed();
+        if waited >= Duration::from_secs(2) {
+            log_github_call(
+                format!("esperó a otra lectura del PR de la tarea {task_id}"),
+                waited,
+                GhCallOutcome::Waited,
+            );
+        }
         let Some(pr) = self.task_pr(task_id)? else {
             return Ok(None);
         };
@@ -2206,6 +2400,8 @@ impl DeliveryService {
         let merge = self.latest_approval(&pr.task_id, DeliveryRung::Merge)?;
         let step = match merge {
             Some(merge) if merge.status == DeliveryApprovalStatus::Executed => None,
+            // Tinto is merging it: the merge it runs records its own end.
+            Some(merge) if merge.progress.is_some() => None,
             // A merge the user was about to approve happened on GitHub.
             Some(mut merge)
                 if matches!(
@@ -2213,7 +2409,7 @@ impl DeliveryService {
                     DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
                 ) =>
             {
-                merge.status = DeliveryApprovalStatus::Executed;
+                merge.advance(StepEvent::DoneOutside)?;
                 merge.executed_at_ms = Some(now_ms());
                 merge.outcome = Some(merged_outside(pr));
                 Some(merge)
@@ -2970,11 +3166,11 @@ impl DeliveryService {
             Some(step) if step.status == DeliveryApprovalStatus::Pending => return Ok(()),
             Some(mut step) if step.status.was_done() => {
                 // Another PR of the branch puts right a drift on the old one.
-                step.status = DeliveryApprovalStatus::Executed;
+                step.advance(StepEvent::Holds)?;
                 step
             }
             Some(mut step) if step.status == DeliveryApprovalStatus::Approved => {
-                step.status = DeliveryApprovalStatus::Executed;
+                step.advance(StepEvent::DoneOutside)?;
                 step.executed_at_ms = Some(now_ms());
                 step.outcome = Some(found.url.clone());
                 // Found on GitHub rather than opened by Tinto: say so when it
@@ -3158,6 +3354,23 @@ fn pr_changed(before: &DeliveryPr, after: &DeliveryPr) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_command_past_its_time_is_stopped() {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("powershell");
+            command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let started = Instant::now();
+        let output = output_within(&mut command, Duration::from_millis(500)).unwrap();
+        assert!(output.is_none(), "it ran to the end");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
 
     #[test]
     fn a_reply_github_refused_says_why_in_plain_words() {

@@ -1061,6 +1061,19 @@ fn reopen(path: &std::path::Path, h: &Harness) -> DeliveryService {
     .unwrap()
 }
 
+/// An approved merge once Tinto ran it, apart from the approval.
+fn merge_ended(service: &DeliveryService, approval_id: &str) -> super::model::DeliveryApproval {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let step = service.approval(approval_id).unwrap();
+        if step.status != DeliveryApprovalStatus::Approved && step.progress.is_none() {
+            return step;
+        }
+        assert!(Instant::now() < deadline, "the merge never ended");
+        std::thread::sleep(POLL);
+    }
+}
+
 fn wait_on(service: &DeliveryService, job_id: &str) -> DeliveryJob {
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
@@ -5338,13 +5351,18 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     h.service
         .set_step_text(&asked.id, Some("P-2: paginate (#5)".into()), None, None)
         .unwrap();
-    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    // Approving returns at once; the merge runs apart and says what it does.
+    let approved = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(approved.status, DeliveryApprovalStatus::Approved);
+    assert!(approved.progress.is_some());
+    let done = merge_ended(&h.service, &asked.id);
     assert_eq!(
         done.status,
         DeliveryApprovalStatus::Executed,
         "{:?}",
         done.outcome
     );
+    assert!(done.progress.is_none());
     assert!(done.outcome.unwrap().contains("fusionado (merge)"));
     assert_eq!(
         github.merged.lock().unwrap().as_slice(),
@@ -9820,13 +9838,14 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
     }))
     .unwrap();
     h.service.store().unwrap().put_pr(&pr).unwrap();
-    assert_eq!(
+    assert!(matches!(
         h.service.overview().unwrap().phases[&task.id].phase,
         Phase::Pr {
             number: 308,
-            ci: None
+            ci: None,
+            ..
         }
-    );
+    ));
 
     // The coordinator sends the work back: the stage answers the PR.
     let fix = h.dispatch(&task, "implementation", "events=codex-ok touch=fix.txt");
@@ -9871,13 +9890,14 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
     assert_eq!(phase(&h).round.unwrap().at, "push");
     step_done_now(&h, &task, "p1", "push");
     assert!(phase(&h).round.is_none());
-    assert_eq!(
+    assert!(matches!(
         phase(&h).phase,
         Phase::Pr {
             number: 308,
-            ci: None
+            ci: None,
+            ..
         }
-    );
+    ));
     assert_eq!(
         h.service.overview().unwrap().rounds[0].outcome.as_deref(),
         Some("cambios publicados")
@@ -10638,24 +10658,26 @@ fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
             .message,
         not_run
     );
-    assert_eq!(
+    assert!(matches!(
         h.service.overview().unwrap().phases[&task.id].phase,
         super::phase::Phase::Pr {
             number: 7,
-            ci: Some(super::prs::CiState::NotRun)
+            ci: Some(super::prs::CiState::NotRun),
+            ..
         }
-    );
+    ));
     // A change the coordinator said needs no CI merges without it; checks
     // that did run still count.
     h.service.set_task_needs_ci(&task.id, false).unwrap();
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
-    assert_eq!(
+    assert!(matches!(
         h.service.overview().unwrap().phases[&task.id].phase,
         super::phase::Phase::Pr {
             number: 7,
-            ci: None
+            ci: None,
+            ..
         }
-    );
+    ));
     assert!(refused(json!([])).is_none());
     let asked = h
         .service
@@ -12256,7 +12278,8 @@ fn merging_a_pr_others_go_into_keeps_its_branch_until_they_point_at_the_merge_ta
     let mut merge = step(&first, DeliveryRung::Merge, "K-63: API (#50)");
     merge.merge_method = Some("squash".into());
     let merge = h.service.request_approval(merge).unwrap();
-    let merged = h.service.decide_approval(&merge.id, true, None).unwrap();
+    h.service.decide_approval(&merge.id, true, None).unwrap();
+    let merged = merge_ended(&h.service, &merge.id);
     assert_eq!(
         merged.status,
         DeliveryApprovalStatus::Executed,
@@ -12731,4 +12754,60 @@ fn a_plan_is_versioned_with_its_contract_and_reaches_the_next_stage_even_skipped
         &"- Tests (requirement → test): rechaza nombres con / → unit, src/name.test.ts".to_string()
     ));
     h.wait(&job.id);
+}
+
+#[test]
+fn a_merge_tinto_runs_is_left_to_it_and_one_cut_by_closing_tinto_is_settled_at_startup() {
+    let h = harness();
+    let running = |task: &DeliveryTask| {
+        let mut merge = executed_step(&task.id, "merge");
+        merge.status = DeliveryApprovalStatus::Approved;
+        merge.merge_method = Some("squash".into());
+        merge.progress = Some(super::model::DeliveryProgress {
+            step: "Fusionando en GitHub".into(),
+            since_ms: 1,
+        });
+        h.service.store().unwrap().put_approval(&merge).unwrap();
+        merge.id
+    };
+    // GitHub merged it: the PR watch leaves the step to the merge running it.
+    let merged = h.task("K-90");
+    put_step(
+        &h,
+        &merged,
+        "a-pr",
+        "pr",
+        "executed",
+        "https://github.com/o/r/pull/8",
+    );
+    let github = FakeGitHub::new(
+        json!({"state": "MERGED", "mergedBy": {"login": "me"},
+               "mergedAt": "2026-11-05T08:00:00Z", "mergeCommit": {"oid": "1a2b3c4d5e"}}),
+        json!([]),
+    );
+    h.service.set_github(github);
+    h.service.link_recorded_prs().unwrap();
+    let merge = running(&merged);
+    h.service.refresh_pr(&merged.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        h.service.approval(&merge).unwrap().status,
+        DeliveryApprovalStatus::Approved
+    );
+    // Without a PR to read, a merge cut short fails saying so.
+    let open = h.task("K-91");
+    let cut = running(&open);
+
+    // Tinto closed before recording either: at startup the merged one is
+    // done with its method, the other failed.
+    h.service.follow_running();
+    let done = h.service.approval(&merge).unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(done.merge_method.as_deref(), Some("squash"));
+    assert!(done.progress.is_none());
+    let failed = h.service.approval(&cut).unwrap();
+    assert_eq!(failed.status, DeliveryApprovalStatus::Failed);
+    assert!(failed
+        .outcome
+        .unwrap()
+        .contains("Tinto se cerró mientras fusionaba (fusionando en github)"));
 }

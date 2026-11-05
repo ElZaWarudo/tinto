@@ -9,11 +9,21 @@ import {
   markDeliveryPrSeen,
   refreshDeliveryPr,
 } from "../../delivery/client";
-import type { DeliveryPr } from "../../delivery/types";
+import type { DeliveryPr, DeliveryReviewState } from "../../delivery/types";
 import { prSummary } from "./taskStatus";
 import { ExternalLink } from "./ExternalLink";
 import { ActionButton } from "./ActionButton";
 import { Icon } from "../../workbench/Icon";
+
+/** Where a reviewer is, as Tinto followed them: GitHub stops listing a
+ *  reviewer as asked once they review. */
+const REVIEW_STATE: Record<DeliveryReviewState, string> = {
+  asked: "(revisión pedida)",
+  commented: "comentó",
+  changes_requested: "pidió cambios",
+  answered: "tiene tu respuesta",
+  approved: "aprobó",
+};
 
 function checked(ms: number | null): string {
   if (!ms) return "todavía sin leer";
@@ -78,7 +88,13 @@ function PrReviewers({ pr }: { pr: DeliveryPr }) {
     >
       <summary>
         Revisores:{" "}
-        {requested.length > 0 ? `esperando a ${requested.join(", ")}` : "ninguna revisión pedida"}
+        {(pr.review_states ?? []).length > 0
+          ? (pr.review_states ?? [])
+              .map((reviewer) => `${reviewer.login} ${REVIEW_STATE[reviewer.state]}`)
+              .join(", ")
+          : requested.length > 0
+            ? `esperando a ${requested.join(", ")}`
+            : "ninguna revisión pedida"}
       </summary>
       <fieldset className="delivery-reviewers">
         <legend>Elige a quién</legend>

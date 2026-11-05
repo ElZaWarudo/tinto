@@ -444,6 +444,21 @@ export interface DeliveryApproval {
   style_examples?: string[];
   /** `pr_reply`: the branch's commits that changed the commented file since the comment. */
   fix_commits?: DeliveryFixCommit[];
+  /** `merge`, while Tinto runs it after the approval: what it is doing and since when. */
+  progress?: { step: string; since_ms: number } | null;
+}
+
+/** One gh call Tinto made, for the GitHub log (src-tauri/src/delivery/prs.rs). */
+export interface DeliveryGhCall {
+  at_ms: number;
+  command: string;
+  duration_ms: number;
+  outcome:
+    | { kind: "ok" }
+    | { kind: "failed"; error: string }
+    | { kind: "timed_out" }
+    /** Not a call: a read that waited for another read of the same PR. */
+    | { kind: "waited" };
 }
 
 /** A commit of the task's branch, as a reply to a reviewer refers to it. */
@@ -795,10 +810,36 @@ export interface DeliverySettingsProposal {
 export type DeliveryWaiter =
   "user" | "coordinator" | "agent" | "queue" | "reviewers" | "dependency" | "external" | "nobody";
 
+/** Where a PR's reviewer is: asked, reviewed (with comments or changes asked), answered, approved. */
+export type DeliveryReviewState =
+  "asked" | "commented" | "changes_requested" | "answered" | "approved";
+
+/** What an open PR waits on, from its reviewers' states, most urgent first;
+ *  the phase's `waits_on` follows from it (src-tauri/src/delivery/phase.rs). */
+export type DeliveryPrWait =
+  /** The user approves replies to these reviewers (empty: a general comment). */
+  | { kind: "reply"; reviewers: string[] }
+  /** News, failing or unrun CI, conflicts, changes asked, closed: see the PR's summary. */
+  | { kind: "trouble" }
+  /** These reviewers reviewed and wait for an answer. */
+  | { kind: "answer"; reviewers: string[] }
+  /** These reviewers have to review (again); empty when only GitHub knows who. */
+  | { kind: "review"; reviewers: string[] }
+  /** Reviewed enough to merge; its checks still run. */
+  | { kind: "checks" }
+  /** Reviewed enough to merge, but a draft: the user marks it ready. */
+  | { kind: "draft" }
+  /** Reviewed enough to merge, or merged. */
+  | { kind: "ready" }
+  /** Nobody is asked to review it and it needs a review. */
+  | { kind: "nobody" };
+
 /** Where a task is, as Tinto derives it (src-tauri/src/delivery/phase.rs). */
 export type DeliveryPhase =
   | { kind: "decisions"; count: number }
   | { kind: "approval" | "record" | "drifted"; rung: DeliveryRung; stage: string | null }
+  /** An approved step Tinto runs apart (a merge): what it is doing, since when. */
+  | { kind: "step_running"; rung: DeliveryRung; step: string; since_ms: number }
   | { kind: "running" | "paused" | "batch_paused"; job_id: string; role: string }
   | { kind: "waits_quarantine"; job_id: string; lease: string }
   | { kind: "setup_failed"; job_id: string; command: string }
@@ -819,7 +860,7 @@ export type DeliveryPhase =
   | { kind: "unblocked"; cleared: string; by: string; at_ms: number }
   | { kind: "broken"; job_id: string; role: string; attempt: number; blocked: boolean }
   | { kind: "delivered" }
-  | { kind: "pr"; number: number; ci?: DeliveryCiState | null }
+  | { kind: "pr"; number: number; ci?: DeliveryCiState | null; wait: DeliveryPrWait }
   /** A sync's merge is in progress and its commit comes first; `waiting_round` waits for it. */
   | { kind: "waits_merge_commit"; waiting_round: number | null }
   /** Stages of these rounds changed the code during a merge: the user decides how to commit it. */
@@ -967,6 +1008,8 @@ export interface DeliveryPr {
   approved_by?: string[];
   /** Who GitHub is still waiting on for a review. */
   requested_reviewers?: string[];
+  /** Where each reviewer is, as Tinto followed them (src-tauri/src/delivery/reviews.rs). */
+  review_states?: { login: string; state: DeliveryReviewState }[];
   /** Who must approve it before it merges: the reviewers chosen, until removed. */
   reviewers?: string[];
   /** The branch it merges into, as GitHub last said. */

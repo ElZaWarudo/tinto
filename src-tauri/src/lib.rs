@@ -193,6 +193,7 @@ pub fn run() {
             delivery::commands::delivery_request_guide,
             delivery::commands::delivery_decide_guide,
             delivery::commands::delivery_check_environment,
+            delivery::commands::delivery_github_log,
             delivery::commands::delivery_set_jira_token,
             delivery::commands::delivery_check_jira,
             delivery::commands::delivery_release_lease,

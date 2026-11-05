@@ -25,6 +25,7 @@ mod qa_prepare;
 pub mod qa_problems;
 mod queue;
 pub mod reply_images;
+pub mod reviews;
 pub mod rounds;
 pub mod scope;
 pub mod service;
