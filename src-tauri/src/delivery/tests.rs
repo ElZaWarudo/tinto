@@ -12921,6 +12921,15 @@ fn a_restack_after_a_squash_drops_the_predecessors_commits_the_follower_synced_i
     let base = in_worktree(&second, &["rev-parse", "HEAD~1"]);
     let marked = h.service.set_restack_from(&second.id, &base).unwrap();
     assert_eq!(marked.restack_from.as_deref(), Some(base.as_str()));
+    // Nor from HEAD, which would leave the branch nothing of its own.
+    let head = in_worktree(&second, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        h.service
+            .set_restack_from(&second.id, &head)
+            .unwrap_err()
+            .category,
+        "restack_from_not_on_branch"
+    );
     let stranger = in_worktree(&first, &["rev-parse", "HEAD"]);
     assert_eq!(
         h.service

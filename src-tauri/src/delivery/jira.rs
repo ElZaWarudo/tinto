@@ -167,12 +167,25 @@ pub fn run_step(
         let id = transition["id"].as_str().unwrap_or_default();
         let name = transition["name"].as_str().unwrap_or_default();
         // The fields the repo gives this transition, which Jira may require.
-        let fields = transition_fields.iter().find_map(|(key, fields)| {
-            [id, name, to(transition).as_str()]
+        // By id first, then by the transition's name, then by the status it
+        // leads to, unless that key names another transition.
+        let named = |key: &str| {
+            transition_fields
                 .iter()
-                .any(|known| !known.is_empty() && key.trim().eq_ignore_ascii_case(known))
-                .then_some(fields)
+                .find(|(field_key, _)| {
+                    !key.is_empty() && field_key.trim().eq_ignore_ascii_case(key)
+                })
+                .map(|(_, fields)| fields)
+        };
+        let target = to(transition);
+        let other_name = available.iter().any(|other| {
+            other["name"]
+                .as_str()
+                .is_some_and(|other| other != name && other.eq_ignore_ascii_case(&target))
         });
+        let fields = named(id)
+            .or_else(|| named(name))
+            .or_else(|| (!other_name).then(|| named(&target)).flatten());
         let body = match fields {
             Some(fields) => json!({"transition": {"id": id}, "fields": fields}),
             None => json!({"transition": {"id": id}}),

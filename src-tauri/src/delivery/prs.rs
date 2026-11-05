@@ -1380,7 +1380,7 @@ pub fn github_log() -> Vec<GhCall> {
 
 /// Runs `program` with `args`, stopping it after `timeout`: an output, or
 /// `None` when it did not finish in time.
-fn output_within(
+pub(super) fn output_within(
     command: &mut std::process::Command,
     timeout: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
@@ -2160,6 +2160,13 @@ impl DeliveryService {
                     .latest_approval(&other.id, DeliveryRung::Push)?
                     .and_then(|push| push.tip)))
             };
+            // A gated package never restacks from before where it started:
+            // a predecessor rewritten under it meets it further back.
+            let met = met.filter(|met| {
+                !gated
+                    || *met == task.base_commit
+                    || !tasks::is_ancestor(follower, &task.worktree, met, &task.base_commit)
+            });
             let restack_from = match gated || rewritten {
                 false => None,
                 true => match met {

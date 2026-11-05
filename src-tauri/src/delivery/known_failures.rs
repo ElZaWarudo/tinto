@@ -10,8 +10,10 @@ use super::model::DeliveryKnownFailure;
 /// "N failed", cargo's "test result: FAILED. … N failed", summed) is known
 /// and each failure is one of them, named where the output shows failures
 /// (a line marked ✕, ×, ✗, ● or FAIL, or anything after mocha's "N
-/// failing"). `None` when any failure is not known, or the count is not
-/// found.
+/// failing") as a whole name. Each failure line counts once, for the
+/// longest known name on it, so a shorter name never covers a longer test
+/// nor counts twice. `None` when any failure is not known, or the count
+/// is not found.
 pub fn only_known<'a>(
     check: &str,
     output: &str,
@@ -19,18 +21,45 @@ pub fn only_known<'a>(
 ) -> Option<Vec<&'a DeliveryKnownFailure>> {
     let count = failure_count(output)?;
     let failing = failure_lines(output);
+    let candidates: Vec<&DeliveryKnownFailure> = known
+        .iter()
+        .filter(|failure| failure.check.trim() == check.trim() && !failure.test.trim().is_empty())
+        .collect();
     let mut matched: Vec<&DeliveryKnownFailure> = Vec::new();
-    for failure in known {
-        let test = failure.test.trim();
-        if failure.check.trim() == check.trim()
-            && !test.is_empty()
-            && failing.iter().any(|line| line.contains(test))
-            && !matched.iter().any(|seen| seen.test.trim() == test)
-        {
-            matched.push(failure);
+    let mut lines = 0;
+    for line in failing {
+        let longest = candidates
+            .iter()
+            .filter(|failure| names(line, failure.test.trim()))
+            .max_by_key(|failure| failure.test.trim().len());
+        if let Some(failure) = longest {
+            lines += 1;
+            if !matched
+                .iter()
+                .any(|seen| seen.test.trim() == failure.test.trim())
+            {
+                matched.push(failure);
+            }
         }
     }
-    (count > 0 && matched.len() >= count).then_some(matched)
+    (count > 0 && lines >= count).then_some(matched)
+}
+
+/// Whether `line` names `test` as a whole: what comes before it is the
+/// line's start, a space or a separator (`>`, `›`, `:`, `)`), and what follows
+/// is the end, `:`, or a space before a duration, `...` or `[`.
+fn names(line: &str, test: &str) -> bool {
+    line.match_indices(test).any(|(at, _)| {
+        let before = line[..at].chars().last();
+        let after = &line[at + test.len()..];
+        let starts = before.is_none_or(|c| c.is_whitespace() || matches!(c, '>' | '›' | ':' | ')'));
+        let ends = after.trim().is_empty()
+            || after.starts_with(':')
+            || [" (", " ...", " ["]
+                .iter()
+                .any(|tail| after.starts_with(tail));
+        starts && ends
+    })
 }
 
 /// The failures the output counts, over every summary line it has; `None`
@@ -128,12 +157,25 @@ mod tests {
             ),
             // No count to go by: it is not settled.
             ("Error: reads opened files through /proc".to_string(), None),
+            // A known name inside a longer test's name is not that test.
+            (
+                " FAIL  test/hub.test.ts > hub streams a session forever\n      Tests  1 failed | 30 passed".to_string(),
+                None,
+            ),
         ];
         for (output, settles) in cases {
             let got = only_known(check, &output, &marked)
                 .map(|found| found.iter().map(|failure| failure.test.as_str()).collect());
             assert_eq!(got, settles, "{output}");
         }
+        // Nested known names count one failure once: an unknown second one
+        // still fails the check.
+        let nested = [
+            known(check, "hub streams"),
+            known(check, "hub streams a session"),
+        ];
+        let two = " FAIL  test/hub.test.ts > hub streams a session\n FAIL  test/x.test.ts > saves the turn\n      Tests  2 failed | 30 passed";
+        assert!(only_known(check, two, &nested).is_none());
         // Another check's known failures are not this one's.
         let other = mocha(
             "1",

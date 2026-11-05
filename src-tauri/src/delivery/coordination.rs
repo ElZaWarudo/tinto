@@ -1258,6 +1258,21 @@ impl DeliveryService {
                 // A sync runs as it is asked; a restack waits for the user,
                 // who may reject it.
                 self.sync_prerequisites(&task, task.restack_from.is_none())?;
+                // A restack drops the branch's merge commits: what resolving
+                // their conflicts changed is lost, so the user sees it first.
+                if let Some(from) = &task.restack_from {
+                    let merges = tasks::git(
+                        Place::of(task.distro.as_deref()),
+                        &task.worktree,
+                        &["rev-list", "--merges", "--count", &format!("{from}..HEAD")],
+                    )
+                    .unwrap_or_default();
+                    if merges.parse::<u32>().is_ok_and(|count| count > 0) {
+                        notice = Some(format!(
+                            "El restack quita {merges} commit(s) de merge de la rama: lo que se cambió al resolver sus conflictos se pierde y hay que rehacerlo si hacía falta. Los checks corren después."
+                        ));
+                    }
+                }
             }
             DeliveryRung::Merge => {
                 // The base's own history picks the method when none is asked.
@@ -1623,7 +1638,6 @@ impl DeliveryService {
         if approval.rung == DeliveryRung::Sync
             && approval.status == DeliveryApprovalStatus::Executed
             && approval.conflicts.is_empty()
-            && !approval.created.is_empty()
             && !self.same_tree(&approval.task_id, approval.before.as_deref())?
         {
             // New dependencies came in: the packages' setup runs again first,
@@ -2383,6 +2397,8 @@ impl DeliveryService {
         .ok()
         .filter(|commit| !commit.is_empty())
         .filter(|commit| tasks::on_branch(place, &task.worktree, commit))
+        // From HEAD the branch would keep nothing of its own.
+        .filter(|commit| tasks::head(place, &task.worktree).is_ok_and(|head| head != *commit))
         .ok_or_else(|| {
             DeliveryError::new(
                 "restack_from_not_on_branch",
@@ -2403,6 +2419,18 @@ impl DeliveryService {
         drop(store);
         self.notify();
         Ok(task)
+    }
+
+    /// Whether the task has a step of `rung` pending or approved.
+    pub fn has_open_step(&self, task_id: &str, rung: DeliveryRung) -> Result<bool, DeliveryError> {
+        Ok(self.store()?.approvals()?.iter().any(|approval| {
+            approval.task_id == task_id
+                && approval.rung == rung
+                && matches!(
+                    approval.status,
+                    DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                )
+        }))
     }
 
     /// Fetches the task's base and merges it into the branch. Without

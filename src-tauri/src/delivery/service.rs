@@ -1532,13 +1532,28 @@ impl DeliveryService {
             .filter(|job| job.role == SETUP_ROLE && job.status.is_open())
             .map(|job| job.prompt)
             .collect();
+        // A command names a package by its folder, with either separator
+        // and up to a boundary (`services/rag`, not `services/rag-x`); one
+        // that names no folder (a workspace install) runs for any of them.
+        let scoped = |command: &str, folder: &str| {
+            let command = command.replace('\\', "/");
+            command.match_indices(folder).any(|(at, _)| {
+                let after = command[at + folder.len()..].chars().next();
+                let before = command[..at].chars().last();
+                after.is_none_or(|c| c.is_whitespace() || matches!(c, '/' | '"' | '\'' | ';' | '&'))
+                    && before
+                        .is_none_or(|c| c.is_whitespace() || matches!(c, '/' | '"' | '\'' | '='))
+            })
+        };
+        let names_a_folder = |command: &str| command.replace('\\', "/").contains('/');
         let again: Vec<String> = task
             .setup
             .iter()
             .filter(|command| {
-                folders
-                    .iter()
-                    .any(|folder| folder.is_empty() || command.contains(folder))
+                !names_a_folder(command)
+                    || folders
+                        .iter()
+                        .any(|folder| folder.is_empty() || scoped(command, folder))
             })
             .filter(|command| !open.contains(command))
             .cloned()
@@ -3004,7 +3019,7 @@ impl DeliveryService {
         let place = Place::of(task.distro.as_deref());
         if job.agent == DeliveryAgent::Shell && (job.role == SETUP_ROLE || job.role == CHECKS_ROLE)
         {
-            job.tracked_before = tasks::changed_tracked(place, &task.worktree).ok();
+            job.tracked_before = tasks::changed_lockfiles(place, &task.worktree).ok();
             self.store()?.put_job(&job)?;
         }
         let paths = (self.inner.paths_for)(&job.id)?;
@@ -4094,9 +4109,16 @@ impl DeliveryService {
         }
         // A check that failed only on tests the user marked as failing
         // because of the environment counts as settled: no round opens.
+        // Only a single command that ended on its own: a timeout's or a
+        // composite command's output may not account for every failure.
         if job.agent == DeliveryAgent::Shell
             && job.role == CHECKS_ROLE
             && job.status == DeliveryJobStatus::Failed
+            && !ending.timed_out
+            && !ending.cancelled
+            && !["&&", "||", ";", "|"]
+                .iter()
+                .any(|joint| job.prompt.contains(joint))
         {
             if let Some(task) = &task {
                 let known = store.repo_settings(&task.repo)?.known_failures;
@@ -4405,28 +4427,29 @@ impl DeliveryService {
         }
     }
 
-    /// Puts back the tracked files a setup or check command changed (those
-    /// not in `before`, what the worktree had changed when it started), and
-    /// returns them. Nothing is put back while an agent of the task writes in
-    /// the worktree: the change may be its own.
+    /// Puts back the lockfiles a setup or check command rewrote (those not
+    /// in `before`, what the worktree had changed when it started), and
+    /// returns them. Only lockfiles, which installs rewrite as a side effect:
+    /// any other file may be someone's edit. Nothing is put back while
+    /// another job of the task that writes is open (an agent, another setup
+    /// command still installing): the last of them puts them back.
     fn put_back_command_changes(
         &self,
         task: &DeliveryTask,
         job_id: &str,
         before: &[String],
     ) -> Result<Vec<String>, DeliveryError> {
-        let agent_writing = self.store()?.jobs()?.iter().any(|other| {
+        let writing = self.store()?.jobs()?.iter().any(|other| {
             other.task_id == task.id
                 && other.id != job_id
-                && other.agent != DeliveryAgent::Shell
-                && other.writes
+                && (other.writes || other.role == SETUP_ROLE)
                 && other.status.is_active()
         });
-        if agent_writing {
+        if writing {
             return Ok(Vec::new());
         }
         let place = Place::of(task.distro.as_deref());
-        let changed: Vec<String> = tasks::changed_tracked(place, &task.worktree)?
+        let changed: Vec<String> = tasks::changed_lockfiles(place, &task.worktree)?
             .into_iter()
             .filter(|path| !before.contains(path))
             .collect();

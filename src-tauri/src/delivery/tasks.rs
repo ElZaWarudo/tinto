@@ -173,16 +173,11 @@ pub fn prefer_remote(place: Place<'_>, repo: &Path, base: (String, String)) -> (
         return base;
     }
     let tracking = format!("refs/remotes/origin/{name}");
-    let _ = git(
-        place,
-        repo,
-        &[
-            "fetch",
-            "--quiet",
-            "origin",
-            &format!("+refs/heads/{name}:{tracking}"),
-        ],
-    );
+    // A fetch that does not answer in time leaves the ref as it was.
+    let refspec = format!("+refs/heads/{name}:{tracking}");
+    let mut fetch = git_command(place, repo, &["fetch", "--quiet", "origin", &refspec]);
+    fetch.stdin(std::process::Stdio::null());
+    let _ = super::prs::output_within(&mut fetch, std::time::Duration::from_secs(30));
     match verify_commit(place, repo, &tracking) {
         Some(remote)
             if git_ok(
@@ -321,13 +316,35 @@ pub struct WorktreeState {
     pub has_upstream: bool,
 }
 
-/// Tracked files the worktree changed against HEAD, staged or not.
-pub fn changed_tracked(place: Place<'_>, worktree: &Path) -> Result<Vec<String>, DeliveryError> {
-    Ok(git(place, worktree, &["diff", "--name-only", "HEAD"])?
-        .lines()
-        .map(str::to_string)
-        .filter(|path| !path.is_empty())
-        .collect())
+/// Whether `commit` is an ancestor of `of`.
+pub fn is_ancestor(place: Place<'_>, dir: &Path, commit: &str, of: &str) -> bool {
+    git_ok(place, dir, &["merge-base", "--is-ancestor", commit, of])
+}
+
+/// Lockfiles an install rewrites as a side effect: the only files Tinto
+/// puts back after a setup or check command.
+pub const LOCKFILES: [&str; 4] = [
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+];
+
+/// Lockfiles the worktree has modified against HEAD, staged or not, as git
+/// names them (unquoted).
+pub fn changed_lockfiles(place: Place<'_>, worktree: &Path) -> Result<Vec<String>, DeliveryError> {
+    Ok(git(
+        place,
+        worktree,
+        &["diff", "--name-only", "-z", "--diff-filter=M", "HEAD"],
+    )?
+    .split('\0')
+    .filter(|path| {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        LOCKFILES.contains(&name)
+    })
+    .map(str::to_string)
+    .collect())
 }
 
 pub fn worktree_state(
