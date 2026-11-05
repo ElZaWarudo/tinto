@@ -12811,3 +12811,109 @@ fn a_merge_tinto_runs_is_left_to_it_and_one_cut_by_closing_tinto_is_settled_at_s
         .unwrap()
         .contains("Tinto se cerró mientras fusionaba (fusionando en github)"));
 }
+
+#[test]
+fn a_restack_after_a_squash_drops_the_predecessors_commits_the_follower_synced_in() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let create = |index: u32| {
+        h.service
+            .create_task(NewTask {
+                repo: h.repo.path().to_path_buf(),
+                distro: None,
+                key: "K-80".into(),
+                title: "K-80".into(),
+                read_dirs: Vec::new(),
+                base: None,
+                branch: None,
+                run_id: None,
+                package: Some(NewPackage {
+                    index,
+                    of: 2,
+                    title: format!("Parte {index}"),
+                    builds_on: (index > 1).then_some(index - 1),
+                    until: None,
+                    pr_after_merge: index > 1,
+                }),
+            })
+            .unwrap()
+    };
+    let first = create(1);
+    let second = create(2);
+    let push = |task: &DeliveryTask| git(&task.worktree, &["push", "-q", "origin", &task.branch]);
+    write_files(&first, &["one.txt"]);
+    commit_outside(&first, "one");
+    push(&first);
+    write_files(&second, &["two.txt"]);
+    commit_outside(&second, "two");
+    // Package 1 goes on; package 2 brings it in twice through syncs.
+    for name in ["one-b.txt", "one-c.txt"] {
+        write_files(&first, &[name]);
+        commit_outside(&first, name);
+        push(&first);
+        git(&second.worktree, &["fetch", "-q", "origin"]);
+        let theirs = format!("origin/{}", first.branch);
+        git(&second.worktree, &["merge", "-q", "--no-edit", &theirs]);
+    }
+    write_files(&second, &["two-b.txt"]);
+    commit_outside(&second, "two-b");
+
+    // Package 1's PR merges squashed: main gets its files in one commit.
+    let head = in_worktree(&first, &["rev-parse", "HEAD"]);
+    let mut pr = super::prs::DeliveryPr::linked(
+        &first.id,
+        &super::prs::parse_pr_url("https://github.com/o/r/pull/1").unwrap(),
+    );
+    pr.state = "merged".into();
+    pr.head = Some(head.clone());
+    h.service.store().unwrap().put_pr(&pr).unwrap();
+    for name in ["one.txt", "one-b.txt", "one-c.txt"] {
+        std::fs::write(h.repo.path().join(name), format!("{name}\n")).unwrap();
+    }
+    git(h.repo.path(), &["add", "--all"]);
+    git(h.repo.path(), &["commit", "-q", "-m", "K-80 1/2 (#1)"]);
+    git(h.repo.path(), &["push", "-q", "origin", "main"]);
+    let mut merge = executed_step(&first.id, "merge");
+    merge.merge_method = Some("squash".into());
+    h.service.store().unwrap().put_approval(&merge).unwrap();
+
+    // The restack starts at package 1's head as merged, not at the base the
+    // chain started from.
+    assert_eq!(h.service.retarget_packages().unwrap(), 1);
+    let second = h.service.task(&second.id).unwrap();
+    assert_eq!(second.restack_from.as_deref(), Some(head.as_str()));
+    let sync = h
+        .service
+        .request_approval(step(&second, DeliveryRung::Sync, "Restack"))
+        .unwrap();
+    let done = h.service.decide_approval(&sync.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert_eq!(
+        in_worktree(&second, &["diff", "--name-only", "origin/main", "HEAD"]),
+        "two-b.txt\ntwo.txt"
+    );
+    assert_eq!(
+        in_worktree(&second, &["rev-list", "--count", "origin/main..HEAD"]),
+        "2",
+        "only package 2's own commits, without the syncs' merges"
+    );
+
+    // A wrong old base can be set right without leaving Tinto, but only to a
+    // commit of the branch.
+    let base = in_worktree(&second, &["rev-parse", "HEAD~1"]);
+    let marked = h.service.set_restack_from(&second.id, &base).unwrap();
+    assert_eq!(marked.restack_from.as_deref(), Some(base.as_str()));
+    let stranger = in_worktree(&first, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        h.service
+            .set_restack_from(&second.id, &stranger)
+            .unwrap_err()
+            .category,
+        "restack_from_not_on_branch"
+    );
+}

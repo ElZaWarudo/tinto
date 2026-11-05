@@ -2341,6 +2341,51 @@ impl DeliveryService {
         Ok((name, commit))
     }
 
+    /// The coordinator corrects where a restack starts: `from` must be a
+    /// commit on the task's branch (the last one of the merged package it
+    /// carries). Marks the task for a restack when it was not.
+    pub fn set_restack_from(
+        &self,
+        task_id: &str,
+        from: &str,
+    ) -> Result<DeliveryTask, DeliveryError> {
+        let mut task = self.task(task_id)?;
+        let place = Place::of(task.distro.as_deref());
+        let commit = tasks::git(
+            place,
+            &task.worktree,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{from}^{{commit}}"),
+            ],
+        )
+        .ok()
+        .filter(|commit| !commit.is_empty())
+        .filter(|commit| tasks::on_branch(place, &task.worktree, commit))
+        .ok_or_else(|| {
+            DeliveryError::new(
+                "restack_from_not_on_branch",
+                format!("{from} no es un commit de la rama {}", task.branch),
+            )
+        })?;
+        task.restack_from = Some(commit.clone());
+        task.updated_at_ms = now_ms();
+        let store = self.store()?;
+        store.put_task(&task)?;
+        store.record_event(
+            now_ms(),
+            "restack_from_set",
+            Some(&task.id),
+            None,
+            &format!("el restack partirá de {}", short(&commit)),
+        )?;
+        drop(store);
+        self.notify();
+        Ok(task)
+    }
+
     /// Fetches the task's base and merges it into the branch. Without
     /// conflicts the step leaves a merge commit; with them it leaves the
     /// merge in progress for an implementation job to resolve and a commit
@@ -2811,7 +2856,7 @@ impl DeliveryService {
             return Err(DeliveryError::new(
                 "restack_conflicts",
                 format!(
-                    "El restack sobre {name} tiene conflictos en: {}. La rama quedó como estaba: rebásala a mano (rebase --onto {name} {}) y publícala con el paso push.",
+                    "El restack sobre {name} tiene conflictos en: {}. La rama quedó como estaba. Si {} no es el último commit del paquete fusionado que la rama trae, pide el sync de nuevo con restack_from en el bueno; si lo es, los conflictos son reales.",
                     files.join(", "),
                     short(from)
                 ),
