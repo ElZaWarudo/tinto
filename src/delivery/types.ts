@@ -735,6 +735,15 @@ export interface DeliveryRepoSettings {
   environment_up?: string[];
   /** The reviewers whose comments make the repo's guides. */
   guides?: DeliveryGuidePerson[];
+  /** Tests failing only because of the environment: a check failing only on them opens no round. */
+  known_failures?: DeliveryKnownFailure[];
+}
+
+/** A test the user marked as failing only because of the environment, for one check. */
+export interface DeliveryKnownFailure {
+  check: string;
+  test: string;
+  reason: string;
 }
 
 /** One line of a repo's "Entorno" check: Docker or a probe. */

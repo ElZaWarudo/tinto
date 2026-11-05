@@ -1620,6 +1620,23 @@ pub struct DeliveryRepoSettings {
     /// Whether its tasks run Alcance.
     #[serde(default)]
     pub scope: DeliveryScopeMode,
+    /// Tests that fail only because of the environment: a check whose every
+    /// failure is one of them opens no round (see `known_failures`).
+    #[serde(default)]
+    pub known_failures: Vec<DeliveryKnownFailure>,
+}
+
+/// A test the user marked as failing only because of the environment, for
+/// one verification command.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryKnownFailure {
+    /// The verification command, exactly as in `checks`.
+    pub check: String,
+    /// The test's name, as the command's output shows it.
+    pub test: String,
+    /// Why it fails here, in the user's words.
+    #[serde(default)]
+    pub reason: String,
 }
 
 /// Whether Tinto's pushes and merges start the repo's CI.

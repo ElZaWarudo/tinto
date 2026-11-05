@@ -4092,6 +4092,49 @@ impl DeliveryService {
                 ));
             }
         }
+        // A check that failed only on tests the user marked as failing
+        // because of the environment counts as settled: no round opens.
+        if job.agent == DeliveryAgent::Shell
+            && job.role == CHECKS_ROLE
+            && job.status == DeliveryJobStatus::Failed
+        {
+            if let Some(task) = &task {
+                let known = store.repo_settings(&task.repo)?.known_failures;
+                let output = (self.inner.paths_for)(&job.id)
+                    .ok()
+                    .map(|paths| {
+                        [paths.events, paths.stderr]
+                            .iter()
+                            .map(|file| std::fs::read_to_string(file).unwrap_or_default())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                if let Some(found) = super::known_failures::only_known(&job.prompt, &output, &known)
+                {
+                    let note = format!(
+                        "Solo fallaron pruebas conocidas del entorno: {}",
+                        found
+                            .iter()
+                            .map(|failure| match failure.reason.is_empty() {
+                                true => failure.test.clone(),
+                                false => format!("{} ({})", failure.test, failure.reason),
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    );
+                    job.resolved_at_ms = Some(now_ms());
+                    job.resolved_note = Some(note.clone());
+                    store.record_event(
+                        now_ms(),
+                        "check_known_failures",
+                        Some(&job.task_id),
+                        Some(&job.id),
+                        &note,
+                    )?;
+                }
+            }
+        }
         if !job.reverted.is_empty() {
             let note = format!(
                 "Tinto deshizo lo que el trabajo cambió en el worktree: {}.",

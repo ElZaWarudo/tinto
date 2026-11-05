@@ -17,6 +17,7 @@ pub mod feed;
 pub mod guides;
 pub mod jira;
 mod job_process;
+pub mod known_failures;
 pub mod mcp;
 pub mod model;
 pub mod phase;

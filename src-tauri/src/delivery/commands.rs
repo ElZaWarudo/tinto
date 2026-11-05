@@ -522,6 +522,18 @@ pub fn delivery_set_repo_settings(
         .filter(|probe| checks.contains(probe))
         .collect();
     let settings = DeliveryRepoSettings {
+        // A known failure needs its check and its test.
+        known_failures: settings
+            .known_failures
+            .into_iter()
+            .map(|mut failure| {
+                failure.check = failure.check.trim().to_string();
+                failure.test = failure.test.trim().to_string();
+                failure.reason = failure.reason.trim().to_string();
+                failure
+            })
+            .filter(|failure| !failure.check.is_empty() && !failure.test.is_empty())
+            .collect(),
         retry_on_restart: settings.retry_on_restart,
         pr_without_reviewer: settings.pr_without_reviewer,
         ci_on_push: settings.ci_on_push,

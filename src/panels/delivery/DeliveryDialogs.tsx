@@ -33,6 +33,7 @@ import type {
   DeliveryArchivedTask,
   DeliveryCoordinatorEndpoint,
   DeliveryPlatform,
+  DeliveryKnownFailure,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryStageAgent,
@@ -829,6 +830,15 @@ export function StageAgentRow({
 
 /** What QA can use in a repo and who runs each stage, set once so
  *  coordinators read it instead of asking on every task. */
+/** `check | test | reason` lines → known failures; a line without a test is dropped. */
+function parseKnownFailures(text: string): DeliveryKnownFailure[] {
+  return text
+    .split("\n")
+    .map((line) => line.split("|").map((part) => part.trim()))
+    .filter(([check, test]) => check && test)
+    .map(([check, test, ...reason]) => ({ check, test, reason: reason.join(" | ") }));
+}
+
 function RepoSettings({
   repo,
   label,
@@ -866,6 +876,8 @@ function RepoSettings({
   const [commands, setCommands] = useState("");
   const [setup, setSetup] = useState("");
   const [environmentUp, setEnvironmentUp] = useState("");
+  // `check | test | reason` lines.
+  const [knownFailures, setKnownFailures] = useState("");
   // `NAME=value` lines.
   const [checkEnv, setCheckEnv] = useState("");
   const [environment, setEnvironment] = useState("");
@@ -908,6 +920,13 @@ function RepoSettings({
         setCommands((settings.qa_commands ?? []).join("\n"));
         setSetup((settings.setup ?? []).join("\n"));
         setEnvironmentUp((settings.environment_up ?? []).join("\n"));
+        setKnownFailures(
+          (settings.known_failures ?? [])
+            .map((failure) =>
+              [failure.check, failure.test, failure.reason].filter(Boolean).join(" | "),
+            )
+            .join("\n"),
+        );
         setCheckEnv(
           Object.entries(settings.check_env ?? {})
             .map(([name, value]) => `${name}=${value}`)
@@ -1034,6 +1053,7 @@ function RepoSettings({
                 scope,
                 environment_probes: probes,
                 environment_up: parseChecks(environmentUp),
+                known_failures: parseKnownFailures(knownFailures),
                 jira: jiraHost.trim()
                   ? {
                       host: jiraHost.trim(),
@@ -1188,6 +1208,17 @@ function RepoSettings({
             onChange={(event) => setEnvironmentUp(event.target.value)}
             rows={2}
             placeholder="docker compose -f deploy/test-services.yml up -d"
+          />
+        </Field>
+        <Field
+          label="Fallos conocidos del entorno"
+          hint="Uno por línea: comando de verificación | nombre de la prueba | por qué. Una comprobación que solo falla en estas pruebas no abre ronda ni manda a implementación; cualquier otro fallo sí."
+        >
+          <GrowingTextarea
+            value={knownFailures}
+            onChange={(event) => setKnownFailures(event.target.value)}
+            rows={2}
+            placeholder="npm --prefix services/session-executor test | reads opened files through /proc | Windows no tiene /proc"
           />
         </Field>
         <h3 data-section="qa">QA</h3>
