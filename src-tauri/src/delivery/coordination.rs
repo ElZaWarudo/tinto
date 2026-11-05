@@ -31,6 +31,9 @@ use super::service::DeliveryService;
 use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
 
+/// What an approved merge does first, as its step says.
+const MERGE_CHECKING: &str = "Comprobando el PR en GitHub";
+
 #[derive(Debug, Clone)]
 pub struct NewApproval {
     pub task_id: String,
@@ -378,6 +381,7 @@ pub(super) fn found_step(
         thread: None,
         style_examples: Vec::new(),
         fix_commits: Vec::new(),
+        progress: None,
     }
 }
 
@@ -1336,6 +1340,7 @@ impl DeliveryService {
             thread,
             style_examples,
             fix_commits,
+            progress: None,
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task.id.clone(),
             rung: request.rung,
@@ -1535,19 +1540,13 @@ impl DeliveryService {
                 }
             }
         }
+        // A merge reads GitHub several times and can take long: it runs
+        // apart once the approval is saved, and says what it is doing.
         if approval.rung == DeliveryRung::Merge {
-            let executed = self.merge_pr(&approval);
-            approval.executed_at_ms = Some(now_ms());
-            match executed {
-                Ok(outcome) => {
-                    approval.advance(StepEvent::Ran { ok: true })?;
-                    approval.outcome = Some(outcome);
-                }
-                Err(error) => {
-                    approval.advance(StepEvent::Ran { ok: false })?;
-                    approval.outcome = Some(error.message);
-                }
-            }
+            approval.progress = Some(super::model::DeliveryProgress {
+                step: MERGE_CHECKING.to_string(),
+                since_ms: now_ms(),
+            });
         }
         // Posted once, never retried: a failure says why, and the
         // coordinator asks again if it still makes sense.
@@ -1639,15 +1638,133 @@ impl DeliveryService {
             self.adopt_pr(&task, &found)?;
             approval = self.approval(&approval.id)?;
         }
-        // Read only once the step is saved as done, so the read does not
-        // take Tinto's own merge for one made outside it.
         if approval.rung == DeliveryRung::Merge {
-            let _ = self.refresh_pr(&approval.task_id, std::time::Duration::ZERO);
-            if approval.status == DeliveryApprovalStatus::Executed {
-                self.delete_merged_branch(&self.task(&approval.task_id)?)?;
-            }
+            let service = self.clone();
+            let id = approval.id.clone();
+            std::thread::spawn(move || {
+                if let Err(error) = service.run_merge(&id) {
+                    eprintln!("tinto: delivery merge {id}: {}", error.message);
+                }
+            });
         }
         Ok(approval)
+    }
+
+    /// Runs an approved merge apart from the user's click: Tinto checks the
+    /// PR on GitHub, merges it and deletes its branch, keeping on the step
+    /// what it is doing. Its end is saved like any step's.
+    pub(super) fn run_merge(&self, approval_id: &str) -> Result<(), DeliveryError> {
+        let merged = self.merge_pr(&self.approval(approval_id)?);
+        // A failure may come after GitHub merged it (no answer in time): the
+        // PR as GitHub has it now says which.
+        let merged = match merged {
+            Err(error) if self.merged_on_github(approval_id)? => Ok(format!(
+                "PR fusionado en GitHub, aunque Tinto no recibió la respuesta ({})",
+                error.message
+            )),
+            other => other,
+        };
+        let mut approval = self.approval(approval_id)?;
+        approval.executed_at_ms = Some(now_ms());
+        approval.progress = None;
+        match merged {
+            Ok(outcome) => {
+                approval.advance(StepEvent::Ran { ok: true })?;
+                approval.outcome = Some(outcome);
+                // Still Tinto's: the PR is read again and its branch deleted.
+                approval.progress = Some(super::model::DeliveryProgress {
+                    step: "Borrando la rama en GitHub".to_string(),
+                    since_ms: now_ms(),
+                });
+            }
+            Err(error) => {
+                approval.advance(StepEvent::Ran { ok: false })?;
+                approval.outcome = Some(error.message);
+            }
+        }
+        self.save_approval(&approval, "approval_completed")?;
+        // Read only once the step is saved as done, so the read does not
+        // take Tinto's own merge for one made outside it.
+        let _ = self.refresh_pr(&approval.task_id, std::time::Duration::ZERO);
+        if approval.status == DeliveryApprovalStatus::Executed {
+            let deleted = self.delete_merged_branch(&self.task(&approval.task_id)?);
+            let store = self.store()?;
+            if let Some(mut done) = store.approval(approval_id)? {
+                done.progress = None;
+                if let Err(error) = &deleted {
+                    done.notice = Some(format!("No se borró la rama: {}", error.message));
+                }
+                store.put_approval(&done)?;
+            }
+            drop(store);
+            self.notify();
+            deleted?;
+        }
+        Ok(())
+    }
+
+    /// Whether the PR of a merge step shows merged on GitHub now.
+    fn merged_on_github(&self, approval_id: &str) -> Result<bool, DeliveryError> {
+        let task_id = self.approval(approval_id)?.task_id;
+        Ok(self
+            .refresh_pr(&task_id, std::time::Duration::ZERO)
+            .ok()
+            .flatten()
+            .is_some_and(|pr| pr.state == "merged"))
+    }
+
+    /// Says on a running step what it is doing now.
+    fn set_progress(&self, approval_id: &str, step: &str) -> Result<(), DeliveryError> {
+        let store = self.store()?;
+        if let Some(mut approval) = store.approval(approval_id)? {
+            approval.progress = Some(super::model::DeliveryProgress {
+                step: step.to_string(),
+                since_ms: now_ms(),
+            });
+            store.put_approval(&approval)?;
+        }
+        drop(store);
+        self.notify();
+        Ok(())
+    }
+
+    /// Merges Tinto was running when it closed: they did not finish here,
+    /// so they fail saying so. Whether GitHub merged the PR comes out of the
+    /// next read of it, which records a merge made on GitHub.
+    pub(super) fn fail_interrupted_merges(&self) -> Result<(), DeliveryError> {
+        let running: Vec<DeliveryApproval> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|approval| {
+                approval.rung == DeliveryRung::Merge
+                    && approval.status == DeliveryApprovalStatus::Approved
+            })
+            .collect();
+        for mut approval in running {
+            // GitHub may have merged it before Tinto closed: then the step is
+            // done, keeping its method (which a later restack reads).
+            let doing = approval
+                .progress
+                .take()
+                .map_or("sin empezar".to_string(), |progress| {
+                    progress.step.to_lowercase()
+                });
+            approval.executed_at_ms = Some(now_ms());
+            if self.merged_on_github(&approval.id)? {
+                approval.advance(StepEvent::DoneOutside)?;
+                approval.outcome = Some(format!(
+                    "PR fusionado en GitHub; Tinto se cerró antes de registrarlo ({doing})"
+                ));
+            } else {
+                approval.advance(StepEvent::Ran { ok: false })?;
+                approval.outcome = Some(format!(
+                    "Tinto se cerró mientras fusionaba ({doing}): el PR sigue abierto; pide el merge de nuevo"
+                ));
+            }
+            self.save_approval(&approval, "approval_completed")?;
+        }
+        Ok(())
     }
 
     /// The user has Tinto open an approved PR step that is not open yet:
@@ -3137,6 +3254,7 @@ impl DeliveryService {
         let method = method.as_str();
         // The PR as it is now: the step may have waited while it moved.
         let task = self.task(&approval.task_id)?;
+        self.set_progress(&approval.id, MERGE_CHECKING)?;
         self.refresh_pr(&task.id, std::time::Duration::ZERO)?;
         self.merge_prerequisites(&task, Some(method))?;
         let pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
@@ -3149,6 +3267,7 @@ impl DeliveryService {
         // GitHub closes the PRs that go into a branch it deletes: those are
         // pointed at the merge target first (`delete_merged_branch`).
         let stacked = !self.stacked_prs(&task)?.is_empty();
+        self.set_progress(&approval.id, "Fusionando en GitHub")?;
         self.github_client()
             .merge(&pr.url, method, &approval.title, &approval.body, !stacked)?;
         let mut outcome = match stacked {

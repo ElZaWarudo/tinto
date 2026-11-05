@@ -444,6 +444,21 @@ export interface DeliveryApproval {
   style_examples?: string[];
   /** `pr_reply`: the branch's commits that changed the commented file since the comment. */
   fix_commits?: DeliveryFixCommit[];
+  /** `merge`, while Tinto runs it after the approval: what it is doing and since when. */
+  progress?: { step: string; since_ms: number } | null;
+}
+
+/** One gh call Tinto made, for the GitHub log (src-tauri/src/delivery/prs.rs). */
+export interface DeliveryGhCall {
+  at_ms: number;
+  command: string;
+  duration_ms: number;
+  outcome:
+    | { kind: "ok" }
+    | { kind: "failed"; error: string }
+    | { kind: "timed_out" }
+    /** Not a call: a read that waited for another read of the same PR. */
+    | { kind: "waited" };
 }
 
 /** A commit of the task's branch, as a reply to a reviewer refers to it. */
@@ -823,6 +838,8 @@ export type DeliveryPrWait =
 export type DeliveryPhase =
   | { kind: "decisions"; count: number }
   | { kind: "approval" | "record" | "drifted"; rung: DeliveryRung; stage: string | null }
+  /** An approved step Tinto runs apart (a merge): what it is doing, since when. */
+  | { kind: "step_running"; rung: DeliveryRung; step: string; since_ms: number }
   | { kind: "running" | "paused" | "batch_paused"; job_id: string; role: string }
   | { kind: "waits_quarantine"; job_id: string; lease: string }
   | { kind: "setup_failed"; job_id: string; command: string }

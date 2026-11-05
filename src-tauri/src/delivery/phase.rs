@@ -67,6 +67,13 @@ pub enum Phase {
         rung: DeliveryRung,
         stage: Option<String>,
     },
+    /// An approved step Tinto is running apart (a merge): what it is doing
+    /// and since when. Nobody has to act.
+    StepRunning {
+        rung: DeliveryRung,
+        step: String,
+        since_ms: u64,
+    },
     /// An approved PR or Jira step the coordinator still has to report.
     Record {
         rung: DeliveryRung,
@@ -1019,6 +1026,7 @@ fn round_at(phase: &DeliveryTaskPhase) -> String {
         | Phase::Broken { role, .. }
         | Phase::NextStage { role } => role.clone(),
         Phase::Approval { rung, .. }
+        | Phase::StepRunning { rung, .. }
         | Phase::Record { rung, .. }
         | Phase::Drifted { rung, .. }
         | Phase::NextStep { rung, .. } => format!("{rung:?}").to_ascii_lowercase(),
@@ -1127,6 +1135,25 @@ fn phase_in_round(
                 stage: stage_of(step),
             },
             Waiter::User,
+        );
+    }
+    // Approved, or done and still cleaning up after it (its branch).
+    if let Some((step, progress)) = approvals.iter().find_map(|approval| {
+        matches!(
+            approval.status,
+            DeliveryApprovalStatus::Approved | DeliveryApprovalStatus::Executed
+        )
+        .then_some(approval.progress.as_ref())
+        .flatten()
+        .map(|progress| (approval, progress))
+    }) {
+        return phase(
+            Phase::StepRunning {
+                rung: step.rung,
+                step: progress.step.clone(),
+                since_ms: progress.since_ms,
+            },
+            Waiter::Nobody,
         );
     }
     if let Some(step) = approvals

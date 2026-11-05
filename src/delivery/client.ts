@@ -24,6 +24,7 @@ import type {
   DeliveryOverview,
   DeliveryPlatform,
   DeliveryEnvironmentCheck,
+  DeliveryGhCall,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryRung,
@@ -195,6 +196,9 @@ export const setDeliveryJiraToken = (repo: string, token: string) =>
 /** "Entorno": whether Docker (when the repo uses it) and its probes answer now. */
 export const checkDeliveryEnvironment = (repo: string, distro: string | null) =>
   invoke<DeliveryEnvironmentCheck[]>("delivery_check_environment", { repo, distro });
+
+/** Tinto's latest gh calls, newest first. */
+export const getDeliveryGithubLog = () => invoke<DeliveryGhCall[]>("delivery_github_log");
 
 /** "Comprobar Jira": the token owner's name, as Jira sees it. */
 export const checkDeliveryJira = (repo: string) => invoke<string>("delivery_check_jira", { repo });

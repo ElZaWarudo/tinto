@@ -3129,3 +3129,50 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The merge step: its checks before approving, its progress once approved,
+   why it failed. */
+.delivery-merge {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0;
+}
+.delivery-merge p {
+  margin: 0;
+}
+.delivery-merge__checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.delivery-merge__checks li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.delivery-merge--failed {
+  background: rgb(from var(--danger) r g b / 0.08);
+  border-color: var(--danger);
+}
+/* The GitHub log: one call per line, newest first. */
+.delivery-ghlog {
+  max-width: 720px;
+}
+.delivery-ghlog__list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+.delivery-ghlog__list li {
+  display: grid;
+  grid-template-columns: 70px 150px minmax(0, 1fr);
+  gap: 8px;
+}
+.delivery-ghlog__list code {
+  overflow-wrap: anywhere;
+}

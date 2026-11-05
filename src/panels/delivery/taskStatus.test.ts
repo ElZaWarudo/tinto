@@ -23,6 +23,7 @@ import {
   packageState,
   taskListGroups,
   lastHandoff,
+  mergeChecks,
   latestOfRole,
   nextStageOf,
   nextStep,
@@ -505,6 +506,41 @@ describe("a followed PR", () => {
       "los revisores",
     );
     expect(waitsOnLabel(prWorld({}, { kind: "checks" }, "external"), "t1")).toBe("la CI");
+  });
+
+  it("lists what a merge needs of the PR and shows a merge Tinto is running", () => {
+    expect(mergeChecks(pr({ ...ci, review_decision: "approved", approved_by: ["ana"] }))).toEqual([
+      { ok: true, label: "CI pasa en abc1234" },
+      { ok: true, label: "Aprobado por ana" },
+      { ok: true, label: "Sin conflictos con la base" },
+    ]);
+    const blocked = mergeChecks(
+      pr({
+        ci: "failing",
+        head: "abc1234ef",
+        reviewers: ["luis"],
+        conflicts: true,
+        draft: true,
+        base: "develop",
+      }),
+    );
+    expect(blocked.filter((check) => !check.ok).map((check) => check.label)).toEqual([
+      "CI falla en abc1234",
+      "Falta la aprobación de luis",
+      "Conflictos con develop",
+      "Es un borrador",
+    ]);
+    // An approval GitHub does not count yet is no approval.
+    expect(mergeChecks(pr({ ...ci, approved_by: ["ana"] }))[1]).toEqual({
+      ok: false,
+      label: "GitHub aún pide una revisión aprobada",
+    });
+    const running = status(
+      { kind: "step_running", rung: "merge", step: "Fusionando en GitHub", since_ms: 1_000 },
+      {},
+      66_000,
+    );
+    expect(running).toMatchObject({ group: "running", label: "Fusionando en GitHub · 1:05" });
   });
 
   it("asks a PR step on an open PR as setting that PR's text", () => {

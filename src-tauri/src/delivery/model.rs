@@ -1041,6 +1041,17 @@ pub struct DeliveryApproval {
     /// since the review comment, newest first: the fix the reply is about.
     #[serde(default)]
     pub fix_commits: Vec<DeliveryFixCommit>,
+    /// `merge` only, while Tinto runs it after the approval: what it is
+    /// doing and since when.
+    #[serde(default)]
+    pub progress: Option<DeliveryProgress>,
+}
+
+/// What an approved step Tinto runs apart is doing now.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryProgress {
+    pub step: String,
+    pub since_ms: u64,
 }
 
 impl DeliveryApproval {

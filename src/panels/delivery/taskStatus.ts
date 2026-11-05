@@ -511,6 +511,40 @@ export function entryTasks(entries: TaskListEntry[]): DeliveryTask[] {
   return entries.flatMap((entry) => (entry.kind === "task" ? [entry.task] : entry.packages));
 }
 
+/** How long since `since` (ms), as a clock: "1:05". */
+export function elapsed(since: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - since) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** What the merge needs of the PR, each with whether it holds as Tinto last
+ *  read GitHub: the CI of its last commit, its approvals, no conflicts, not a
+ *  draft. Tinto checks them again when the merge is approved. */
+export function mergeChecks(pr: DeliveryPr): { ok: boolean; label: string }[] {
+  const missing = missingApprovals(pr);
+  const approvedBy = pr.approved_by ?? [];
+  const base = pr.base ?? "la base";
+  return [
+    {
+      ok: pr.ci === "passing" || pr.ci == null,
+      label: pr.ci == null ? "Sin CI en este repositorio" : (ciLine(pr) ?? "CI"),
+    },
+    missing.length > 0
+      ? { ok: false, label: `Falta la aprobación de ${missing.join(", ")}` }
+      : pr.review_decision === "changes_requested"
+        ? { ok: false, label: "Hay cambios pedidos" }
+        : pr.review_decision === "review_required"
+          ? { ok: false, label: "GitHub aún pide una revisión aprobada" }
+          : approvedBy.length > 0
+            ? { ok: true, label: `Aprobado por ${approvedBy.join(", ")}` }
+            : { ok: pr.review_decision !== "review_required", label: "Sin revisión aprobada" },
+    pr.conflicts
+      ? { ok: false, label: `Conflictos con ${base}` }
+      : { ok: true, label: `Sin conflictos con ${base}` },
+    ...(pr.draft ? [{ ok: false, label: "Es un borrador" }] : []),
+  ];
+}
+
 function clock(job: DeliveryJob, now: number): string {
   if (!job.started_at_ms) return "";
   const seconds = Math.max(0, Math.round(((job.ended_at_ms ?? now) - job.started_at_ms) / 1000));
@@ -793,6 +827,13 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
       const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
       return step(`Aprobar ${stepName(phaseStep(phase.rung, phase.stage), pr)}`);
     }
+    case "step_running":
+      return {
+        group: "running",
+        tone: "live",
+        icon: "live",
+        label: `${phase.step} · ${elapsed(phase.since_ms, now)}`,
+      };
     case "record":
       // Approved: running it and reporting it is the coordinator's turn.
       return waiting(

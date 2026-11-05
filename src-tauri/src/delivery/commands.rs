@@ -435,6 +435,13 @@ pub async fn delivery_check_environment(
     blocking(move || service.check_environment(&repo, distro.as_deref())).await
 }
 
+/// The GitHub log: Tinto's latest gh calls, newest first, with how long
+/// each took and how it ended.
+#[tauri::command]
+pub fn delivery_github_log() -> Vec<super::prs::GhCall> {
+    super::prs::github_log()
+}
+
 /// Archives a delivered task: its worktree and local branch go.
 #[tauri::command]
 pub async fn delivery_archive_task(

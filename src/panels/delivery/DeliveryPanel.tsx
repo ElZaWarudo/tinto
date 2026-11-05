@@ -137,6 +137,7 @@ import { coordinatorStalls, type CoordinatorStall } from "./DeliveryNotification
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
+import { GitHubLog, MergeChecks, MergeFailed, MergeRunning } from "./DeliveryMerge";
 import {
   STEPS,
   TASK_STATE_LABEL,
@@ -1926,6 +1927,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           </span>
         )}
         <EnvironmentStatus repo={choice.path} distro={choice.distro} />
+        <GitHubLog />
         <span className="delivery-repo__wide">
           <button
             type="button"
@@ -2258,8 +2260,10 @@ function TaskDetail({
     (job) => job.agent !== "shell" && job.result_state !== "stale" && !job.undone_at_ms,
   );
   const broken = latest && !hasOpenJob && isBroken(latest) ? latest : null;
+  // A merge Tinto still runs stays in sight while it cleans up after itself.
   const openApprovals = approvals.filter(
-    (approval) => approval.status === "pending" || approval.status === "approved",
+    (approval) =>
+      approval.status === "pending" || approval.status === "approved" || approval.progress,
   );
   // A middle package of a split issue ends at its merge.
   const ladder = stepsOf(overview, task.id);
@@ -2313,6 +2317,15 @@ function TaskDetail({
   const [correcting, setCorrecting] = useState<string | null>(null);
   const correctable = correctableSteps(approvals);
   const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
+  // The latest merge failed and the PR is still open: why, until it is asked again.
+  const lastMerge = approvals
+    .filter((approval) => approval.rung === "merge")
+    .reduce<DeliveryApproval | null>(
+      (latest, approval) =>
+        !latest || approval.requested_at_ms > latest.requested_at_ms ? approval : latest,
+      null,
+    );
+  const failedMerge = lastMerge?.status === "failed" && pr?.state === "open" ? lastMerge : null;
   // Opening the task checks its steps against GitHub: the PR is found by its
   // branch if needed and read, unless it was read moments ago.
   useEffect(() => {
@@ -2833,9 +2846,14 @@ function TaskDetail({
             open={expanded === approval.id}
             onToggle={() => toggleStep(approval.id)}
           >
-            <ApprovalBanner task={task} approval={approval} pr={pr} />
+            {approval.rung === "merge" && approval.progress ? (
+              <MergeRunning approval={approval} now={now} />
+            ) : (
+              <ApprovalBanner task={task} approval={approval} pr={pr} now={now} />
+            )}
           </ApprovalBar>
         ))}
+      {failedMerge && pr && <MergeFailed approval={failedMerge} pr={pr} />}
       {replies.length > 0 && (
         <StepBar
           title={
@@ -3768,13 +3786,14 @@ function ApprovalBar({
   const name = stepName(stepOf(approval), pr);
   const pending = approval.status === "pending";
   const commits = approval.commits ?? [];
+  const running = approval.progress ? `Fusionando · ${lower(approval.progress.step)}` : null;
   const summary =
     commits.length > 0
       ? `${commits.length === 1 ? "1 commit" : `${commits.length} commits`} · ${files(commits.reduce((sum, commit) => sum + commit.paths.length, 0))}`
       : approval.title;
   return (
     <StepBar
-      title={pending ? `Aprobar ${name}` : `Esperando al coordinador: ${name}`}
+      title={pending ? `Aprobar ${name}` : (running ?? `Esperando al coordinador: ${name}`)}
       summary={summary}
       button={pending ? "Revisar" : "Ver"}
       buttonLabel={`${pending ? "Revisar" : "Ver"} ${name}`}
@@ -4096,10 +4115,12 @@ function ApprovalBanner({
   task,
   approval,
   pr,
+  now,
 }: {
   task: DeliveryTask;
   approval: DeliveryApproval;
   pr: DeliveryPr | undefined;
+  now: number;
 }) {
   const [outcome, setOutcome] = useState("");
   const name = stepName(stepOf(approval), pr);
@@ -4192,15 +4213,13 @@ function ApprovalBanner({
         </span>
       </p>
       {!pending && approval.notice && <p className="delivery-job__note">{approval.notice}</p>}
-      {(approval.rung === "merge" || approval.rung === "pr") && pr && ciLine(pr) && (
+      {pending && approval.rung === "merge" && pr && <MergeChecks pr={pr} now={now} />}
+      {approval.rung === "pr" && pr && ciLine(pr) && (
         <p
           className={pr.ci === "passing" ? "delivery-muted" : "delivery-tone--danger"}
           aria-label="CI del PR"
         >
           {ciLine(pr)}
-          {approval.rung === "merge" &&
-            pr.ci !== "passing" &&
-            ": no se fusiona hasta que la CI pase en este commit"}
         </p>
       )}
       {!pending && approval.rung === "pr" && (
