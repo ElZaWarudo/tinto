@@ -231,3 +231,8 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 
 Tinto does nothing *to* your repos through the monitoring pipeline. It
 keeps you awake while the AI works. That's the deal.
+
+## License
+
+Tinto is free software, licensed under the GNU General Public License,
+version 3 or (at your option) any later version. See [LICENSE](LICENSE).
