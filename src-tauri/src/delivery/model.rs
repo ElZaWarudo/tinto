@@ -1752,6 +1752,11 @@ pub struct DeliveryJiraSettings {
     /// Whether a token is saved. Tinto fills it when it reads the settings.
     #[serde(default)]
     pub has_token: bool,
+    /// Field values a transition requires, sent with it: by transition id,
+    /// transition name or target status (any case), e.g. `{"Start Work":
+    /// {"customfield_10617": {"value": "NO"}}}`.
+    #[serde(default)]
+    pub transition_fields: BTreeMap<String, serde_json::Value>,
 }
 
 /// Who runs a stage: the agent, its model and its reasoning effort.

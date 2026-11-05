@@ -622,6 +622,13 @@ pub fn delivery_set_repo_settings(
                     after_pr: statuses(jira.after_pr),
                     after_merge: statuses(jira.after_merge),
                     has_token: false,
+                    // Each transition's fields are an object Jira takes as is.
+                    transition_fields: jira
+                        .transition_fields
+                        .into_iter()
+                        .filter(|(key, fields)| !key.trim().is_empty() && fields.is_object())
+                        .map(|(key, fields)| (key.trim().to_string(), fields))
+                        .collect(),
                 })
             }
             _ => None,

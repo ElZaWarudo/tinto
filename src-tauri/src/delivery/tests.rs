@@ -6009,7 +6009,11 @@ impl super::jira::Jira for FakeJira {
                     .find(|(from, tid, ..)| *from == status.as_str() && *tid == id)
                     .unwrap();
                 *status = to.to_string();
-                self.writes.lock().unwrap().push(format!("transition {id}"));
+                let fields = &body.unwrap()["fields"];
+                self.writes.lock().unwrap().push(match fields.is_null() {
+                    true => format!("transition {id}"),
+                    false => format!("transition {id} {fields}"),
+                });
                 Ok(serde_json::Value::Null)
             }
             ("POST", "/rest/api/2/issue/AGOS-455/remotelink") => {
@@ -6076,6 +6080,7 @@ fn tinto_reads_a_tasks_issue_from_the_repos_jira() {
         after_pr: Vec::new(),
         after_merge: Vec::new(),
         has_token: false,
+        transition_fields: Default::default(),
     });
     store.set_repo_settings(h.repo.path(), &settings).unwrap();
     drop(store);
@@ -6181,6 +6186,12 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         after_pr: vec!["En ejecución".into(), "In Review".into()],
         after_merge: vec!["Cerrada".into()],
         has_token: false,
+        // "Start Work" requires a field the team always sets to NO.
+        transition_fields: [(
+            "start work".to_string(),
+            json!({"customfield_10617": {"value": "NO"}}),
+        )]
+        .into(),
     });
     h.service
         .store()
@@ -6242,7 +6253,7 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         jira.writes.lock().unwrap().as_slice(),
         [
             "link github-pr=https://github.com/o/r/pull/279",
-            "transition 11",
+            "transition 11 {\"customfield_10617\":{\"value\":\"NO\"}}",
             "transition 151",
             "transition 161"
         ]
@@ -8183,6 +8194,7 @@ fn past_the_brainstorm_the_jira_steps_go_through() {
         after_pr: vec!["In Review".into()],
         after_merge: vec!["Cerrada".into()],
         has_token: false,
+        transition_fields: Default::default(),
     });
     h.service
         .store()
@@ -12515,6 +12527,7 @@ fn past_the_brainstorm_tinto_asks_the_push_and_jira_steps_itself() {
         after_pr: vec!["In Review".into()],
         after_merge: vec!["Cerrada".into()],
         has_token: false,
+        transition_fields: Default::default(),
     });
     h.service
         .store()

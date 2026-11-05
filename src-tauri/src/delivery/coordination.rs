@@ -3306,6 +3306,12 @@ impl DeliveryService {
             &task.key,
             pr.as_ref().map(|pr| (pr.url.as_str(), pr.number)),
             &approval.jira_statuses,
+            &self
+                .store()?
+                .repo_settings(&task.repo)?
+                .jira
+                .map(|jira| jira.transition_fields)
+                .unwrap_or_default(),
         )
     }
 

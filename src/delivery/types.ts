@@ -763,6 +763,8 @@ export interface DeliveryJiraSettings {
   after_merge: string[];
   /** Whether a token is saved (read only). */
   has_token?: boolean;
+  /** Fields sent with a transition, by transition id, name or target status. */
+  transition_fields?: Record<string, unknown>;
 }
 
 /** Who runs a stage; the CLI's defaults where null. */

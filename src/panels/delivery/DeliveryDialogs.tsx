@@ -839,6 +839,22 @@ function parseKnownFailures(text: string): DeliveryKnownFailure[] {
     .map(([check, test, ...reason]) => ({ check, test, reason: reason.join(" | ") }));
 }
 
+/** The JSON of fields per transition; null when it is not an object of objects. */
+function parseTransitionFields(text: string): Record<string, unknown> | null {
+  if (!text.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const object = (value: unknown) =>
+      typeof value === "object" && value !== null && !Array.isArray(value);
+    if (!object(parsed)) return null;
+    return Object.values(parsed as object).every(object)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function RepoSettings({
   repo,
   label,
@@ -906,6 +922,8 @@ function RepoSettings({
   const [jiraToken, setJiraToken] = useState("");
   const [afterPr, setAfterPr] = useState("");
   const [afterMerge, setAfterMerge] = useState("");
+  // JSON: { "<transition>": { "<field>": <value> } }.
+  const [transitionFields, setTransitionFields] = useState("");
   const [jiraCheck, setJiraCheck] = useState("");
   const [status, setStatus] = useState("");
   // Changed since it was read or saved: every field's change bubbles up to the section.
@@ -966,6 +984,8 @@ function RepoSettings({
         setJiraProject(settings.jira?.project ?? "");
         setAfterPr((settings.jira?.after_pr ?? []).join(", "));
         setAfterMerge((settings.jira?.after_merge ?? []).join(", "));
+        const fields = settings.jira?.transition_fields ?? {};
+        setTransitionFields(Object.keys(fields).length > 0 ? JSON.stringify(fields, null, 2) : "");
         setJiraToken("");
         setJiraCheck("");
         setStatus("");
@@ -1021,9 +1041,16 @@ function RepoSettings({
           <ActionButton
             className="delivery-button--primary"
             disabled={!loaded}
-            onAction={async () =>
-              loaded &&
-              setDeliveryRepoSettings(repo, {
+            onAction={async () => {
+              if (!loaded) return;
+              const fieldsByTransition = parseTransitionFields(transitionFields);
+              if (!fieldsByTransition) {
+                setStatus(
+                  "No se pudo guardar: los campos por transición no son un objeto JSON de transición → campos.",
+                );
+                return;
+              }
+              return setDeliveryRepoSettings(repo, {
                 ...loaded,
                 qa_browser: browser,
                 qa_commands: parseChecks(commands),
@@ -1060,6 +1087,7 @@ function RepoSettings({
                       project: jiraProject.trim(),
                       after_pr: parseStatuses(afterPr),
                       after_merge: parseStatuses(afterMerge),
+                      transition_fields: fieldsByTransition,
                     }
                   : null,
               })
@@ -1074,8 +1102,8 @@ function RepoSettings({
                 })
                 .catch((cause) =>
                   setStatus(`No se pudo guardar: ${String(cause?.message ?? cause)}`),
-                )
-            }
+                );
+            }}
           >
             Guardar
           </ActionButton>
@@ -1446,6 +1474,17 @@ function RepoSettings({
         </Field>
         <Field label="Estados al fusionar el PR" hint="Por ejemplo: Cerrada">
           <input value={afterMerge} onChange={(event) => setAfterMerge(event.target.value)} />
+        </Field>
+        <Field
+          label="Campos por transición"
+          hint="Los campos que una transición exige, en JSON, por id, nombre de la transición o estado al que lleva. Tinto los envía con ella."
+        >
+          <GrowingTextarea
+            value={transitionFields}
+            onChange={(event) => setTransitionFields(event.target.value)}
+            rows={3}
+            placeholder={'{ "Start Work": { "customfield_10617": { "value": "NO" } } }'}
+          />
         </Field>
         <div className="delivery-actions delivery-settings__aside">
           <ActionButton
