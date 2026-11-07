@@ -1,15 +1,27 @@
 name: Release
 
-# Pushing a version tag (scripts/release.mjs makes one) builds the Windows
-# installer and publishes it, with the signed update every installed Tinto
-# picks up, as that version's GitHub Release. See RELEASING.md.
+# A version tag builds the Windows installer into a draft GitHub Release,
+# checks its signed update the way installed Tinto will read it, and only then
+# publishes the release, which every installed Tinto picks up. It runs when a
+# tag is pushed by hand (scripts/release.mjs makes one) and when the Release
+# cut workflow calls it: a tag that workflow pushes with GITHUB_TOKEN triggers
+# no other workflow. See RELEASING.md.
 on:
   push:
     tags:
       - "v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: The vX.Y.Z tag to build and publish
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 # Both jobs build with one pinned Rust: a newer stable can bring lints that
 # fail a release halfway. Check locally with the same one before tagging.
@@ -21,6 +33,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
 
       - name: Install Tauri Linux dependencies
         run: |
@@ -68,11 +82,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: "26"
+          node-version: "24"
           cache: npm
 
       - name: Setup Rust
@@ -99,7 +115,7 @@ jobs:
         shell: bash
         run: |
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, app $version"; exit 1; }
+          test "v$version" = "$TAG" || { echo "tag $TAG, app $version"; exit 1; }
 
       - name: Lint and frontend tests
         run: |
@@ -116,7 +132,7 @@ jobs:
         run: |
           {
             echo "body<<NOTES_END"
-            node scripts/release.mjs notes "$GITHUB_REF_NAME"
+            node scripts/release.mjs notes "$TAG"
             echo "NOTES_END"
           } >> "$GITHUB_OUTPUT"
 
@@ -141,15 +157,56 @@ jobs:
           }
           $config | ConvertTo-Json -Depth 5 | Set-Content src-tauri/tauri.release.conf.json
 
-      - name: Build and publish
+      - name: Build into a draft release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Tinto ${{ github.ref_name }}
+          tagName: ${{ env.TAG }}
+          releaseName: Tinto ${{ env.TAG }}
           releaseBody: ${{ steps.notes.outputs.body }}
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          releaseDraft: true
+          prerelease: ${{ contains(env.TAG, '-') }}
           args: --config src-tauri/tauri.release.conf.json
+
+  # What installed Tinto will download, checked on the draft before anyone can
+  # see it: latest.json names this version, newer than the published one, has
+  # windows-x86_64, points at this release's assets, and each signature
+  # verifies with the app's updater key over the uploaded bytes. A failure
+  # leaves the draft for you to inspect or delete. It does not install and run
+  # an update (see RELEASING.md), so it runs on Linux: the check is Node only.
+  update-check:
+    name: Check update and publish
+    runs-on: ubuntu-latest
+    needs: windows
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Download the draft and the published update
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/draft"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq .assets \
+            > "$RUNNER_TEMP/assets.json"
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern latest.json \
+            --output "$RUNNER_TEMP/published-latest.json"
+
+      - name: Check the update
+        run: |
+          node scripts/check-update.mjs --tag "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir "$RUNNER_TEMP/draft" --assets "$RUNNER_TEMP/assets.json" \
+            --previous "$RUNNER_TEMP/published-latest.json"
+
+      - name: Publish
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

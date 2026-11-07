@@ -15,6 +15,7 @@ checks, and brand asset generation. It reflects the same workflow used by CI
 6. [Build the desktop app (debug)](#build-the-desktop-app-debug)
 7. [Build the tinto-agent](#build-the-tinto-agent)
 8. [Build the production installer](#build-the-production-installer)
+   - [Publish a release](#publish-a-release)
 9. [Run the app in dev mode](#run-the-app-in-dev-mode)
 10. [Regenerate brand assets](#regenerate-brand-assets)
 11. [Clean build artifacts](#clean-build-artifacts)
@@ -274,7 +275,8 @@ right format for the host OS, except on Windows, where
 
 ### One-shot (frontend + Rust release + bundle)
 
-This is what you want for a release. It runs `npm run build` first
+This is what you want for a local installer (a published release is built by
+CI, see [Publish a release](#publish-a-release)). It runs `npm run build` first
 (`beforeBuildCommand`) and then compiles Rust in release mode and bundles.
 
 ```bash
@@ -344,6 +346,25 @@ npm run tauri build -- --debug
 # Pick a custom output directory:
 npm run tauri build -- --output-dir ./out
 ```
+
+### Publish a release
+
+Releases are built and published by GitHub Actions, never from a local
+`tauri build`: only CI holds the updater signing key. Full details, secrets
+and recovery are in [RELEASING.md](../RELEASING.md). In short:
+
+1. Merge what ships into `develop` and wait for CI to pass on it.
+2. Actions → **Release cut** → *Run workflow*: pick `kind`
+   (`patch`/`minor`/`major`), `rc` for a release candidate, `ref`
+   (default `develop`). Leave **dry run** checked first: the log shows the
+   next version, the files it bumps and the CHANGELOG.md section.
+3. Run it again with dry run unchecked. It commits `chore(release): vX.Y.Z`
+   on the ref, tags it, pushes both and calls the **Release** workflow.
+4. **Release** builds the installer into a draft GitHub Release, checks the
+   update (`scripts/check-update.mjs`) and publishes the draft only if the
+   check passes.
+
+Preview the same plan locally with `node scripts/release.mjs --kind patch --dry-run`.
 
 ---
 
