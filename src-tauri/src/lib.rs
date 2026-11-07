@@ -25,6 +25,7 @@ pub mod file_ops;
 pub mod git;
 #[cfg(unix)]
 mod login_shell_path;
+pub mod mobile_link;
 pub mod paths;
 mod runtime_paths;
 pub mod ui_state;
@@ -301,14 +302,28 @@ pub fn run() {
             file_ops::commands::delete_from_repo,
             file_ops::commands::restore_deleted_from_repo,
             file_ops::commands::redo_deleted_from_repo,
+            mobile_link::mobile_link_status,
+            mobile_link::mobile_link_set_relay,
+            mobile_link::mobile_link_start_pairing,
+            mobile_link::mobile_link_confirm_pairing,
+            mobile_link::mobile_link_cancel_pairing,
+            mobile_link::mobile_link_revoke,
             ui_state::get_ui_state,
             ui_state::set_ui_state
         ])
         .setup(move |app| {
             {
                 let handle = app.handle().clone();
+                // Off until the user sets a relay and pairs a phone.
+                let mobile = mobile_link::MobileLink::start(delivery_for_setup.clone());
+                let mobile_handle = app.handle().clone();
+                mobile.set_on_change(std::sync::Arc::new(move || {
+                    let _ = mobile_handle.emit(mobile_link::EVENT_MOBILE_LINK_CHANGED, ());
+                }));
+                app.manage(mobile.clone());
                 delivery_for_setup.set_notify(std::sync::Arc::new(move || {
                     let _ = handle.emit(delivery::commands::EVENT_DELIVERY_CHANGED, ());
+                    mobile.delivery_changed();
                 }));
                 if let Err(error) = delivery::mcp::start(delivery_for_setup.clone()) {
                     eprintln!("tinto: el API de coordinador de Delivery no arrancó: {error}");

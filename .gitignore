@@ -34,3 +34,6 @@ src-tauri/resources/tinto-agent-linux-x86_64
 !/.pumarejo/
 /.pumarejo/*
 !/.pumarejo/provider/
+
+# The mobile link relay's own install
+relay/node_modules/

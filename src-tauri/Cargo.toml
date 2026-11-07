@@ -74,6 +74,13 @@ sha2 = "0.10"
 # (see RELEASING.md), and the restart that installs them.
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Mobile link (docs/contracts/mobile-link.md): ChaCha20-Poly1305 and random
+# keys from ring, which rustls already builds; the WebSocket to the relay
+# over the same rustls; the pairing QR as SVG (no dependencies of its own).
+ring = "0.17"
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [target.'cfg(unix)'.dependencies]
 # Saber si un agente ya lee teclas (modo raw de su terminal); portable-pty ya la trae.

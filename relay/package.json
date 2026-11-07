@@ -1,0 +1,18 @@
+{
+  "name": "tinto-relay",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "version": "1.0.0",
+  "description": "Blind WebSocket relay between Tinto and its mobile companion",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

@@ -41,6 +41,7 @@ import type {
 } from "../../delivery/types";
 import { UNLIMITED_CAPACITY } from "../../delivery/types";
 import { GrowingTextarea } from "./GrowingTextarea";
+import { MobileLinkSettings } from "./MobileLinkSettings";
 
 export interface RepoChoice {
   path: string;
@@ -1907,6 +1908,7 @@ function DeliveryWideSettings({ capacity, endpoint, onCapacity }: DeliveryWidePr
       ) : (
         <p className="delivery-settings__intro">El API de coordinador no está disponible.</p>
       )}
+      <MobileLinkSettings />
     </>
   );
 }
