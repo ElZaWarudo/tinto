@@ -134,6 +134,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             delivery::commands::delivery_overview,
+            delivery::commands::delivery_quotas,
             delivery::commands::delivery_refresh_pr,
             delivery::commands::delivery_pr_seen,
             delivery::commands::delivery_check_task,

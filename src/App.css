@@ -10917,6 +10917,113 @@ select option:checked {
   border-right: 1px solid var(--border);
 }
 
+/* Line notes for an Agent: the gutter "+" shows on hover or focus. */
+.diff-note-add {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--file-line-label-gutter);
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.diff-line:hover .diff-note-add,
+.diff-note-add:focus-visible {
+  opacity: 1;
+}
+.diff-notes {
+  display: grid;
+  gap: 6px;
+  max-width: 640px;
+  margin: 4px 8px 6px var(--file-line-label-gutter);
+  white-space: normal;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+}
+.diff-note {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent-fg);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--fg);
+}
+.diff-note--resolved {
+  border-left-color: var(--fg-subtle);
+  color: var(--fg-muted);
+}
+.diff-note__text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.diff-note textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+}
+.diff-note__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.diff-note__state {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.diff-notes-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+}
+.diff-notes-bar__hint,
+.diff-notes-bar__message {
+  color: var(--fg-muted);
+}
+
+/* An agent session's state, on the repo's card and in the quick view. */
+.agent-signal {
+  flex: none;
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.agent-signal--needs_you {
+  color: var(--warn-bright);
+  background: rgb(from var(--warn) r g b / 0.16);
+}
+.agent-signal--working {
+  color: var(--accent-fg);
+}
+.agent-signal--done {
+  color: var(--fg-muted);
+}
+
 .full-file {
   display: grid;
   grid-template-columns: minmax(max-content, 1fr) var(--file-artifact-gutter);

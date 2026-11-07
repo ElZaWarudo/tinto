@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { busStore, getRepoSignals, signalCounts, statusSummary, useBusState } from "../bus/store";
+import { RepoAgentSignal } from "../panels/RepoAgentSignal";
 import { useWorkspaceActions } from "../workspace/actions";
+import { AgentQuotaReadout } from "./AgentQuotaReadout";
 import { filterRepoPaths } from "./filters";
 import { useQualityState } from "./state";
 
@@ -57,6 +59,7 @@ export function GlanceMode() {
           <span className="glance-mode__eyebrow">Vista rápida</span>
           <h1>Estado de la workbench</h1>
           <p>Última actividad {latestActivityAge(latest, nowMs)}</p>
+          <AgentQuotaReadout nowMs={nowMs} className="glance-mode__quota" />
         </div>
         <dl className="glance-mode__summary" aria-label="Resumen de la workbench">
           <Summary label="Repos" value={paths.length} />
@@ -104,7 +107,9 @@ export function GlanceMode() {
                       aria-hidden="true"
                     />
                     <span className="glance-repo__identity">
-                      <strong>{busStore.displayName(repo)}</strong>
+                      <strong>
+                        {busStore.displayName(repo)} <RepoAgentSignal repo={repo} />
+                      </strong>
                       <small>{delta.branch?.name ?? "Sin rama"}</small>
                     </span>
                     <span className="glance-repo__git">{statusSummary(delta.status)}</span>

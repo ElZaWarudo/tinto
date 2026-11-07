@@ -925,13 +925,18 @@ export interface DeliveryOverview {
   /** Why each queued job (by id) has not started. */
   queued?: Record<string, DeliveryQueueWait>;
   /** How much of each agent account's usage limit its jobs last reported used. */
-  quotas?: {
-    agent: DeliveryAgent;
-    window: string;
-    utilization: number;
-    resets_at_ms: number;
-    seen_at_ms: number;
-  }[];
+  quotas?: DeliveryQuota[];
+}
+
+/** How much of an agent account's usage limit its jobs or consoles last reported used. */
+export interface DeliveryQuota {
+  agent: DeliveryAgent;
+  /** The window nearest its limit: `five_hour`, `seven_day`… */
+  window: string;
+  /** Percent used. */
+  utilization: number;
+  resets_at_ms: number;
+  seen_at_ms: number;
 }
 
 /** Whether a batch's coordinator keeps up with its changes. */

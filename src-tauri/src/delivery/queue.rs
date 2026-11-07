@@ -522,8 +522,13 @@ impl Queue {
 }
 
 impl DeliveryService {
-    /// Keeps the latest quota an agent's job reported.
-    pub(super) fn record_quota(&self, mut quota: DeliveryQuota) {
+    /// The latest quota each agent reported.
+    pub fn quotas(&self) -> Result<Vec<DeliveryQuota>, DeliveryError> {
+        quotas(&*self.store()?)
+    }
+
+    /// Keeps the latest quota an agent's job or console reported.
+    pub(crate) fn record_quota(&self, mut quota: DeliveryQuota) {
         let Ok(store) = self.store() else { return };
         let Ok(mut all) = quotas(&store) else { return };
         if let Some(at) = all.iter().position(|known| known.agent == quota.agent) {

@@ -341,6 +341,11 @@ pub enum AgentProcessEvent {
     SubagentDiscoveryFailed {
         error: AgentConsoleError,
     },
+    /// How much of its account's usage limit the agent reported spent
+    /// (Claude Code's `rate_limit_event`), for Delivery to keep.
+    QuotaReported {
+        quota: crate::delivery::model::DeliveryQuota,
+    },
 }
 
 pub trait AgentProcessFactory: Send + Sync {

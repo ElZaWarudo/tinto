@@ -23,6 +23,7 @@ import type {
   DeliveryLease,
   DeliveryOverview,
   DeliveryPlatform,
+  DeliveryQuota,
   DeliveryEnvironmentCheck,
   DeliveryGhCall,
   DeliveryRepoSettings,
@@ -38,6 +39,9 @@ import type {
 export const EVENT_DELIVERY_CHANGED = "tinto://delivery-changed";
 
 export const getDeliveryOverview = () => invoke<DeliveryOverview>("delivery_overview");
+
+/** The latest usage-limit share each agent account reported. */
+export const getAgentQuotas = () => invoke<DeliveryQuota[]>("delivery_quotas");
 
 export interface NewDeliveryTask {
   repo: string;

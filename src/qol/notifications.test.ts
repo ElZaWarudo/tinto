@@ -3,8 +3,9 @@ import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BusState } from "../bus/store";
 import { busStore } from "../bus/store";
-import type { RepoDelta } from "../bus/contract";
+import type { AgentSession, RepoDelta } from "../bus/contract";
 import {
+  agentNeedsNotifications,
   collectRelevantNotifications,
   disableNotifications,
   enableNotifications,
@@ -181,5 +182,35 @@ describe("quality notifications", () => {
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     expect(qualityStore.getState().notificationStatus).toBe("ready");
     expect(qualityStore.getState().notificationsEnabled).toBe(true);
+  });
+});
+
+describe("agent needs-you notifications", () => {
+  const session = (pending: boolean): AgentSession =>
+    ({
+      id: "s-1",
+      repo: "/r/api",
+      agent_type: "claude",
+      status: "running",
+      turn_status: "working",
+      reports_turns: true,
+      acp_permissions: pending ? [{ id: "p-1", state: "pending" }] : [],
+    }) as AgentSession;
+
+  it("announces a session once when it starts needing you, and again only after it stopped", () => {
+    const name = () => "API";
+    const first = agentNeedsNotifications([session(true)], new Set(), name);
+    expect(first.notifications).toEqual([
+      expect.objectContaining({ title: "Tinto: API", key: "agent-needs:s-1" }),
+    ]);
+
+    const still = agentNeedsNotifications([session(true)], first.needing, name);
+    expect(still.notifications).toEqual([]);
+
+    const answered = agentNeedsNotifications([session(false)], still.needing, name);
+    expect(answered.notifications).toEqual([]);
+
+    const again = agentNeedsNotifications([session(true)], answered.needing, name);
+    expect(again.notifications).toHaveLength(1);
   });
 });
