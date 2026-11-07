@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { sectionFrom, sectionOf, withSection } from "./release.mjs";
+import { nextVersion, sectionFrom, sectionOf, withSection } from "./release.mjs";
 
 test("groups conventional commits into the version's section and skips the rest", () => {
   const section = sectionFrom(
@@ -32,4 +32,25 @@ test("a new section goes on top, and each version's notes stop at the next one",
   expect(sectionOf(changelog, "1.1.0")).toBe("### Fixes\n\n- one");
   expect(sectionOf(changelog, "1.0.0")).toBe("First stable release.");
   expect(sectionOf(changelog, "0.9.0")).toBeNull();
+});
+
+test.each([
+  ["patch", false, "1.2.11"],
+  ["minor", false, "1.3.0"],
+  ["major", false, "2.0.0"],
+  ["minor", true, "1.3.0-rc.3"],
+  ["patch", true, "1.2.11-rc.1"],
+])("a %s release (candidate: %s) after the latest stable tag is %s", (kind, rc, version) => {
+  // Out of order, with candidates and a stray tag: v1.2.10 must not sort before v1.2.9.
+  const tags = [
+    "v1.2.10",
+    "v1.2.9",
+    "v1.10.0-rc.1",
+    "v1.3.0-rc.2",
+    "v1.0.0",
+    "v1.3.0-rc.1",
+    "vnext",
+    "",
+  ];
+  expect(nextVersion(tags, kind, rc)).toBe(version);
 });

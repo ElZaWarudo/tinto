@@ -1,13 +1,16 @@
-// Cuts a release: `node scripts/release.mjs 1.2.0` sets the version in every
-// manifest, adds its CHANGELOG.md section (from the conventional commits since
-// the last tag, unless a hand-written one is already there), commits and tags
-// v1.2.0. Pushing the tag makes the Release workflow build and publish it.
+// Cuts a release: `node scripts/release.mjs 1.2.0` (or `--kind patch|minor|major`,
+// with `--rc` for a release candidate, to take the next version after the latest
+// stable tag) sets the version in every manifest, adds its CHANGELOG.md section
+// (from the conventional commits since the last tag, unless a hand-written one is
+// already there), commits and tags v1.2.0. `--dry-run` prints that plan and
+// changes nothing. Pushing the tag makes the Release workflow build and publish
+// it; the Release cut workflow runs this and pushes for you.
 // `node scripts/release.mjs notes v1.2.0` prints that version's section, the
 // release's notes on GitHub.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-
+import { parseArgs } from "node:util";
 const CHANGELOG = "CHANGELOG.md";
 const GROUPS = [
   ["feat", "Features"],
@@ -47,6 +50,49 @@ export function withSection(changelog, section) {
   return `${changelog.slice(0, at).trimEnd()}\n\n${section}\n${changelog.slice(at)}`;
 }
 
+const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?$/;
+
+/** Negative, zero or positive as semver `a` comes before, with or after `b`. */
+export function compareVersions(a, b) {
+  const [, ...x] = a.match(VERSION);
+  const [, ...y] = b.match(VERSION);
+  for (let at = 0; at < 3; at++) {
+    if (Number(x[at]) !== Number(y[at])) return Number(x[at]) - Number(y[at]);
+  }
+  // A prerelease comes before its release; prereleases compare part by part.
+  if (!x[3] || !y[3]) return (x[3] ? -1 : 0) + (y[3] ? 1 : 0);
+  const p = x[3].split(".");
+  const q = y[3].split(".");
+  for (let at = 0; at < Math.min(p.length, q.length); at++) {
+    if (p[at] === q[at]) continue;
+    const numeric = /^\d+$/.test(p[at]) && /^\d+$/.test(q[at]);
+    return numeric ? Number(p[at]) - Number(q[at]) : p[at] < q[at] ? -1 : 1;
+  }
+  return p.length - q.length;
+}
+
+/** The `kind` (patch, minor or major) after the latest stable tag; `-rc.N` for a candidate. */
+export function nextVersion(tags, kind, rc = false) {
+  const stable = tags
+    .map((tag) => tag.replace(/^v/, ""))
+    .filter((version) => VERSION.test(version) && !version.includes("-"))
+    .sort(compareVersions)
+    .at(-1);
+  if (!stable) throw new Error("no stable vX.Y.Z tag to count from: pass the version");
+  let [major, minor, patch] = stable.split(".").map(Number);
+  if (kind === "major") [major, minor, patch] = [major + 1, 0, 0];
+  else if (kind === "minor") [minor, patch] = [minor + 1, 0];
+  else if (kind === "patch") patch += 1;
+  else throw new Error(`«${kind}» is not patch, minor or major`);
+  const base = `${major}.${minor}.${patch}`;
+  if (!rc) return base;
+  const candidates = tags
+    .filter((tag) => tag.startsWith(`v${base}-rc.`))
+    .map((tag) => Number(tag.slice(`v${base}-rc.`.length)))
+    .filter(Number.isInteger);
+  return `${base}-rc.${Math.max(0, ...candidates) + 1}`;
+}
+
 /** `text` with its first match of `pattern` (whose group 1 is the version) set to `version`. */
 function setVersion(text, pattern, version, file) {
   const match = text.match(pattern);
@@ -56,38 +102,62 @@ function setVersion(text, pattern, version, file) {
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 
-function cut(version) {
-  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) {
+const VERSIONS = [
+  ["package.json", /"version": "([^"]+)"/],
+  ["package-lock.json", /"name": "tinto",\s*"version": "([^"]+)"/],
+  ["package-lock.json", /"": \{\s*"name": "tinto",\s*"version": "([^"]+)"/],
+  ["src-tauri/tauri.conf.json", /"version": "([^"]+)"/],
+  ["src-tauri/Cargo.toml", /\[package\]\s*name = "tinto"\s*version = "([^"]+)"/],
+  ["src-tauri/Cargo.lock", /name = "tinto"\s*version = "([^"]+)"/],
+];
+
+function cut(version, dryRun) {
+  if (!VERSION.test(version)) {
     throw new Error(`«${version}» is not a version such as 1.2.0 or 1.2.0-beta.1`);
   }
   const tag = `v${version}`;
-  if (git("status", "--porcelain")) throw new Error("commit or stash your changes first");
-  if (git("tag", "--list", tag)) throw new Error(`${tag} already exists`);
+  const tags = git("tag", "--list", "v*").split("\n").filter(Boolean);
+  if (tags.includes(tag)) throw new Error(`${tag} already exists`);
+  const newest = [...tags.map((t) => t.slice(1)).filter((v) => VERSION.test(v)), appVersion()]
+    .sort(compareVersions)
+    .at(-1);
+  if (compareVersions(version, newest) <= 0) {
+    throw new Error(`${version} is not newer than ${newest}, the latest tag or app version`);
+  }
+  if (!dryRun && git("status", "--porcelain"))
+    throw new Error("commit or stash your changes first");
 
-  const versions = [
-    ["package.json", /"version": "([^"]+)"/],
-    ["package-lock.json", /"name": "tinto",\s*"version": "([^"]+)"/],
-    ["package-lock.json", /"": \{\s*"name": "tinto",\s*"version": "([^"]+)"/],
-    ["src-tauri/tauri.conf.json", /"version": "([^"]+)"/],
-    ["src-tauri/Cargo.toml", /\[package\]\s*name = "tinto"\s*version = "([^"]+)"/],
-    ["src-tauri/Cargo.lock", /name = "tinto"\s*version = "([^"]+)"/],
-  ];
-  for (const [file, pattern] of versions) {
-    writeFileSync(file, setVersion(readFileSync(file, "utf8"), pattern, version, file));
+  const files = new Map();
+  for (const [file, pattern] of VERSIONS) {
+    const text = files.get(file) ?? readFileSync(file, "utf8");
+    files.set(file, setVersion(text, pattern, version, file));
   }
 
-  let changelog = readFileSync(CHANGELOG, "utf8");
+  const changelog = readFileSync(CHANGELOG, "utf8");
+  let section = null;
   if (sectionOf(changelog, version) === null) {
     const last = git("tag", "--list", "v*", "--sort=-v:refname").split("\n")[0];
     if (!last)
       throw new Error(`no earlier tag: write the ${version} section of ${CHANGELOG} by hand`);
     const subjects = git("log", `${last}..HEAD`, "--format=%s").split("\n");
     const date = new Date().toISOString().slice(0, 10);
-    changelog = withSection(changelog, sectionFrom(subjects, version, date));
-    writeFileSync(CHANGELOG, changelog);
+    section = sectionFrom(subjects, version, date);
+    files.set(CHANGELOG, withSection(changelog, section));
   }
 
-  git("add", CHANGELOG, ...new Set(versions.map(([file]) => file)));
+  if (dryRun) {
+    console.log(`Would release ${tag} (app is ${appVersion()}), changing:`);
+    for (const file of files.keys()) console.log(`  ${file}`);
+    console.log(
+      section === null
+        ? `CHANGELOG.md already has a ${version} section; it is kept.`
+        : `New CHANGELOG.md section:\n\n${section}\n`,
+    );
+    console.log(`Then: commit "chore(release): ${tag}" and tag ${tag}. Nothing was changed.`);
+    return;
+  }
+  for (const [file, text] of files) writeFileSync(file, text);
+  git("add", ...files.keys());
   git("commit", "-m", `chore(release): ${tag}`);
   git("tag", "-a", tag, "-m", `Tinto ${version}`);
   console.log(
@@ -95,13 +165,26 @@ function cut(version) {
   );
 }
 
+const appVersion = () => JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [command, value] = process.argv.slice(2);
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: {
+      kind: { type: "string" },
+      rc: { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
+    },
+  });
+  const [command, value] = positionals;
   if (command === "notes") {
     const notes = sectionOf(readFileSync(CHANGELOG, "utf8"), value.replace(/^v/, ""));
     if (notes === null) throw new Error(`${CHANGELOG} has no section for ${value}`);
     console.log(notes);
   } else {
-    cut(command);
+    const version = values.kind
+      ? nextVersion(git("tag", "--list", "v*").split("\n"), values.kind, values.rc)
+      : command;
+    cut(version, values["dry-run"]);
   }
 }
