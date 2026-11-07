@@ -11,9 +11,9 @@ use super::coordination::{DeliveryCommitDraft, NewApproval};
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision,
     DeliveryJiraSettings, DeliveryJob, DeliveryJobLog, DeliveryLease, DeliveryOverview,
-    DeliveryPlatform, DeliveryQaStack, DeliveryRepoSettings, DeliveryRun, DeliveryRung,
-    DeliverySettings, DeliverySettingsChanges, DeliverySettingsProposal, DeliveryStageAgent,
-    DeliveryTask,
+    DeliveryPlatform, DeliveryQaStack, DeliveryQuota, DeliveryRepoSettings, DeliveryRun,
+    DeliveryRung, DeliverySettings, DeliverySettingsChanges, DeliverySettingsProposal,
+    DeliveryStageAgent, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::service::{DeliveryService, NewJob, NewTask};
@@ -44,6 +44,16 @@ pub async fn delivery_overview(
 ) -> Result<DeliveryOverview, CommandError> {
     let service = service.inner().clone();
     blocking(move || service.overview()).await
+}
+
+/// The latest usage-limit share each agent account reported, for the
+/// readout outside Delivery: much lighter than the whole overview.
+#[tauri::command]
+pub async fn delivery_quotas(
+    service: State<'_, DeliveryService>,
+) -> Result<Vec<DeliveryQuota>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.quotas()).await
 }
 
 #[tauri::command]

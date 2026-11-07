@@ -66,6 +66,8 @@ pub struct AgentSessionRecord {
     context_usage: Option<AgentSessionContextUsage>,
     reverted_at_ms: Option<u64>,
     restored_to_turn_index: Option<u32>,
+    /// Quotas the agent reported that Delivery has not taken yet.
+    reported_quotas: Vec<crate::delivery::model::DeliveryQuota>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,7 +124,13 @@ impl AgentSessionRecord {
             context_usage: None,
             reverted_at_ms: None,
             restored_to_turn_index: None,
+            reported_quotas: Vec::new(),
         }
+    }
+
+    /// The quotas the agent reported since the last call.
+    pub fn take_reported_quotas(&mut self) -> Vec<crate::delivery::model::DeliveryQuota> {
+        std::mem::take(&mut self.reported_quotas)
     }
 
     pub fn set_wsl_distro(&mut self, distro: String) {
@@ -783,6 +791,10 @@ impl AgentSessionRecord {
             }
             AgentProcessEvent::SubagentDiscoveryFailed { error } => {
                 self.error = Some(error);
+                Ok(())
+            }
+            AgentProcessEvent::QuotaReported { quota } => {
+                self.reported_quotas.push(quota);
                 Ok(())
             }
         }

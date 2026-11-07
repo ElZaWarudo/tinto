@@ -5,8 +5,10 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import type { BusState } from "../bus/store";
-import type { FsEvent, PassiveSignal, RepoDelta } from "../bus/contract";
+import type { AgentSession, FsEvent, PassiveSignal, RepoDelta } from "../bus/contract";
 import { busStore, useBusState } from "../bus/store";
+import { sessionSignal } from "../agent/sessionSignal";
+import { useAgentSessionState } from "../agent/sessionStore";
 import { qualityStore, useQualityState } from "./state";
 
 export interface NotificationAdapter {
@@ -110,6 +112,28 @@ export function collectRelevantNotifications(
   return notifications;
 }
 
+/** One notification per agent session that starts needing the user (a
+ *  permission or an approval waits), and the sessions that need them now:
+ *  pass those back next time so a session is announced again only after it
+ *  stopped needing you. */
+export function agentNeedsNotifications(
+  sessions: AgentSession[],
+  needingBefore: ReadonlySet<string>,
+  displayName: (repo: string) => string,
+): { notifications: RedactedNotification[]; needing: Set<string> } {
+  const needing = new Set(
+    sessions.filter((session) => sessionSignal(session) === "needs_you").map(({ id }) => id),
+  );
+  const notifications = sessions
+    .filter((session) => needing.has(session.id) && !needingBefore.has(session.id))
+    .map((session) => ({
+      key: `agent-needs:${session.id}`,
+      title: repoTitle(displayName(session.repo)),
+      body: `Un Agent (${session.agent_type}) te necesita: tiene un permiso pendiente.`,
+    }));
+  return { notifications, needing };
+}
+
 /** The user's choice in Ajustes → Notificaciones, kept across restarts. */
 const PREFERENCE_KEY = "tinto.notifications";
 
@@ -159,14 +183,36 @@ export function disableNotifications() {
   rememberChoice(false);
 }
 
+function sendOrMarkUnavailable(
+  adapter: NotificationAdapter,
+  notification: RedactedNotification,
+  onFailure: () => void = () => {},
+) {
+  const markUnavailable = () => {
+    onFailure();
+    qualityStore.setNotificationState({
+      enabled: false,
+      status: "unavailable",
+      message: "Las notificaciones fallaron en este entorno.",
+    });
+  };
+  try {
+    void Promise.resolve(adapter.send(notification)).catch(markUnavailable);
+  } catch {
+    markUnavailable();
+  }
+}
+
 export function NotificationWatcher({
   adapter = tauriNotificationAdapter,
 }: {
   adapter?: NotificationAdapter;
 }) {
   const busState = useBusState();
+  const { sessions } = useAgentSessionState();
   const { notificationsEnabled } = useQualityState();
   const sent = useRef(new Set<string>());
+  const agentsNeeding = useRef<ReadonlySet<string>>(new Set());
 
   // Turned on last time: on again at startup, once the system still allows it.
   useEffect(() => {
@@ -175,28 +221,27 @@ export function NotificationWatcher({
 
   useEffect(() => {
     if (!notificationsEnabled) return;
-    const markUnavailable = (key: string) => {
-      sent.current.delete(key);
-      qualityStore.setNotificationState({
-        enabled: false,
-        status: "unavailable",
-        message: "Las notificaciones fallaron en este entorno.",
-      });
-    };
     for (const notification of collectRelevantNotifications(busState, (repo) =>
       busStore.displayName(repo),
     )) {
       if (sent.current.has(notification.key)) continue;
       sent.current.add(notification.key);
-      try {
-        void Promise.resolve(adapter.send(notification)).catch(() =>
-          markUnavailable(notification.key),
-        );
-      } catch {
-        markUnavailable(notification.key);
-      }
+      sendOrMarkUnavailable(adapter, notification, () => sent.current.delete(notification.key));
     }
   }, [adapter, busState, notificationsEnabled]);
+
+  // Followed with notifications off too, so turning them on does not announce
+  // what already needed you.
+  useEffect(() => {
+    const { notifications, needing } = agentNeedsNotifications(
+      Object.values(sessions),
+      agentsNeeding.current,
+      (repo) => busStore.displayName(repo),
+    );
+    agentsNeeding.current = needing;
+    if (!notificationsEnabled) return;
+    for (const notification of notifications) sendOrMarkUnavailable(adapter, notification);
+  }, [adapter, sessions, notificationsEnabled]);
 
   return null;
 }

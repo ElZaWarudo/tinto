@@ -546,6 +546,14 @@ impl AgentSessionRegistry {
         Ok(())
     }
 
+    /// The quotas every session's agent reported since the last call.
+    pub fn take_reported_quotas(&mut self) -> Vec<crate::delivery::model::DeliveryQuota> {
+        self.sessions
+            .values_mut()
+            .flat_map(|session| session.take_reported_quotas())
+            .collect()
+    }
+
     /// Refreshes one session's status: true once its process has ended, or
     /// it is gone.
     pub fn refresh_session_ended(&mut self, session_id: &str) -> bool {

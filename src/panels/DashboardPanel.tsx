@@ -12,6 +12,7 @@ import {
   sortedRepoPaths,
   useBusState,
 } from "../bus/store";
+import { AgentQuotaReadout } from "../qol/AgentQuotaReadout";
 import { filterRepoPaths, hasActiveFilters } from "../qol/filters";
 import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
@@ -327,6 +328,7 @@ export function DashboardPanel() {
           <span className="dashboard__status-label">Bitácora del workbench</span>
           <strong>{state.config?.active ?? "Workbench activo"}</strong>
           {!watching.available && <small>Supervisión local degradada</small>}
+          <AgentQuotaReadout nowMs={nowMs} />
         </div>
         <dl className="dashboard__counters">
           <div>

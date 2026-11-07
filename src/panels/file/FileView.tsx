@@ -350,6 +350,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
             overviewMarkers={overviewMarkers}
             overviewTotalLines={overviewTotalLines}
             bodyRef={bodyRef}
+            repo={repo}
           />
         ) : renamedTo ? (
           <div className="file-view__empty" data-testid="diff-renamed" role="status">

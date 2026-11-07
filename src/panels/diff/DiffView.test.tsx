@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 // Keep Shiki out of jsdom: the highlighter never loads, so DiffView renders the
 // plain-text fallback — which is exactly what AE3 / large-file fallback assert.
@@ -10,7 +11,13 @@ vi.mock("./highlight", () => ({
   highlightLine: () => null,
 }));
 
+vi.mock("../../bus/client", () => ({ writeAgentSessionInput: vi.fn() }));
+
 import { DiffView } from "./DiffView";
+import { writeAgentSessionInput } from "../../bus/client";
+import { agentSessionStore } from "../../agent/sessionStore";
+import { lineNoteStore } from "./lineNoteStore";
+import type { AgentSession } from "../../bus/contract";
 import { MAX_RENDERED_DIFF_LINE_CHARS, MAX_RENDERED_DIFF_LINES } from "./limits";
 import type { FileDiff } from "../../bus/contract";
 
@@ -148,5 +155,54 @@ describe("DiffView", () => {
     const label = container.querySelector('[data-new-line="13"] .line-marker-label');
     expect(label).toHaveTextContent("Possible secret");
     expect(label).toHaveAttribute("title", "Possible secret · línea 13");
+  });
+});
+
+describe("DiffView line notes", () => {
+  beforeEach(() => {
+    lineNoteStore.reset();
+    agentSessionStore.reset();
+    vi.mocked(writeAgentSessionInput).mockReset().mockResolvedValue(undefined);
+  });
+
+  it("sends every open note, anchored to its line, to the repo's Agent as one prompt", async () => {
+    const user = userEvent.setup();
+    act(() =>
+      agentSessionStore.setSessions([
+        {
+          id: "session-1",
+          repo: "/repo",
+          agent_type: "claude",
+          status: "running",
+          turn_status: "waiting",
+          reports_turns: true,
+        } as AgentSession,
+      ]),
+    );
+    const { unmount } = render(<DiffView diff={sample} mode="inline" repo="/repo" />);
+
+    // Only changed lines take notes: the context line has no "+".
+    expect(screen.queryByRole("button", { name: /línea 12/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Añadir nota en la línea 13" }));
+    await user.type(screen.getByRole("textbox", { name: "Nota en la línea 13" }), "Usa const");
+    await user.click(screen.getByRole("button", { name: "Guardar" }));
+    // By keyboard: the gutter button takes focus and Enter opens the editor.
+    screen.getByRole("button", { name: "Añadir nota en la línea eliminada 13" }).focus();
+    await user.keyboard("{Enter}");
+    await user.keyboard("¿Por qué se borra?{Control>}{Enter}{/Control}");
+
+    // The notes outlive the view: reopening the file shows them.
+    unmount();
+    render(<DiffView diff={sample} mode="inline" repo="/repo" />);
+    expect(screen.getByText("2 notas sin resolver en este repo")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Enviar al agente" }));
+
+    expect(writeAgentSessionInput).toHaveBeenCalledTimes(1);
+    const [sessionId, prompt] = vi.mocked(writeAgentSessionInput).mock.calls[0];
+    expect(sessionId).toBe("session-1");
+    expect(prompt).toContain("src/a.ts:13\n   > new line\n   Usa const");
+    expect(prompt).toContain("src/a.ts:13 (línea eliminada)\n   > old line\n   ¿Por qué se borra?");
+    expect(await screen.findAllByText("Resuelta")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Enviar al agente" })).not.toBeInTheDocument();
   });
 });

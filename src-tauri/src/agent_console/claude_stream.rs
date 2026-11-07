@@ -42,6 +42,7 @@ use crate::bus::contract::{
     AgentSessionAcpPermission, AgentSessionAcpPermissionKind, AgentSessionAcpPermissionOption,
     AgentSessionAcpPermissionState, AgentSessionRuntimeOptions, AgentSessionTimelineKind,
 };
+use crate::delivery::{adapters::rate_limit, model::DeliveryAgent};
 use crate::wsl_agent::shell_env::agent_console_script;
 
 const ALLOW: &str = "allow";
@@ -510,6 +511,13 @@ fn handle_message(message: &Value, shared: &Shared) {
                 timestamp_ms: now_ms(),
             });
         }
+        Some("rate_limit_event") => {
+            if let Some(quota) = rate_limit(DeliveryAgent::Claude, &message.to_string()) {
+                let _ = shared
+                    .event_tx
+                    .send(AgentProcessEvent::QuotaReported { quota });
+            }
+        }
         Some("control_request") => handle_control_request(message, shared),
         Some("control_cancel_request") => {
             if let (Some(id), Ok(mut permissions)) =
@@ -911,5 +919,26 @@ mod tests {
         );
         assert_eq!(sent.lines()[0]["response"]["subtype"], "error");
         assert!(shared.permissions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_rate_limit_event_reports_the_accounts_quota() {
+        let (shared, _sent, _output, events) = shared();
+        handle_message(
+            &json!({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning",
+                "resetsAt": 1793271600, "rateLimitType": "five_hour", "utilization": 0.94}}),
+            &shared,
+        );
+        let reported: Vec<_> = events
+            .try_iter()
+            .filter_map(|event| match event {
+                AgentProcessEvent::QuotaReported { quota } => Some(quota),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].agent, DeliveryAgent::Claude);
+        assert_eq!(reported[0].utilization, 94);
+        assert_eq!(reported[0].resets_at_ms, 1_793_271_600_000);
     }
 }

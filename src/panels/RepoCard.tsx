@@ -26,6 +26,7 @@ import {
   invalidateAgentAvailability,
 } from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
+import { RepoAgentSignal } from "./RepoAgentSignal";
 import { RepoSourceBadge } from "./RepoSourceBadge";
 import { SecretScanIndicator } from "./SecretScanIndicator";
 import { SignalBadges } from "./SignalBadges";
@@ -557,6 +558,7 @@ function RepoCardImpl({
           <span className="repo-card__name" title={delta.repo}>
             {name}
           </span>
+          <RepoAgentSignal repo={delta.repo} />
         </button>
         {error && (
           <span className="error-badge" data-testid="error-badge" title={error.category}>

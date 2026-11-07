@@ -4300,6 +4300,14 @@ fn refresh_and_emit_sessions(app: &AppHandle) {
     let sessions = registry.list_sessions();
     emit_sessions_snapshot(app, &sessions);
     emit_change_logs(app, &sessions);
+    let quotas = registry.take_reported_quotas();
+    drop(registry);
+    // The same account's limit holds Delivery's jobs and shows in the readout.
+    if let Some(delivery) = app.try_state::<crate::delivery::service::DeliveryService>() {
+        for quota in quotas {
+            delivery.record_quota(quota);
+        }
+    }
 }
 
 fn emit_sessions_snapshot(app: &AppHandle, sessions: &[AgentSession]) {

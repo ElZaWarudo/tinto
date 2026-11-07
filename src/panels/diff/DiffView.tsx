@@ -1,10 +1,12 @@
-import type { CSSProperties, ReactNode } from "react";
+import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 import type { DiffHunk, DiffLine, FileDiff } from "../../bus/contract";
 import { FileOverviewRuler, type FileOverviewMarker } from "../file/FileOverviewRuler";
 import { useOverviewScrollSync } from "../file/useOverviewScrollSync";
 import { MAX_HIGHLIGHT_BYTES, languageFromPath } from "./highlight";
 import { MAX_RENDERED_DIFF_LINE_CHARS, MAX_RENDERED_DIFF_LINES } from "./limits";
 import { useLineHighlighter, type RenderLine } from "./lineHighlighter";
+import { anchorFor, useLineNotes } from "./lineNoteStore";
+import { LineNoteThread, LineNotesBar, NoteAddButton, type DiffNotes } from "./LineNotes";
 
 export type DiffMode = "inline" | "side-by-side";
 
@@ -83,13 +85,21 @@ export function DiffView({
   overviewMarkers = [],
   overviewTotalLines = 0,
   bodyRef,
+  repo,
 }: {
   diff: FileDiff;
   mode: DiffMode;
   overviewMarkers?: FileOverviewMarker[];
   overviewTotalLines?: number;
   bodyRef?: React.RefObject<HTMLElement | null>;
+  /** The working tree's repo: its changed lines take notes for an Agent. */
+  repo?: string;
 }) {
+  const allNotes = useLineNotes();
+  const [composing, setComposing] = useState<string | null>(null);
+  const notes: DiffNotes | null = repo
+    ? { repo, path: diff.path, notes: allNotes, composing, setComposing }
+    : null;
   const stats = diffStats(diff);
   const oversized = stats.bytes > MAX_HIGHLIGHT_BYTES;
   const visible = visibleHunks(diff.hunks, MAX_RENDERED_DIFF_LINES);
@@ -127,6 +137,7 @@ export function DiffView({
       style={scrollPastEndStyle}
     >
       <div className="diff-view__content">
+        {repo && <LineNotesBar repo={repo} notes={allNotes} />}
         {oversized && (
           <div className="diff-view__notice" data-testid="diff-large">
             Comparación extensa: se desactivó el resaltado de sintaxis.
@@ -157,6 +168,7 @@ export function DiffView({
               render={render}
               markedLines={markedLines}
               markerByLine={markerByLine}
+              notes={notes}
             />
           ))
         ) : (
@@ -167,6 +179,7 @@ export function DiffView({
               render={render}
               markedLines={markedLines}
               markerByLine={markerByLine}
+              notes={notes}
             />
           ))
         )}
@@ -206,30 +219,35 @@ function InlineHunk({
   render,
   markedLines,
   markerByLine,
+  notes,
 }: {
   hunk: DiffHunk;
   render: RenderLine;
   markedLines: Set<number>;
   markerByLine: Map<number, FileOverviewMarker>;
+  notes: DiffNotes | null;
 }) {
   return (
     <div className="diff-hunk">
       <HunkHeader hunk={hunk} />
-      {hunk.lines.map((l, i) => (
-        <div
-          key={i}
-          className={lineClass(l, markedLines)}
-          data-new-line={l.new_lineno ?? undefined}
-        >
-          <span className="diff-gutter">{l.old_lineno ?? ""}</span>
-          <span className="diff-gutter">{l.new_lineno ?? ""}</span>
-          <span className="diff-sign">{SIGN[l.kind]}</span>
-          <code className="diff-content">{renderContent(l.content, render)}</code>
-          {l.new_lineno != null && shouldShowMarkerLabel(markerByLine.get(l.new_lineno)) && (
-            <LineMarkerLabel marker={markerByLine.get(l.new_lineno)!} />
-          )}
-        </div>
-      ))}
+      {hunk.lines.map((l, i) => {
+        const anchor = notes && anchorFor(notes.repo, notes.path, l);
+        return (
+          <Fragment key={i}>
+            <div className={lineClass(l, markedLines)} data-new-line={l.new_lineno ?? undefined}>
+              {anchor && <NoteAddButton notes={notes} anchor={anchor} />}
+              <span className="diff-gutter">{l.old_lineno ?? ""}</span>
+              <span className="diff-gutter">{l.new_lineno ?? ""}</span>
+              <span className="diff-sign">{SIGN[l.kind]}</span>
+              <code className="diff-content">{renderContent(l.content, render)}</code>
+              {l.new_lineno != null && shouldShowMarkerLabel(markerByLine.get(l.new_lineno)) && (
+                <LineMarkerLabel marker={markerByLine.get(l.new_lineno)!} />
+              )}
+            </div>
+            {anchor && <LineNoteThread notes={notes} anchor={anchor} />}
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -239,11 +257,13 @@ function SplitHunk({
   render,
   markedLines,
   markerByLine,
+  notes,
 }: {
   hunk: DiffHunk;
   render: RenderLine;
   markedLines: Set<number>;
   markerByLine: Map<number, FileOverviewMarker>;
+  notes: DiffNotes | null;
 }) {
   const left = hunk.lines.filter((l) => l.kind !== "Added");
   const right = hunk.lines.filter((l) => l.kind !== "Removed");
@@ -252,31 +272,44 @@ function SplitHunk({
       <HunkHeader hunk={hunk} />
       <div className="diff-split">
         <div className="diff-side diff-side--old" data-testid="diff-old">
-          {left.map((l, i) => (
-            <div
-              key={i}
-              className={lineClass(l, markedLines)}
-              data-new-line={l.new_lineno ?? undefined}
-            >
-              <span className="diff-gutter">{l.old_lineno ?? ""}</span>
-              <code className="diff-content">{renderContent(l.content, render)}</code>
-            </div>
-          ))}
+          {left.map((l, i) => {
+            const anchor = notes && anchorFor(notes.repo, notes.path, l);
+            return (
+              <Fragment key={i}>
+                <div
+                  className={lineClass(l, markedLines)}
+                  data-new-line={l.new_lineno ?? undefined}
+                >
+                  {anchor && <NoteAddButton notes={notes} anchor={anchor} />}
+                  <span className="diff-gutter">{l.old_lineno ?? ""}</span>
+                  <code className="diff-content">{renderContent(l.content, render)}</code>
+                </div>
+                {anchor && <LineNoteThread notes={notes} anchor={anchor} />}
+              </Fragment>
+            );
+          })}
         </div>
         <div className="diff-side diff-side--new" data-testid="diff-new">
-          {right.map((l, i) => (
-            <div
-              key={i}
-              className={lineClass(l, markedLines)}
-              data-new-line={l.new_lineno ?? undefined}
-            >
-              <span className="diff-gutter">{l.new_lineno ?? ""}</span>
-              <code className="diff-content">{renderContent(l.content, render)}</code>
-              {l.new_lineno != null && shouldShowMarkerLabel(markerByLine.get(l.new_lineno)) && (
-                <LineMarkerLabel marker={markerByLine.get(l.new_lineno)!} />
-              )}
-            </div>
-          ))}
+          {right.map((l, i) => {
+            const anchor = notes && anchorFor(notes.repo, notes.path, l);
+            return (
+              <Fragment key={i}>
+                <div
+                  className={lineClass(l, markedLines)}
+                  data-new-line={l.new_lineno ?? undefined}
+                >
+                  {anchor && <NoteAddButton notes={notes} anchor={anchor} />}
+                  <span className="diff-gutter">{l.new_lineno ?? ""}</span>
+                  <code className="diff-content">{renderContent(l.content, render)}</code>
+                  {l.new_lineno != null &&
+                    shouldShowMarkerLabel(markerByLine.get(l.new_lineno)) && (
+                      <LineMarkerLabel marker={markerByLine.get(l.new_lineno)!} />
+                    )}
+                </div>
+                {anchor && <LineNoteThread notes={notes} anchor={anchor} />}
+              </Fragment>
+            );
+          })}
         </div>
       </div>
     </div>
