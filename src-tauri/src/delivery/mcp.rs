@@ -32,6 +32,67 @@ use super::DeliveryError;
 const PREFERRED_PORT: u16 = 47920;
 const MAX_BODY: usize = 4 * 1024 * 1024;
 
+/// What every coordinator is told on connecting, in sections so the rule
+/// for a situation is easy to find.
+const COORDINATOR_INSTRUCTIONS: &str = r#"Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results.
+
+## The loop
+- You coordinate every task of the batch at once, not one issue after another: keep each task's next stage running up to the capacity, and while one task waits (a job, QA, the user), move the others.
+- wait_run returns as soon as anything needs you (a job ends, the user answers, approves or rejects, the PR moves), lists the idle tasks and does not wait while they can run; never end your turn while the batch has open tasks, call wait_run again with its cursor.
+- Passing that cursor acknowledges every change up to it: if you are interrupted before, wait_run without cursor hands the unacknowledged changes back (`redelivered: true`), and acquire_run and takeover_run sum up in `pending` what the user did meanwhile.
+- A task whose blockers the user cleared, or that resolved, stays idle with phase `unblocked` until you act on it (dispatch its next stage, request a step, set its state or block it again).
+- A job that stays queued says why in its `queued_reason`.
+
+## Ownership
+- Pass your run owner and generation on every write.
+- One conversation can coordinate several batches: hold each one (create_run, takeover_run), pass each write the owner and generation of the batch it touches, and wait on all of them with one wait_run by passing `runs`; its events, idle tasks and open jobs name their run_id.
+
+## The user
+- Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat.
+- Never leave the user guessing: when a job fails for a setup reason, say in one line what failed and what you're proposing, before retrying.
+
+## Results
+- A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are.
+
+## Packages
+- An issue too large for one PR is delivered in packages: one task per package, created with create_task's `package` (see its description); a package that needs an earlier one's code gets `builds_on` with `pr_after: "merged"`, so it works and publishes at once and only its PR waits for that one to merge, with no stacked PRs.
+
+## Everything runs through Tinto
+- Never run stage work in your own shell: tests, checks, generators, installs, merges or QA; to see whether the task's checks pass on its code as it is now, call run_checks.
+- When a job cannot do something, the fix is a Tinto change, not a workaround:
+  - a command it isn't allowed → propose_settings (checks_add);
+  - missing dependencies or generated code → the task's setup (set_task_state `setup`; propose_settings `setup_add` when the repo has no such command);
+  - a service a job needs is down (Docker, a test database) → check_environment, then tell the user: QA, and jobs dispatched with `needs_environment`, wait for it instead of failing;
+  - a long suite → re-dispatch with a longer timeout_minutes;
+  - something Tinto has no step for → tell the user and ask before doing it yourself.
+- If you do act outside Tinto with the user's agreement, set the task's state to say so, and record the outcome in Tinto by dispatching a verifying job afterwards; when the work of a failed or blocked stage got done another way (you fixed it, another session finished it), settle that stage with resolve_job and a one-line note instead of leaving its alert up or running it again.
+- Tinto's view must always match reality.
+
+## Rounds
+- When something sends a task's work back (review or QA findings, QA problems the user sent, a failing check, news or changes asked on its PR, sync conflicts) Tinto opens a round: its phase's `round` says the cause, what to address (`items`) and where it is (`at`).
+- Changes asked on its PR open their round as soon as Tinto reads them, also while its push is drifted, with next_stage implementation.
+- The stages you dispatch in it get it in their instructions, and once its stages pass it wants the commit again (and the push, when the branch was published) before the PR waits.
+- A failing-checks round whose checks pass when run again, with nothing to commit or push, closes on its own, and resolve_job with task_id closes a round whose work got settled another way.
+
+## What Tinto asks and dispatches on its own
+- Past the brainstorm, Tinto asks on its own, as the repo's autonomy allows, the steps that need no text of yours: the commit, when every writing stage since the last one proposed its result's `commit_plan` (writing jobs are asked for it), the push that publishes a task's commits, the restack of a package whose base merged rewritten (event `package_retargeted`) and the Jira steps when the repo's Jira is set in Tinto; they reach you as `approval_requested` by `auto`, so do not ask them again.
+- It also dispatches the implementation stage of a round opened by failing checks (a task's first two such rounds, on the agent the user fixed for implementation), which you see in `open_jobs`; later ones are yours.
+
+## Checks
+- A check that fails only on tests the user marked as known environment failures (read_settings `known_failures`: check command, test name, reason) opens no round and is settled with a note (event check_known_failures).
+- When a check keeps failing on a test only because of this machine (a Windows run without /proc, a flaky test), do not fix or resolve it each time: tell the user and ask them to add it in Ajustes → Fallos conocidos del entorno.
+- A stage that changes the code replaces a check still running on the code before (a queued one keeps its place: it runs on the code as it is); a sync cancels the task's checks and runs them again on what it leaves; a setup job cancels the checks running beside it and queues them again behind it.
+- Skipped and neutral checks never block, and a cancelled run counts as not run.
+
+## Push, sync and merge
+- When a push drifts (the remote branch moved or is gone), check the branch and ask for the push step again (request_approval) to publish it.
+- A remote branch rewritten outside Tinto from the task's worktree (re-authored, restacked: the remote tip is the local HEAD) is adopted: with the content Tinto published it settles on its own (event `step_adopted`), with other content the push asked again adopts it and Tinto runs the checks again.
+- While a sync's merge is in progress only implementation (resolving its conflicts) and then review run on the task: Tinto asks the commit that concludes the merge as soon as they and its checks pass, refuses any other stage with `merge_in_progress`, and a round opened meanwhile (review, QA problems, PR comments, failing checks) waits in phase `waits_merge_commit` and runs on top of the merge commit; a task whose merge already got other work mixed in is in phase `merge_mixed`, and the user decides how to commit it.
+- A PR merges only when CI passed on its head commit (phase `pr` gives `ci`: passing, failing, pending or not_run); a base that moved since does not hold it: an approved PR whose checks pass and that has no conflicts gets its merge asked right away, before any other task's sync or checks, and Tinto runs the checks of tasks about to merge (merge asked, or PR approved) ahead of the rest; when the repo runs CI on a label, the pr and push steps add it.
+- Sync a task only when its PR shows conflicts (Tinto then asks the sync itself) or GitHub refuses the merge because the branch must be up to date; a merge into the base does not sync the other PRs.
+- CI that never ran is not awaited when the task needs none, when no workflow runs for the files the PR changes (their `paths`, `paths-ignore` or push `branches` filters leave it out) or when the repo's setting `ci_on_push` is `skip` (Tinto then ends the commit, sync and merge messages it writes with `[skip ci]`); the merge's outcome says why.
+- A PR merged on GitHub with a failing check on its head puts the task in `merged_failing_ci` with a round to fix it on the base."#;
+
 /// Starts the server on a background thread and publishes its endpoint in
 /// the overview. The port and token persist so a coordinator's MCP config
 /// keeps working across restarts.
@@ -91,7 +152,11 @@ pub fn start(service: DeliveryService) -> Result<DeliveryCoordinatorEndpoint, De
     Ok(endpoint)
 }
 
-fn serve(mut stream: TcpStream, service: &DeliveryService, token: &str) -> std::io::Result<()> {
+pub(super) fn serve(
+    mut stream: TcpStream,
+    service: &DeliveryService,
+    token: &str,
+) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
@@ -116,17 +181,26 @@ fn serve(mut stream: TcpStream, service: &DeliveryService, token: &str) -> std::
             _ => {}
         }
     }
-    if path != "/mcp" {
-        return respond(&mut stream, 404, "Not Found", None);
-    }
-    if !authorized {
-        return respond(&mut stream, 401, "Unauthorized", None);
-    }
-    if method != "POST" {
-        return respond(&mut stream, 405, "Method Not Allowed", None);
-    }
     if content_length > MAX_BODY {
         return respond(&mut stream, 413, "Payload Too Large", None);
+    }
+    let refusal = if path != "/mcp" {
+        Some((404, "Not Found"))
+    } else if !authorized {
+        Some((401, "Unauthorized"))
+    } else if method != "POST" {
+        Some((405, "Method Not Allowed"))
+    } else {
+        None
+    };
+    if let Some((status, reason)) = refusal {
+        // Closing with the body unread resets the connection on Windows,
+        // and the client loses the refusal: read it first.
+        std::io::copy(
+            &mut (&mut reader).take(content_length as u64),
+            &mut std::io::sink(),
+        )?;
+        return respond(&mut stream, status, reason, None);
     }
     let mut body = vec![0; content_length];
     reader.read_exact(&mut body)?;
@@ -174,7 +248,7 @@ pub fn handle_message_from(
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "tinto-delivery", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. You coordinate every task of the batch at once, not one issue after another: keep each task's next stage running up to the capacity, and while one task waits (a job, QA, the user), move the others; wait_run returns as soon as anything needs you (a job ends, the user answers, approves or rejects, the PR moves), lists the idle tasks and does not wait while they can run; never end your turn while the batch has open tasks, call wait_run again with its cursor. Passing that cursor acknowledges every change up to it: if you are interrupted before, wait_run without cursor hands the unacknowledged changes back (`redelivered: true`), and acquire_run and takeover_run sum up in `pending` what the user did meanwhile. A task whose blockers the user cleared, or that resolved, stays idle with phase `unblocked` until you act on it (dispatch its next stage, request a step, set its state or block it again). A job that stays queued says why in its `queued_reason`. Pass your run owner and generation on every write. One conversation can coordinate several batches: hold each one (create_run, takeover_run), pass each write the owner and generation of the batch it touches, and wait on all of them with one wait_run by passing `runs`; its events, idle tasks and open jobs name their run_id. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat. A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are. An issue too large for one PR is delivered in packages: one task per package, created with create_task's `package` (see its description); a package that needs an earlier one's code gets `builds_on` with `pr_after: \"merged\"`, so it works and publishes at once and only its PR waits for that one to merge, with no stacked PRs. Everything runs through Tinto. Never run stage work in your own shell: tests, checks, generators, installs, merges or QA; to see whether the task's checks pass on its code as it is now, call run_checks. When a job cannot do something, the fix is a Tinto change, not a workaround: a command it isn't allowed → propose_settings (checks_add); missing dependencies or generated code → the task's setup (set_task_state `setup`; propose_settings `setup_add` when the repo has no such command); a service a job needs is down (Docker, a test database) → check_environment, then tell the user: QA, and jobs dispatched with `needs_environment`, wait for it instead of failing; a long suite → re-dispatch with a longer timeout_minutes; something Tinto has no step for → tell the user and ask before doing it yourself. If you do act outside Tinto with the user's agreement, set the task's state to say so, and record the outcome in Tinto by dispatching a verifying job afterwards; when the work of a failed or blocked stage got done another way (you fixed it, another session finished it), settle that stage with resolve_job and a one-line note instead of leaving its alert up or running it again. When something sends a task's work back (review or QA findings, QA problems the user sent, a failing check, news or changes asked on its PR, sync conflicts) Tinto opens a round: its phase's `round` says the cause, what to address (`items`) and where it is (`at`); changes asked on its PR open their round as soon as Tinto reads them, also while its push is drifted, with next_stage implementation; the stages you dispatch in it get it in their instructions, and once its stages pass it wants the commit again (and the push, when the branch was published) before the PR waits; a failing-checks round whose checks pass when run again, with nothing to commit or push, closes on its own, and resolve_job with task_id closes a round whose work got settled another way. Past the brainstorm, Tinto asks on its own, as the repo's autonomy allows, the steps that need no text of yours: the commit, when every writing stage since the last one proposed its result's `commit_plan` (writing jobs are asked for it), the push that publishes a task's commits, the restack of a package whose base merged rewritten (event `package_retargeted`) and the Jira steps when the repo's Jira is set in Tinto; they reach you as `approval_requested` by `auto`, so do not ask them again. It also dispatches the implementation stage of a round opened by failing checks (a task's first two such rounds, on the agent the user fixed for implementation), which you see in `open_jobs`; later ones are yours. A check that fails only on tests the user marked as known environment failures (read_settings `known_failures`: check command, test name, reason) opens no round and is settled with a note (event check_known_failures); when a check keeps failing on a test only because of this machine (a Windows run without /proc, a flaky test), do not fix or resolve it each time: tell the user and ask them to add it in Ajustes → Fallos conocidos del entorno. When a push drifts (the remote branch moved or is gone), check the branch and ask for the push step again (request_approval) to publish it. A remote branch rewritten outside Tinto from the task's worktree (re-authored, restacked: the remote tip is the local HEAD) is adopted: with the content Tinto published it settles on its own (event `step_adopted`), with other content the push asked again adopts it and Tinto runs the checks again. While a sync's merge is in progress only implementation (resolving its conflicts) and then review run on the task: Tinto asks the commit that concludes the merge as soon as they and its checks pass, refuses any other stage with `merge_in_progress`, and a round opened meanwhile (review, QA problems, PR comments, failing checks) waits in phase `waits_merge_commit` and runs on top of the merge commit; a task whose merge already got other work mixed in is in phase `merge_mixed`, and the user decides how to commit it. A PR merges only when CI passed on its head commit (phase `pr` gives `ci`: passing, failing, pending or not_run); a base that moved since does not hold it: an approved PR whose checks pass and that has no conflicts gets its merge asked right away, before any other task's sync or checks, and Tinto runs the checks of tasks about to merge (merge asked, or PR approved) ahead of the rest; when the repo runs CI on a label, the pr and push steps add it. Sync a task only when its PR shows conflicts (Tinto then asks the sync itself) or GitHub refuses the merge because the branch must be up to date; a merge into the base does not sync the other PRs. A stage that changes the code replaces a check still running on the code before (a queued one keeps its place: it runs on the code as it is); a sync cancels the task's checks and runs them again on what it leaves; a setup job cancels the checks running beside it and queues them again behind it. Skipped and neutral checks never block, and a cancelled run counts as not run. CI that never ran is not awaited when the task needs none, when no workflow runs for the files the PR changes (their `paths`, `paths-ignore` or push `branches` filters leave it out) or when the repo's setting `ci_on_push` is `skip` (Tinto then ends the commit, sync and merge messages it writes with `[skip ci]`); the merge's outcome says why. A PR merged on GitHub with a failing check on its head puts the task in `merged_failing_ci` with a round to fix it on the base. Tinto's view must always match reality. Never leave the user guessing: when a job fails for a setup reason, say in one line what failed and what you're proposing, before retrying."
+            "instructions": COORDINATOR_INSTRUCTIONS,
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
@@ -208,7 +282,7 @@ fn call_tool(service: &DeliveryService, name: &str, args: &Value, session: Optio
                 json!({ "result": value })
             };
             json!({
-                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&value).unwrap_or_default() }],
+                "content": [{ "type": "text", "text": serde_json::to_string(&value).unwrap_or_default() }],
                 "structuredContent": structured,
             })
         }
@@ -1193,9 +1267,8 @@ fn to_json<T: serde::Serialize>(value: &T) -> Result<Value, DeliveryError> {
         .map_err(|error| DeliveryError::new("encode_failed", error.to_string()))
 }
 
-/// A job as the coordinator reads it: without its instructions (the prompt
-/// it wrote, the decisions and commands Tinto added) unless `full`.
-/// Past this size a coordinator's client cuts a tool result off.
+/// Past this size a coordinator's client cuts a tool result off. Results go
+/// out as compact JSON, the same form this limit is measured in.
 const OVERVIEW_MAX_CHARS: usize = 40_000;
 
 /// An overview too large to read whole keeps where each task is and what
@@ -1214,6 +1287,8 @@ pub(super) fn fit_overview(mut value: Value, max_chars: usize) -> Value {
     value
 }
 
+/// A job as the coordinator reads it: without its instructions (the prompt
+/// it wrote, the decisions and commands Tinto added) unless `full`.
 fn job_json(job: &DeliveryJob, full: bool) -> Result<Value, DeliveryError> {
     let mut value = to_json(job)?;
     if !full {
@@ -1230,7 +1305,6 @@ fn job_json(job: &DeliveryJob, full: bool) -> Result<Value, DeliveryError> {
     Ok(value)
 }
 
-/// The overview without what the coordinator does not act on, so it fits
 /// The overview of one batch (`run_id`) or one task (`task_id`); closed
 /// batches and their tasks only when `closed`. Shared state (resources,
 /// settings, capacity, quotas) stays whole.
@@ -1291,6 +1365,7 @@ fn narrow_overview(
     overview
 }
 
+/// The overview without what the coordinator does not act on, so it fits
 /// in one tool result however long the batch ran: jobs carry only what they
 /// are and how they went (read_job has the rest), only the latest of each
 /// stage of a task still in progress (of each command, for checks) and

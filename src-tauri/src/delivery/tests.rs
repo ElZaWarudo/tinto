@@ -1142,7 +1142,14 @@ fn a_job_whose_agent_delivered_while_tinto_was_closed_ends_with_its_result() {
 
 #[test]
 fn a_check_adopted_after_a_restart_ends_with_the_code_it_left_or_runs_again() {
-    for left in [Some("1"), None] {
+    // Windows reads an adopted command's exit code from the process itself
+    // (see `shell_launch`): the code the command really ended with wins over
+    // a file, and there is no unknown end to run again.
+    #[cfg(windows)]
+    let cases = [Some("1")];
+    #[cfg(not(windows))]
+    let cases = [Some("1"), None];
+    for left in cases {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("delivery.sqlite");
         let h = harness_with_store(DeliveryStore::open(&path).unwrap());
@@ -1172,6 +1179,11 @@ fn a_check_adopted_after_a_restart_ends_with_the_code_it_left_or_runs_again() {
         let done = wait_on(&restarted, &job.id);
         let rounds = restarted.store().unwrap().task_rounds(&task.id).unwrap();
         match left {
+            Some(_) if cfg!(windows) => {
+                assert_eq!(done.status, DeliveryJobStatus::Finished, "{:?}", done.error);
+                assert_eq!(done.exit_code, Some(0));
+                assert!(rounds.is_empty(), "{rounds:?}");
+            }
             Some(_) => {
                 assert_eq!(done.status, DeliveryJobStatus::Failed);
                 assert_eq!(done.exit_code, Some(1));
@@ -6382,17 +6394,98 @@ fn every_tool_result_is_an_object_for_mcp_clients() {
     let h = harness();
     let task = h.task("S-1");
     let call = |name: &str| {
-        super::mcp::handle_message(
+        let result = super::mcp::handle_message(
             &h.service,
             &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": {"task_id": task.id}}}),
         )
-        .unwrap()["result"]["structuredContent"]
-            .clone()
+        .unwrap()["result"]
+            .clone();
+        // The text is the same value as compact JSON: the form the overview's
+        // size limit is measured in, and fewer tokens for the coordinator.
+        let text = result["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(!text.contains('\n'), "{text}");
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let structured = result["structuredContent"].clone();
+        assert!(value == structured || json!({ "result": value }) == structured);
+        structured
     };
     // A list and a null go under `result`; objects stay as they are.
     assert_eq!(call("read_decisions"), json!({"result": []}));
     assert_eq!(call("read_pr"), json!({"result": null}));
     assert!(call("read_settings")["repo"].is_string());
+}
+
+#[test]
+fn the_coordinator_endpoint_answers_only_authorized_mcp_posts() {
+    use std::io::{Read, Write};
+    let h = harness();
+    let token = "secret";
+    let initialize =
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).to_string();
+    let post = |path: &str, auth: Option<&str>, body: &str, length: usize| {
+        let auth = auth.map_or(String::new(), |value| format!("Authorization: {value}\r\n"));
+        format!("POST {path} HTTP/1.1\r\nHost: x\r\n{auth}Content-Length: {length}\r\n\r\n{body}")
+    };
+    let cases = [
+        (post("/mcp", None, &initialize, initialize.len()), "401"),
+        (
+            post("/mcp", Some("Bearer wrong"), &initialize, initialize.len()),
+            "401",
+        ),
+        (
+            post(
+                "/other",
+                Some("Bearer secret"),
+                &initialize,
+                initialize.len(),
+            ),
+            "404",
+        ),
+        (
+            "GET /mcp HTTP/1.1\r\nAuthorization: Bearer secret\r\n\r\n".to_string(),
+            "405",
+        ),
+        (
+            post("/mcp", Some("Bearer secret"), "", 5 * 1024 * 1024),
+            "413",
+        ),
+        (
+            post("/mcp", Some("Bearer secret"), &initialize, initialize.len()),
+            "200",
+        ),
+    ];
+    for (request, status) in cases {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let service = h.service.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            super::mcp::serve(stream, &service, token).unwrap();
+        });
+        let mut client = std::net::TcpStream::connect(address).unwrap();
+        client.write_all(request.as_bytes()).unwrap();
+        let mut reply = String::new();
+        if let Err(error) = client.read_to_string(&mut reply) {
+            panic!(
+                "{request:?}: {error:?}, read {reply:?}, server {:?}",
+                server.join()
+            );
+        }
+        server.join().unwrap();
+        assert!(
+            reply.starts_with(&format!("HTTP/1.1 {status} ")),
+            "{request:?} -> {reply}"
+        );
+        if status == "200" {
+            let body = reply.split("\r\n\r\n").nth(1).unwrap();
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body["result"]["serverInfo"]["name"], "tinto-delivery");
+            assert!(body["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("never end your turn while the batch has open tasks"));
+        }
+    }
 }
 
 #[test]
