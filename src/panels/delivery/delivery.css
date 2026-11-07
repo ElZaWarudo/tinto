@@ -3176,3 +3176,33 @@
 .delivery-ghlog__list code {
   overflow-wrap: anywhere;
 }
+
+/* The mobile link: the pairing QR beside what to do, and the paired phones. */
+.delivery-mobile-pairing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 720px;
+}
+.delivery-mobile-pairing img {
+  border-radius: 6px;
+  background: #fff;
+}
+.delivery-mobile-pairing > div {
+  flex: 1 1 240px;
+}
+.delivery-mobile-devices {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-width: 720px;
+}
+.delivery-mobile-devices li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}

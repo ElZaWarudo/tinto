@@ -612,6 +612,21 @@ impl DeliveryService {
         }
     }
 
+    /// The mobile link's record (its relay, the paired phones and their
+    /// keys), kept like the Jira token: in this store, never in the overview.
+    pub fn mobile_link_record<T: serde::de::DeserializeOwned>(
+        &self,
+    ) -> Result<Option<T>, DeliveryError> {
+        self.store()?.setting("mobile_link")
+    }
+
+    pub fn set_mobile_link_record<T: serde::Serialize>(
+        &self,
+        record: &T,
+    ) -> Result<(), DeliveryError> {
+        self.store()?.set_setting("mobile_link", record)
+    }
+
     pub(super) fn notify(&self) {
         let (count, changed) = &self.inner.changes;
         if let Ok(mut count) = count.lock() {

@@ -1,0 +1,26 @@
+name: tinto_delivery
+description: "Tinto Delivery en el móvil: sigue y responde los lotes de Delivery a través de un relay cifrado de extremo a extremo."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.2.6 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  # ChaCha20-Poly1305 in pure Dart (docs/contracts/mobile-link.md §3).
+  cryptography: ^2.7.0
+  flutter_secure_storage: ^9.0.0
+  mobile_scanner: ^3.5.7
+  web_socket_channel: ^2.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true

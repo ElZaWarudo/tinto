@@ -10,3 +10,6 @@ docs/
 # Copied verbatim from the backlog-delivery skill so the QA page matches it.
 src-tauri/src/delivery/visual_record.css
 src-tauri/src/delivery/visual_record.js
+
+# The Flutter app (Dart, and its generated platform projects)
+mobile/
