@@ -6464,13 +6464,24 @@ fn the_coordinator_endpoint_answers_only_authorized_mcp_posts() {
         });
         let mut client = std::net::TcpStream::connect(address).unwrap();
         client.write_all(request.as_bytes()).unwrap();
-        let mut reply = String::new();
-        if let Err(error) = client.read_to_string(&mut reply) {
-            panic!(
-                "{request:?}: {error:?}, read {reply:?}, server {:?}",
-                server.join()
-            );
+        // Windows may reset the connection as the server closes it; what
+        // matters is that the whole reply arrived first.
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match client.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ConnectionReset
+                        && String::from_utf8_lossy(&bytes).contains("\r\n\r\n") =>
+                {
+                    break
+                }
+                Err(error) => panic!("{request:?}: {error:?}"),
+            }
         }
+        let reply = String::from_utf8(bytes).unwrap();
         server.join().unwrap();
         assert!(
             reply.starts_with(&format!("HTTP/1.1 {status} ")),
