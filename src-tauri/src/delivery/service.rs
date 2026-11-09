@@ -1015,7 +1015,20 @@ impl DeliveryService {
             super::model::UNLIMITED_CAPACITY => super::model::UNLIMITED_CAPACITY,
             fixed => fixed.min(super::model::MAX_CAPACITY),
         };
-        let settings = DeliverySettings { capacity };
+        let percent = settings.quota_stop_percent;
+        if !(super::model::MIN_QUOTA_STOP_PERCENT..=100).contains(&percent) {
+            return Err(DeliveryError::new(
+                "invalid_settings",
+                format!(
+                    "el límite de uso para no empezar trabajos va de {} a 100, no {percent}",
+                    super::model::MIN_QUOTA_STOP_PERCENT
+                ),
+            ));
+        }
+        let settings = DeliverySettings {
+            capacity,
+            quota_stop_percent: percent,
+        };
         self.store()?.set_settings(&settings)?;
         self.tick();
         Ok(settings)
@@ -2972,9 +2985,28 @@ impl DeliveryService {
             if hold.is_some() {
                 continue;
             }
+            // A job whose agent's account is near its limit starts on its
+            // stage's fallback, and says so.
+            let fallback = queue
+                .job(&job_id)
+                .and_then(|job| queue.over_quota(job, now))
+                .and_then(Result::ok)
+                .map(|(quota, fallback)| (quota.clone(), fallback.clone()));
             let Some(job) = queue.jobs.iter_mut().find(|job| job.id == job_id) else {
                 continue;
             };
+            if let Some((quota, fallback)) = fallback {
+                job.substituted = Some(format!(
+                    "la cuenta de {} llevaba el {}% de su límite ({}): corrió con {}, el alternativo de la etapa.",
+                    agent_name(job.agent),
+                    quota.utilization,
+                    quota.window,
+                    agent_name(fallback.agent)
+                ));
+                job.agent = fallback.agent;
+                job.model = fallback.model;
+                job.reasoning = fallback.reasoning;
+            }
             job.status = DeliveryJobStatus::Pending;
             store.put_job(job)?;
             if let Ok(mut cancels) = self.inner.cancels.lock() {

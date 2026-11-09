@@ -215,7 +215,7 @@ function overview(over: Partial<DeliveryOverview> = {}): DeliveryOverview {
     leases: [],
     approvals: [],
     decisions: [],
-    settings: { capacity: 3 },
+    settings: { capacity: 3, quota_stop_percent: 99 },
     coordinator: { url: "http://127.0.0.1:47920/mcp", token: "secret" },
     ...over,
   };
@@ -511,7 +511,7 @@ describe("DeliveryPanel", () => {
   it("counts the running agents without a meter when the capacity has no limit", async () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
-        settings: { capacity: UNLIMITED_CAPACITY },
+        settings: { capacity: UNLIMITED_CAPACITY, quota_stop_percent: 99 },
         capacity: UNLIMITED_CAPACITY,
       }),
     );
@@ -2545,6 +2545,11 @@ describe("DeliveryPanel", () => {
     expect(limit).toHaveValue(null);
     await user.type(limit, "90");
     await user.tab();
+    // And the fallback that runs its queued jobs while Claude's account is near its limit.
+    await user.selectOptions(
+      within(qa).getByRole("combobox", { name: "Agente de Revisión (alternativo)" }),
+      "codex",
+    );
     expect(screen.getByText("Cambios sin guardar.")).toBeInTheDocument();
     await user.click(save);
     await waitFor(() =>
@@ -2558,7 +2563,13 @@ describe("DeliveryPanel", () => {
             TEST_DB_MONGO_URL: "mongodb://localhost:27017/test",
           },
           stages: {
-            review: { agent: "claude", model: "opus", reasoning: "medium", timeout_minutes: 90 },
+            review: {
+              agent: "claude",
+              model: "opus",
+              reasoning: "medium",
+              timeout_minutes: 90,
+              fallback: expect.objectContaining({ agent: "codex" }),
+            },
           },
         }),
       ),

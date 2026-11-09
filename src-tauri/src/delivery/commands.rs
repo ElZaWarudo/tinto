@@ -13,7 +13,7 @@ use super::model::{
     DeliveryJiraSettings, DeliveryJob, DeliveryJobLog, DeliveryLease, DeliveryOverview,
     DeliveryPlatform, DeliveryQaStack, DeliveryQuota, DeliveryRepoSettings, DeliveryRun,
     DeliveryRung, DeliverySettings, DeliverySettingsChanges, DeliverySettingsProposal,
-    DeliveryStageAgent, DeliveryTask,
+    DeliveryStageAgent, DeliveryStageFallback, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::service::{DeliveryService, NewJob, NewTask};
@@ -398,9 +398,13 @@ pub async fn delivery_job_log(
 pub fn delivery_update_settings(
     service: State<'_, DeliveryService>,
     capacity: u32,
+    quota_stop_percent: u32,
 ) -> Result<DeliverySettings, CommandError> {
     service
-        .update_settings(DeliverySettings { capacity })
+        .update_settings(DeliverySettings {
+            capacity,
+            quota_stop_percent,
+        })
         .map_err(CommandError::from)
 }
 
@@ -608,10 +612,36 @@ pub fn delivery_set_repo_settings(
                         CommandError::new(error.category, format!("{role}: {}", error.message))
                     })?;
                 }
+                let fallback = match stage.fallback {
+                    Some(fallback) if fallback.agent != DeliveryAgent::Shell => {
+                        let model = clean(fallback.model);
+                        let unchanged = saved
+                            .get(&role)
+                            .and_then(|old| old.fallback.as_ref())
+                            .is_some_and(|old| old.agent == fallback.agent && old.model == model);
+                        if let Some(model) = model.as_ref().filter(|_| !unchanged) {
+                            service
+                                .check_model(fallback.agent, model)
+                                .map_err(|error| {
+                                    CommandError::new(
+                                        error.category,
+                                        format!("{role} (alternativo): {}", error.message),
+                                    )
+                                })?;
+                        }
+                        Some(DeliveryStageFallback {
+                            agent: fallback.agent,
+                            model,
+                            reasoning: clean(fallback.reasoning),
+                        })
+                    }
+                    _ => None,
+                };
                 let stage = DeliveryStageAgent {
                     agent: stage.agent,
                     model,
                     reasoning: clean(stage.reasoning),
+                    fallback,
                     // Zero means no limit was set: the role's default applies.
                     timeout_minutes: stage
                         .timeout_minutes

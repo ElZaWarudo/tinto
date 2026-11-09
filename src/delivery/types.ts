@@ -669,7 +669,15 @@ export interface DeliverySettings {
    * {@link UNLIMITED_CAPACITY} starts every queued job.
    */
   capacity: number;
+  /**
+   * From this share (percent) of its account's usage limit on, Tinto starts
+   * no new job of an agent until the limit renews; 100 never holds one.
+   */
+  quota_stop_percent: number;
 }
+
+/** The default of {@link DeliverySettings.quota_stop_percent}. */
+export const QUOTA_STOP_PERCENT = 99;
 
 /** The capacity with no limit (the backend's `u32::MAX`). */
 export const UNLIMITED_CAPACITY = 4294967295;
@@ -774,6 +782,15 @@ export interface DeliveryStageAgent {
   reasoning: string | null;
   /** The stage's time limit in minutes; null keeps the role's default. */
   timeout_minutes?: number | null;
+  /** Who runs a queued job of the stage while its agent's account is over
+   *  `quota_stop_percent` of its limit. */
+  fallback?: DeliveryStageFallback | null;
+}
+
+export interface DeliveryStageFallback {
+  agent: DeliveryAgent;
+  model: string | null;
+  reasoning: string | null;
 }
 
 export interface DeliveryCoordinatorEndpoint {

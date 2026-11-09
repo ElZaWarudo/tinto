@@ -176,8 +176,11 @@ export const resolveDeliveryJob = (jobId: string, note: string) =>
 export const getDeliveryJobLog = (jobId: string, fromLine = 0) =>
   invoke<DeliveryJobLog>("delivery_job_log", { jobId, fromLine });
 
-export const updateDeliverySettings = (capacity: number) =>
-  invoke<DeliverySettings>("delivery_update_settings", { capacity });
+export const updateDeliverySettings = (settings: DeliverySettings) =>
+  invoke<DeliverySettings>("delivery_update_settings", {
+    capacity: settings.capacity,
+    quotaStopPercent: settings.quota_stop_percent,
+  });
 
 /** The account's model catalog of Codex or Muse Code, as Agents last loaded it: the models
  *  stages and coordinators may name, and the default Codex jobs that name none use. */

@@ -8,11 +8,12 @@ use std::path::PathBuf;
 
 use super::job_process;
 use super::model::{
-    DeliveryAgent, DeliveryApprovalStatus, DeliveryJob, DeliveryJobStatus, DeliveryLease,
-    DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryQueueWait, DeliveryQuota, DeliveryRung,
-    DeliveryTask, QUOTA_STOP_PERCENT,
+    DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryJob, DeliveryJobStatus,
+    DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryQueueWait, DeliveryQuota,
+    DeliveryRung, DeliveryStageAgent, DeliveryStageFallback, DeliveryTask,
 };
 use super::phase::current_setup;
+use super::service::agent_name;
 use super::service::{
     DeliveryService, RepoEnvironment, CHECKS_ROLE, ENVIRONMENT_FRESH_MS, SETUP_ROLE,
 };
@@ -61,8 +62,9 @@ pub(super) enum Hold {
     CheckRunning(String),
     /// Its exclusive resource is held, or others asked for it first.
     Lease(String),
-    /// Its agent's account is near its usage limit.
-    Quota(DeliveryQuota),
+    /// Its agent's account is near its usage limit, and why its stage's
+    /// fallback cannot run it instead, if the stage has one.
+    Quota(DeliveryQuota, Option<String>),
 }
 
 /// Everything the scheduler reads.
@@ -80,6 +82,10 @@ pub(super) struct Queue {
     merging: HashSet<String>,
     environments: HashMap<PathBuf, RepoEnvironment>,
     quotas: Vec<DeliveryQuota>,
+    /// The settings' `quota_stop_percent`.
+    quota_stop: u32,
+    /// The stages of each task's repo, for their fallbacks.
+    stages: HashMap<PathBuf, BTreeMap<String, DeliveryStageAgent>>,
 }
 
 impl Queue {
@@ -89,7 +95,14 @@ impl Queue {
     ) -> Result<Self, DeliveryError> {
         let tasks = store.tasks()?;
         let jobs = store.jobs()?;
-        let capacity = store.settings()?.effective_capacity(tasks.len()) as usize;
+        let settings = store.settings()?;
+        let capacity = settings.effective_capacity(tasks.len()) as usize;
+        let mut stages = HashMap::new();
+        for task in &tasks {
+            if !stages.contains_key(&task.repo) {
+                stages.insert(task.repo.clone(), store.repo_settings(&task.repo)?.stages);
+            }
+        }
         // A task's stages and checks wait for its setup to pass.
         let unprepared = tasks
             .iter()
@@ -140,6 +153,8 @@ impl Queue {
         );
         Ok(Self {
             quotas: quotas(store)?,
+            quota_stop: settings.quota_stop_percent,
+            stages,
             leases: store.leases()?,
             tasks,
             jobs,
@@ -229,13 +244,9 @@ impl Queue {
             return Some(Hold::Setup);
         }
         // Jobs already running go on; no new one starts that could fail
-        // mid-stage when the account runs out.
-        if let Some(quota) = self
-            .quotas
-            .iter()
-            .find(|quota| quota.agent == job.agent && quota.stops(now))
-        {
-            return Some(Hold::Quota(quota.clone()));
+        // mid-stage when the account runs out, unless on its stage's fallback.
+        if let Some(Err(hold)) = self.over_quota(job, now) {
+            return Some(hold);
         }
         if job.needs_environment {
             let state = self.environment_of(job);
@@ -354,8 +365,66 @@ impl Queue {
         Some(Hold::Lease(name))
     }
 
-    fn job(&self, job_id: &str) -> Option<&DeliveryJob> {
+    pub(super) fn job(&self, job_id: &str) -> Option<&DeliveryJob> {
         self.jobs.iter().find(|job| job.id == job_id)
+    }
+
+    /// The quota that stops new jobs of the agent now.
+    fn stopping(&self, agent: DeliveryAgent, now: u64) -> Option<&DeliveryQuota> {
+        self.quotas
+            .iter()
+            .find(|quota| quota.agent == agent && quota.stops(self.quota_stop, now))
+    }
+
+    /// Whether its agent's quota stops the job now and, if so, the stage's
+    /// fallback it starts on instead (`Ok`) or the hold it waits on.
+    pub(super) fn over_quota(
+        &self,
+        job: &DeliveryJob,
+        now: u64,
+    ) -> Option<Result<(&DeliveryQuota, &DeliveryStageFallback), Hold>> {
+        let quota = self.stopping(job.agent, now)?;
+        let Some(fallback) = self
+            .tasks
+            .iter()
+            .find(|task| task.id == job.task_id)
+            .and_then(|task| {
+                self.stages
+                    .get(&task.repo)?
+                    .get(&job.role)?
+                    .fallback
+                    .as_ref()
+            })
+        else {
+            return Some(Err(Hold::Quota(quota.clone(), None)));
+        };
+        let skipped = if fallback.agent == job.agent {
+            Some("es el mismo agente".to_string())
+        } else if job.resumes.is_some() {
+            Some(format!("continúa una sesión de {}", agent_name(job.agent)))
+        } else if fallback.agent == DeliveryAgent::Codex
+            && job.needs_environment
+            && job.access == DeliveryAccess::Workspace
+        {
+            Some("el trabajo necesita el entorno y el sandbox de Codex no llega a /var/run/docker.sock".to_string())
+        } else {
+            self.stopping(fallback.agent, now).map(|other| {
+                format!(
+                    "su cuenta lleva el {}% de su límite ({})",
+                    other.utilization, other.window
+                )
+            })
+        };
+        Some(match skipped {
+            Some(why) => Err(Hold::Quota(
+                quota.clone(),
+                Some(format!(
+                    "su alternativo, {}, no sirve: {why}",
+                    agent_name(fallback.agent)
+                )),
+            )),
+            None => Ok((quota, fallback)),
+        })
     }
 
     /// The hold in words, and whether what it waits for looks stuck.
@@ -375,13 +444,14 @@ impl Queue {
                 )
             }
             Hold::BatchPaused => ("el lote está en pausa".into(), None),
-            Hold::Quota(quota) => (
+            Hold::Quota(quota, fallback) => (
                 format!(
-                    "la cuenta de {} lleva el {}% de su límite ({}): no empieza trabajos nuevos hasta que se renueve, en {} min",
-                    super::service::agent_name(quota.agent),
+                    "la cuenta de {} lleva el {}% de su límite ({}): no empieza trabajos nuevos hasta que se renueve, en {} min{}",
+                    agent_name(quota.agent),
                     quota.utilization,
                     quota.window,
-                    quota.resets_at_ms.saturating_sub(now).div_ceil(60_000)
+                    quota.resets_at_ms.saturating_sub(now).div_ceil(60_000),
+                    fallback.as_ref().map(|why| format!("; {why}")).unwrap_or_default()
                 ),
                 None,
             ),
@@ -552,9 +622,10 @@ impl DeliveryService {
     pub(super) fn release_renewed_quotas(&self) -> Result<(), DeliveryError> {
         let store = self.store()?;
         let now = super::now_ms();
+        let percent = store.settings()?.quota_stop_percent;
         let (renewed, kept): (Vec<DeliveryQuota>, Vec<DeliveryQuota>) = quotas(&store)?
             .into_iter()
-            .partition(|quota| quota.utilization >= QUOTA_STOP_PERCENT && !quota.stops(now));
+            .partition(|quota| quota.utilization >= percent && now >= quota.resets_at_ms);
         if renewed.is_empty() {
             return Ok(());
         }
@@ -595,62 +666,165 @@ impl DeliveryService {
 mod tests {
     use super::*;
     use crate::delivery::adapters::tests::{sample_job, sample_task};
+    use crate::delivery::model::QUOTA_STOP_PERCENT;
 
-    #[test]
-    fn an_agent_near_its_limit_starts_no_new_job_until_it_renews() {
-        let job = |id: &str, task: &str, agent| {
-            let mut job = sample_job(agent);
-            job.id = id.into();
-            job.task_id = task.into();
-            job
-        };
-        let task = |id: &str| {
-            let mut task = sample_task();
-            task.id = id.into();
-            task
-        };
-        let quota = |utilization| DeliveryQuota {
-            agent: DeliveryAgent::Claude,
+    fn job(id: &str, task: &str, agent: DeliveryAgent) -> DeliveryJob {
+        let mut job = sample_job(agent);
+        job.id = id.into();
+        job.task_id = task.into();
+        job
+    }
+
+    fn quota(agent: DeliveryAgent, utilization: u32) -> DeliveryQuota {
+        DeliveryQuota {
+            agent,
             window: "five_hour".into(),
             utilization,
             resets_at_ms: 10 * 60_000,
             seen_at_ms: 0,
-        };
-        let queue = |quota: DeliveryQuota| Queue {
-            tasks: vec![task("t1"), task("t2"), task("t3")],
-            jobs: vec![
-                job("claude", "t1", DeliveryAgent::Claude),
-                job("codex", "t2", DeliveryAgent::Codex),
-                job("check", "t3", DeliveryAgent::Shell),
-            ],
+        }
+    }
+
+    fn queue(jobs: Vec<DeliveryJob>, quotas: Vec<DeliveryQuota>, quota_stop: u32) -> Queue {
+        let tasks = jobs
+            .iter()
+            .map(|job| {
+                let mut task = sample_task();
+                task.id = job.task_id.clone();
+                task
+            })
+            .collect();
+        Queue {
+            tasks,
+            jobs,
             leases: Vec::new(),
             capacity: 8,
             unprepared: HashSet::new(),
             held: HashSet::new(),
             merging: HashSet::new(),
             environments: HashMap::new(),
-            quotas: vec![quota],
+            quotas,
+            quota_stop,
+            stages: HashMap::new(),
+        }
+    }
+
+    fn held(queue: &Queue, now: u64) -> Vec<String> {
+        queue
+            .plan(now)
+            .0
+            .into_iter()
+            .filter(|(_, hold)| hold.is_some())
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    #[test]
+    fn an_agent_at_the_settings_share_of_its_limit_starts_no_new_job_until_it_renews() {
+        let jobs = || {
+            vec![
+                job("claude", "t1", DeliveryAgent::Claude),
+                job("codex", "t2", DeliveryAgent::Codex),
+                job("check", "t3", DeliveryAgent::Shell),
+            ]
         };
-        let held = |queue: &Queue, now| -> Vec<String> {
-            queue
-                .plan(now)
-                .0
-                .into_iter()
-                .filter(|(_, hold)| hold.is_some())
-                .map(|(id, _)| id)
-                .collect()
-        };
-        // At 96% only Claude's job waits, and says until when.
-        let near = queue(quota(96));
-        assert_eq!(held(&near, 0), ["claude"]);
-        let (reason, _) = near.explain(&near.jobs[0], &Hold::Quota(quota(96)), 0);
+        // Only Claude's job waits, from the share the settings give; 100
+        // never holds one.
+        for (quota_stop, utilization, waits) in [
+            (95, 94, false),
+            (95, 96, true),
+            (99, 98, false),
+            (99, 99, true),
+            (100, 100, false),
+        ] {
+            let near = queue(
+                jobs(),
+                vec![quota(DeliveryAgent::Claude, utilization)],
+                quota_stop,
+            );
+            let expected: &[&str] = if waits { &["claude"] } else { &[] };
+            assert_eq!(held(&near, 0), expected, "{quota_stop}% at {utilization}");
+            // Once the window renewed, it starts.
+            assert!(held(&near, 10 * 60_000).is_empty());
+        }
+        let near = queue(jobs(), vec![quota(DeliveryAgent::Claude, 99)], 99);
+        let hold = Hold::Quota(quota(DeliveryAgent::Claude, 99), None);
         assert_eq!(
-            reason,
-            "la cuenta de Claude Code lleva el 96% de su límite (five_hour): no empieza trabajos nuevos hasta que se renueve, en 10 min"
+            near.explain(&near.jobs[0], &hold, 0).0,
+            "la cuenta de Claude Code lleva el 99% de su límite (five_hour): no empieza trabajos nuevos hasta que se renueve, en 10 min"
         );
-        // Below the threshold, or once the window renewed, it starts.
-        assert!(held(&queue(quota(94)), 0).is_empty());
-        assert!(held(&near, 10 * 60_000).is_empty());
+    }
+
+    #[test]
+    fn a_job_over_its_quota_starts_on_its_stages_fallback_when_it_can_run_it() {
+        let fallback = DeliveryStageFallback {
+            agent: DeliveryAgent::Codex,
+            model: Some("gpt-6-sol".into()),
+            reasoning: None,
+        };
+        let skipped = |why: &str| Some(format!("su alternativo, Codex, no sirve: {why}"));
+        // What the job is, how much Codex's account used, why it is skipped.
+        type Case = (&'static str, fn(&mut DeliveryJob), u32, Option<String>);
+        let cases: [Case; 4] = [
+            ("starts on it", |_| {}, 0, None),
+            (
+                "needs the environment",
+                |job| job.needs_environment = true,
+                0,
+                skipped("el trabajo necesita el entorno y el sandbox de Codex no llega a /var/run/docker.sock"),
+            ),
+            (
+                "continues a session",
+                |job| job.resumes = Some("j0".into()),
+                0,
+                skipped("continúa una sesión de Claude Code"),
+            ),
+            (
+                "is over its own quota",
+                |_| {},
+                99,
+                skipped("su cuenta lleva el 99% de su límite (five_hour)"),
+            ),
+        ];
+        for (case, change, codex_used, why) in cases {
+            let mut claude = job("claude", "t1", DeliveryAgent::Claude);
+            claude.role = "tests".into();
+            change(&mut claude);
+            let mut near = queue(
+                vec![claude],
+                vec![
+                    quota(DeliveryAgent::Claude, 99),
+                    quota(DeliveryAgent::Codex, codex_used),
+                ],
+                99,
+            );
+            let stage = DeliveryStageAgent {
+                agent: DeliveryAgent::Claude,
+                model: None,
+                reasoning: None,
+                timeout_minutes: None,
+                fallback: Some(fallback.clone()),
+            };
+            near.stages.insert(
+                near.tasks[0].repo.clone(),
+                BTreeMap::from([("tests".to_string(), stage)]),
+            );
+            let job = &near.jobs[0];
+            match why {
+                None => {
+                    assert!(held(&near, 0).is_empty(), "{case}");
+                    let started = near.over_quota(job, 0).unwrap().unwrap();
+                    assert_eq!(started.1, &fallback, "{case}");
+                }
+                Some(why) => {
+                    // It stays queued, saying why its fallback was skipped.
+                    let hold = near.over_quota(job, 0).unwrap().unwrap_err();
+                    assert_eq!(held(&near, 0), ["claude"], "{case}");
+                    let (reason, _) = near.explain(job, &hold, 0);
+                    assert!(reason.ends_with(&format!("; {why}")), "{case}: {reason}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -672,6 +846,8 @@ mod tests {
             merging: HashSet::from(["merging".to_string()]),
             environments: HashMap::new(),
             quotas: Vec::new(),
+            quota_stop: QUOTA_STOP_PERCENT,
+            stages: HashMap::new(),
         };
         let started: Vec<String> = queue
             .plan(0)

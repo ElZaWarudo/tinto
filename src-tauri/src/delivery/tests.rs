@@ -519,7 +519,10 @@ fn a_finished_process_without_a_result_fails() {
 fn capacity_and_one_job_per_task_are_respected() {
     let h = harness();
     h.service
-        .update_settings(DeliverySettings { capacity: 1 })
+        .update_settings(DeliverySettings {
+            capacity: 1,
+            ..Default::default()
+        })
         .unwrap();
     let a = h.task("K-5");
     let b = h.task("K-6");
@@ -550,7 +553,10 @@ fn capacity_and_one_job_per_task_are_respected() {
 fn waiting_on_one_issue_never_leaves_the_rest_of_the_batch_idle() {
     let h = harness();
     h.service
-        .update_settings(DeliverySettings { capacity: 3 })
+        .update_settings(DeliverySettings {
+            capacity: 3,
+            ..Default::default()
+        })
         .unwrap();
     let run = h
         .service
@@ -624,7 +630,10 @@ fn waiting_on_one_issue_never_leaves_the_rest_of_the_batch_idle() {
 fn waiting_on_a_batch_returns_the_first_job_that_ends() {
     let h = harness();
     h.service
-        .update_settings(DeliverySettings { capacity: 2 })
+        .update_settings(DeliverySettings {
+            capacity: 2,
+            ..Default::default()
+        })
         .unwrap();
     let slow = h.dispatch(&h.task("K-50"), "tests", "sleep=30");
     let fast = h.dispatch(&h.task("K-51"), "tests", "events=codex-ok");
@@ -1262,7 +1271,10 @@ fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coor
     store.set_repo_settings(h.repo.path(), &settings).unwrap();
     drop(store);
     h.service
-        .update_settings(DeliverySettings { capacity: 3 })
+        .update_settings(DeliverySettings {
+            capacity: 3,
+            ..Default::default()
+        })
         .unwrap();
     let run = h
         .service
@@ -1756,6 +1768,7 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
             model: Some("gpt-6-sol".into()),
             reasoning: Some("high".into()),
             timeout_minutes: None,
+            fallback: None,
         },
     );
     h.service
@@ -1777,6 +1790,7 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
             model: None,
             reasoning: None,
             timeout_minutes: None,
+            fallback: None,
         },
     );
     h.service
@@ -2092,6 +2106,7 @@ fn a_stages_time_limit_applies_when_its_dispatch_gives_none_and_a_retry_can_chan
             model: None,
             reasoning: None,
             timeout_minutes: Some(120),
+            fallback: None,
         },
     );
     h.service
@@ -6353,6 +6368,82 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
 }
 
 #[test]
+fn a_job_over_the_settings_share_of_its_quota_runs_on_its_stages_fallback() {
+    use super::model::{DeliveryQuota, DeliveryStageFallback};
+    let h = harness();
+    let task = h.task("Q-1");
+    // At 95% in Ajustes, Claude's account at 96% holds its jobs.
+    h.service
+        .update_settings(DeliverySettings {
+            quota_stop_percent: 95,
+            ..Default::default()
+        })
+        .unwrap();
+    h.service.record_quota(DeliveryQuota {
+        agent: DeliveryAgent::Claude,
+        window: "five_hour".into(),
+        utilization: 96,
+        resets_at_ms: super::now_ms() + 3_600_000,
+        seen_at_ms: 0,
+    });
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.stages.insert(
+        "tests".into(),
+        DeliveryStageAgent {
+            agent: DeliveryAgent::Claude,
+            model: Some("opus".into()),
+            reasoning: Some("max".into()),
+            timeout_minutes: None,
+            fallback: Some(DeliveryStageFallback {
+                agent: DeliveryAgent::Codex,
+                model: None,
+                reasoning: Some("high".into()),
+            }),
+        },
+    );
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let queued = h
+        .service
+        .dispatch(NewJob {
+            task_id: task.id.clone(),
+            role: "tests".into(),
+            agent: DeliveryAgent::Claude,
+            model: Some("opus".into()),
+            access: DeliveryAccess::Workspace,
+            prompt: "events=codex-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: Some("max".into()),
+            platform: None,
+            read_dirs: Vec::new(),
+            stage_default: true,
+            needs_environment: false,
+        })
+        .unwrap();
+    // It starts on the fallback, with its model and reasoning, and says why.
+    let ran = h.wait(&queued.id);
+    assert_eq!(ran.status, DeliveryJobStatus::Finished);
+    assert_eq!(
+        (ran.agent, ran.model.as_deref(), ran.reasoning.as_deref()),
+        (DeliveryAgent::Codex, None, Some("high"))
+    );
+    assert_eq!(
+        ran.substituted.as_deref(),
+        Some("la cuenta de Claude Code llevaba el 96% de su límite (five_hour): corrió con Codex, el alternativo de la etapa.")
+    );
+}
+
+#[test]
 fn capacity_is_automatic_fixed_up_to_eight_or_unlimited() {
     use super::model::{auto_capacity_limit, UNLIMITED_CAPACITY};
     // One per physical core (half the logical ones), less one for checks.
@@ -6360,11 +6451,21 @@ fn capacity_is_automatic_fixed_up_to_eight_or_unlimited() {
     assert_eq!(auto_capacity_limit(32), 8);
     assert_eq!(auto_capacity_limit(2), 2);
     let limit = auto_capacity_limit(std::thread::available_parallelism().unwrap().get());
-    let automatic = DeliverySettings { capacity: 0 };
+    let automatic = DeliverySettings {
+        capacity: 0,
+        ..Default::default()
+    };
     assert_eq!(automatic.effective_capacity(0), 1);
     assert_eq!(automatic.effective_capacity(2), 2);
     assert_eq!(automatic.effective_capacity(12), limit);
-    assert_eq!(DeliverySettings { capacity: 5 }.effective_capacity(1), 5);
+    assert_eq!(
+        DeliverySettings {
+            capacity: 5,
+            ..Default::default()
+        }
+        .effective_capacity(1),
+        5
+    );
 
     let h = harness();
     h.service.update_settings(automatic).unwrap();
@@ -6377,9 +6478,23 @@ fn capacity_is_automatic_fixed_up_to_eight_or_unlimited() {
         (0, 4.min(limit))
     );
 
+    // The share of an account's limit that holds new jobs: 99 by default,
+    // from 50 to 100.
+    assert_eq!(overview.settings.quota_stop_percent, 99);
+    for (percent, valid) in [(49, false), (50, true), (100, true), (101, false)] {
+        let updated = h.service.update_settings(DeliverySettings {
+            capacity: 0,
+            quota_stop_percent: percent,
+        });
+        assert_eq!(updated.is_ok(), valid, "{percent}");
+    }
+
     for (asked, kept) in [(20, 8), (UNLIMITED_CAPACITY, UNLIMITED_CAPACITY)] {
         h.service
-            .update_settings(DeliverySettings { capacity: asked })
+            .update_settings(DeliverySettings {
+                capacity: asked,
+                ..Default::default()
+            })
             .unwrap();
         let overview = h.service.overview().unwrap();
         assert_eq!(
@@ -12813,6 +12928,7 @@ fn past_the_brainstorm_a_failing_checks_round_gets_its_fix_stage_from_tinto() {
             model: None,
             reasoning: None,
             timeout_minutes: None,
+            fallback: None,
         },
     );
     h.service
