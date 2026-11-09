@@ -1,7 +1,7 @@
 # <pumarejo:cargo-eol:lf>
 [package]
 name = "tinto"
-version = "1.2.4"
+version = "1.2.5"
 description = "Monitoreo read-only de repos git editados por agentes de codigo"
 license = "GPL-3.0-or-later"
 authors = ["Mayor"]

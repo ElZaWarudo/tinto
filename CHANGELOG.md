@@ -4,6 +4,24 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.2.5] - 2026-11-09
+
+### Features
+
+- **delivery:** record history made outside Tinto and stop a push on a moved remote
+- **delivery:** pause a conflicting restack and continue it inside Tinto
+
+### Fixes
+
+- **delivery:** say when the coordinator waits for the user's permission
+- **delivery:** run one step at a time in a task's worktree
+- **delivery:** leave git's index and unrunnable checks to Tinto in every job
+- **delivery:** hold the PR step until a reviewer is chosen
+- **delivery:** pad a running merge like the step card it stands in
+- **delivery:** read a QA section that points at a problem as no problem
+- **delivery:** give each package of an issue its own {task} value
+- **delivery:** refuse tool arguments the tool does not declare
+
 ## [1.2.4] - 2026-11-09
 
 ### Features
