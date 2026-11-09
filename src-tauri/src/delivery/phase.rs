@@ -574,6 +574,18 @@ pub fn open_merge<'a>(
 /// review (Tinto's checks run between them).
 pub const MERGE_STAGES: [&str; 2] = ["implementation", "review"];
 
+/// Whether a round is one of `sync`'s conflicts: its first, or one of the
+/// later stops of a restack (`<sync id>#<when>`).
+pub fn is_sync_round(round: &DeliveryRound, sync: &DeliveryApproval) -> bool {
+    round.kind == "sync"
+        && round.source.as_deref().is_some_and(|source| {
+            source == sync.id
+                || source
+                    .strip_prefix(sync.id.as_str())
+                    .is_some_and(|rest| rest.starts_with('#'))
+        })
+}
+
 /// Whether a round belongs to resolving the merge of `sync`: the sync's own
 /// round, or findings and failing checks of the stages run since it.
 pub fn resolves_merge(

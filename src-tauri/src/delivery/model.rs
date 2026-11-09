@@ -926,6 +926,10 @@ pub struct DeliveryMergeConflicts {
     /// The base branch being merged, such as `origin/develop`.
     pub base: String,
     pub files: Vec<String>,
+    /// A restack instead of a merge: the task's own commit being replayed
+    /// onto the base (`abc1234 Subject`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaying: Option<String>,
 }
 
 /// One commit of a commit step's plan.
@@ -997,6 +1001,11 @@ pub struct DeliveryApproval {
     /// them. The merge stays in progress until a commit step concludes it.
     #[serde(default)]
     pub conflicts: Vec<String>,
+    /// `sync` only: it restacked the branch instead of merging the base.
+    /// While its `conflicts` are open the rebase is paused, and undoing the
+    /// step abandons it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restack: bool,
     /// `commit`: the commits Tinto created, in order. `sync`: its merge
     /// commit, when the merge had no conflicts.
     #[serde(default)]
@@ -1031,6 +1040,11 @@ pub struct DeliveryApproval {
     /// `pr_reply` only: resolve the review thread once replied.
     #[serde(default)]
     pub resolve_thread: bool,
+    /// `commit` only: it creates nothing, it records the commits the branch
+    /// already has (made outside Tinto) as the task's, once the user saw
+    /// them in `body`. `head` is the branch's HEAD they were listed at.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record: bool,
     /// `pr_reply` only: QA screenshots the user chose to show in the reply.
     #[serde(default)]
     pub images: Vec<DeliveryReplyImage>,

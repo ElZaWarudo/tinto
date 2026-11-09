@@ -734,30 +734,136 @@ pub fn tree(place: Place<'_>, dir: &Path, commit: &str) -> Option<String> {
 }
 
 /// Moves the branch's own commits, those not in `from`, onto `onto`
-/// (`rebase --onto`). On conflicts the rebase is abandoned, leaving the
-/// branch as it was, and the files are returned.
+/// (`rebase --onto`). On conflicts the rebase stays paused and the files
+/// are returned; see [`rebase_step`].
 pub fn restack(
     place: Place<'_>,
     worktree: &Path,
     onto: &str,
     from: &str,
 ) -> Result<Result<(), Vec<String>>, DeliveryError> {
-    if git(
-        place,
-        worktree,
-        &["rebase", "--quiet", "--onto", onto, from],
-    )
-    .is_ok()
-    {
+    let mut args = REBASE_CONFIG.to_vec();
+    // A commit whose changes the base already has is dropped, not kept empty.
+    args.extend(["rebase", "--quiet", "--empty=drop", "--onto", onto, from]);
+    rebase_step(place, worktree, &args)
+}
+
+/// Git settings every restack runs with, whatever the user's config says:
+/// no autosquash or ref updates rewriting more than the branch, no rerere
+/// reusing a recorded resolution unseen, and no editor waiting for input.
+const REBASE_CONFIG: [&str; 10] = [
+    "-c",
+    "rebase.autoSquash=false",
+    "-c",
+    "rebase.updateRefs=false",
+    "-c",
+    "rerere.enabled=false",
+    "-c",
+    "core.editor=true",
+    "-c",
+    "sequence.editor=true",
+];
+
+/// Runs a rebase command. It finishes (`Ok(Ok)`), stops on conflicts and
+/// stays paused for them to be resolved (`Ok(Err(files))`), or fails for
+/// another reason (a hook, a lock): then the rebase is abandoned so the
+/// branch is as it was, and the error says why.
+fn rebase_step(
+    place: Place<'_>,
+    worktree: &Path,
+    args: &[&str],
+) -> Result<Result<(), Vec<String>>, DeliveryError> {
+    let Err(error) = git(place, worktree, args) else {
         return Ok(Ok(()));
-    }
+    };
     let conflicts: Vec<String> = git(place, worktree, &["diff", "--name-only", "--diff-filter=U"])
         .unwrap_or_default()
         .lines()
         .map(str::to_string)
         .collect();
+    if !conflicts.is_empty() && rebase_head(place, worktree).is_some() {
+        return Ok(Err(conflicts));
+    }
+    if rebase_head(place, worktree).is_some() {
+        git(place, worktree, &["rebase", "--abort"])?;
+    }
+    Err(DeliveryError::new(
+        "restack_failed",
+        format!(
+            "el rebase no pudo seguir y se abandonó, la rama quedó como estaba: {}",
+            error.message
+        ),
+    ))
+}
+
+/// The commit a paused rebase stopped on (`REBASE_HEAD`). Git leaves that
+/// ref behind once a rebase ends, so a rebase counts as paused only while
+/// HEAD is detached too, as it is for the whole rebase.
+pub fn rebase_head(place: Place<'_>, worktree: &Path) -> Option<String> {
+    if git_ok(place, worktree, &["symbolic-ref", "--quiet", "HEAD"]) {
+        return None;
+    }
+    git(
+        place,
+        worktree,
+        &["rev-parse", "--verify", "--quiet", "REBASE_HEAD"],
+    )
+    .ok()
+    .filter(|commit| !commit.is_empty())
+}
+
+/// Whether a sync left git mid-operation in the worktree: a merge or a
+/// restack paused on its conflicts.
+pub fn sync_in_progress(place: Place<'_>, worktree: &Path) -> bool {
+    merge_head(place, worktree).is_some() || rebase_head(place, worktree).is_some()
+}
+
+/// Goes on with a paused restack once its conflicts are resolved: stages
+/// exactly the files that were conflicted (deleted ones too) and continues.
+/// The rebase finishes, stops on the next conflicts, or fails as in
+/// [`rebase_step`].
+pub fn continue_restack(
+    place: Place<'_>,
+    worktree: &Path,
+    files: &[String],
+) -> Result<Result<(), Vec<String>>, DeliveryError> {
+    let literal: Vec<String> = files
+        .iter()
+        .map(|file| format!(":(literal){file}"))
+        .collect();
+    let mut add = vec!["add", "-A", "--"];
+    add.extend(literal.iter().map(String::as_str));
+    git(place, worktree, &add)?;
+    let mut args = REBASE_CONFIG.to_vec();
+    args.extend(["rebase", "--continue"]);
+    rebase_step(place, worktree, &args)
+}
+
+/// Abandons a paused restack: the branch goes back to where it was. What
+/// the worktree held (the conflicts resolved so far, new files) is kept
+/// first under `refs/tinto/recovery/<name>` (tracked files: untracked ones
+/// are not touched), whose commit is returned when
+/// there was anything to keep.
+pub fn abort_restack(
+    place: Place<'_>,
+    worktree: &Path,
+    name: &str,
+) -> Result<Option<String>, DeliveryError> {
+    git(place, worktree, &["add", "-u"])?;
+    let kept = git(
+        place,
+        worktree,
+        &["stash", "create", "resolución del restack abandonado"],
+    )?;
+    if !kept.is_empty() {
+        git(
+            place,
+            worktree,
+            &["update-ref", &format!("refs/tinto/recovery/{name}"), &kept],
+        )?;
+    }
     git(place, worktree, &["rebase", "--abort"])?;
-    Ok(Err(conflicts))
+    Ok((!kept.is_empty()).then_some(kept))
 }
 
 /// Checks out the worktree's submodules when it has a `.gitmodules`: all

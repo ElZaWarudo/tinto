@@ -62,6 +62,9 @@ pub struct NewApproval {
     pub comment_url: Option<String>,
     /// `pr_reply` only: resolve the review thread once replied.
     pub resolve_thread: bool,
+    /// `commit` only: record the commits the branch already has (made
+    /// outside Tinto) as the task's instead of creating any.
+    pub record: bool,
 }
 
 /// Where a changed file belongs for splitting commits: `docs`, `tests` or
@@ -368,6 +371,7 @@ pub(super) fn found_step(
         single_commit_reason: None,
         merge_head: None,
         conflicts: Vec::new(),
+        restack: false,
         created: Vec::new(),
         before: None,
         tip: None,
@@ -377,6 +381,7 @@ pub(super) fn found_step(
         corrections: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
         images: Vec::new(),
         thread: None,
         style_examples: Vec::new(),
@@ -985,7 +990,7 @@ impl DeliveryService {
         let reply = request.rung == DeliveryRung::PrReply;
         // A merge's text defaults to the PR's approved title.
         let merge = request.rung == DeliveryRung::Merge;
-        if request.title.trim().is_empty() && !planned && !reply && !merge {
+        if request.title.trim().is_empty() && !planned && !reply && !merge && !request.record {
             return Err(DeliveryError::new(
                 "invalid_approval",
                 "la aprobación necesita el texto exacto (título o mensaje)",
@@ -1134,7 +1139,7 @@ impl DeliveryService {
             && self
                 .latest_approval(&task.id, DeliveryRung::Push)?
                 .is_some_and(|push| push.status == DeliveryApprovalStatus::Drifted);
-        if !republish {
+        if !republish && !request.record {
             rung_prerequisites(&task, request.rung)?;
         }
         // The coordinator commits only settled work: findings are fixed or
@@ -1164,6 +1169,15 @@ impl DeliveryService {
             DeliveryRung::Commit => tasks::merge_head(place, &task.worktree),
             _ => None,
         };
+        // A paused restack is not a state to commit: Tinto continues it.
+        if request.rung == DeliveryRung::Commit
+            && tasks::rebase_head(place, &task.worktree).is_some()
+        {
+            return Err(DeliveryError::new(
+                "restack_in_progress",
+                "hay un restack en pausa por conflictos: Tinto lo sigue en cuanto se resuelven (implementation y review), sin paso commit; para abandonarlo, deshaz su paso sync",
+            ));
+        }
         // The user sees who the commits will be by, as git's config says:
         // Tinto never sets an identity of its own.
         let author = match request.rung {
@@ -1178,11 +1192,51 @@ impl DeliveryService {
             _ => None,
         };
         // A push publishes the commit the user saw when it was asked.
-        let head = match request.rung {
+        let mut head = match request.rung {
             DeliveryRung::Push => tasks::head(place, &task.worktree).ok(),
             _ => None,
         };
         match request.rung {
+            // History made outside Tinto, recorded as it is once the user
+            // saw it: nothing is created or moved.
+            DeliveryRung::Commit if request.record => {
+                if !request.commits.is_empty() {
+                    return Err(invalid_plan(
+                        "record no lleva commits: registra los que la rama ya tiene",
+                    ));
+                }
+                if tasks::sync_in_progress(place, &task.worktree)
+                    || tasks::worktree_state(place, &task.worktree, &task.base_commit)?.dirty
+                {
+                    return Err(DeliveryError::new(
+                        "nothing_to_record",
+                        "solo se registran commits con el worktree limpio y sin merge ni restack en curso: lo que hay sin confirmar se prepara con un plan de commits",
+                    ));
+                }
+                let found = self.unrecorded_commits(&task)?;
+                if found.is_empty() {
+                    return Err(DeliveryError::new(
+                        "nothing_to_record",
+                        "la rama no tiene commits propios que ningún paso de Tinto haya registrado",
+                    ));
+                }
+                title = format!(
+                    "Registrar {} de la rama",
+                    match found.len() {
+                        1 => "1 commit".to_string(),
+                        count => format!("{count} commits"),
+                    }
+                );
+                body = found
+                    .iter()
+                    .map(|(sha, subject)| format!("{} {subject}", short(sha)))
+                    .collect::<Vec<_>>()
+                    .join(
+                        "
+",
+                    );
+                head = Some(tasks::head(place, &task.worktree)?);
+            }
             // A merge in progress is concluded whole, so the commit keeps the
             // merged branch as its second parent.
             DeliveryRung::Commit if merge_head.is_some() => {
@@ -1345,6 +1399,7 @@ impl DeliveryService {
             single_commit_reason,
             merge_head,
             conflicts: Vec::new(),
+            restack: false,
             created: Vec::new(),
             before: None,
             tip: None,
@@ -1353,6 +1408,7 @@ impl DeliveryService {
             notice,
             corrections: Vec::new(),
             resolve_thread: reply && request.resolve_thread,
+            record: request.record,
             // The QA screenshots its text shows where it names them.
             images: match request.rung {
                 DeliveryRung::Pr | DeliveryRung::PrReply => {
@@ -1596,6 +1652,7 @@ impl DeliveryService {
         ) {
             let task = self.task(&approval.task_id)?;
             let executed = match approval.rung {
+                DeliveryRung::Commit if approval.record => self.run_record(&task, &mut approval),
                 DeliveryRung::Commit => run_commit_plan(&task, &mut approval),
                 DeliveryRung::Sync => self.run_sync(&task, &mut approval),
                 _ if self.commits_lost(&task)? => Err(DeliveryError::new(
@@ -2025,8 +2082,20 @@ impl DeliveryService {
 
     /// Takes back the commits of a commit step that was not pushed: the
     /// branch returns to where it was and the changes stay in the worktree.
+    /// On a sync step whose restack is paused on conflicts, abandons it.
     pub fn undo_commit(&self, approval_id: &str) -> Result<DeliveryApproval, DeliveryError> {
         let mut approval = self.approval(approval_id)?;
+        if approval.rung == DeliveryRung::Sync {
+            return self.abort_paused_restack(approval);
+        }
+        // A record made no commit: undoing it forgets it, the branch stays.
+        if approval.record && approval.status == DeliveryApprovalStatus::Executed {
+            approval.advance(StepEvent::Undo)?;
+            approval.outcome =
+                Some("Registro deshecho: los commits siguen en la rama, sin registrar.".into());
+            self.save_approval(&approval, "commit_undone")?;
+            return Ok(approval);
+        }
         let created = created_commits(&approval);
         let undoable = approval.rung == DeliveryRung::Commit
             && matches!(
@@ -2117,6 +2186,7 @@ impl DeliveryService {
             single_commit_reason: None,
             comment_url: None,
             resolve_thread: false,
+            record: false,
         };
         if let Err(error) = self.request_approval(request) {
             eprintln!("tinto: delivery did not sync {}: {error}", task.key);
@@ -2244,6 +2314,7 @@ impl DeliveryService {
                 single_commit_reason: None,
                 comment_url: None,
                 resolve_thread: false,
+                record: false,
             };
             if let Err(error) = self.request_approval(request) {
                 eprintln!("tinto: delivery did not advance {}: {error}", task.key);
@@ -2327,10 +2398,10 @@ impl DeliveryService {
     ) -> Result<(String, String), DeliveryError> {
         let place = Place::of(task.distro.as_deref());
         let refuse = |category: &str, message: &str| Err(DeliveryError::new(category, message));
-        if tasks::merge_head(place, &task.worktree).is_some() {
+        if tasks::sync_in_progress(place, &task.worktree) {
             return refuse(
                 "merge_in_progress",
-                "ya hay un merge en curso en el worktree; se concluye con el paso commit",
+                "ya hay un merge o un restack en curso en el worktree: un merge se concluye con el paso commit; un restack sigue solo cuando se resuelven sus conflictos, o se abandona deshaciendo su paso sync",
             );
         }
         if tasks::worktree_state(place, &task.worktree, &task.base_commit)?.dirty {
@@ -2490,7 +2561,7 @@ impl DeliveryService {
         task: &DeliveryTask,
     ) -> Result<Option<DeliveryMergeConflicts>, DeliveryError> {
         let place = Place::of(task.distro.as_deref());
-        if tasks::merge_head(place, &task.worktree).is_none() {
+        if !tasks::sync_in_progress(place, &task.worktree) {
             return Ok(None);
         }
         let files = tasks::unresolved_conflicts(place, &task.worktree);
@@ -2500,7 +2571,19 @@ impl DeliveryService {
         let base = self.sync_base(task)?;
         let base =
             tasks::base_tip(place, &task.worktree, &base, false).map_or(base, |(name, _)| name);
-        Ok(Some(DeliveryMergeConflicts { base, files }))
+        let replaying = tasks::rebase_head(place, &task.worktree).and_then(|_| {
+            tasks::git(
+                place,
+                &task.worktree,
+                &["log", "-1", "--format=%h %s", "REBASE_HEAD"],
+            )
+            .ok()
+        });
+        Ok(Some(DeliveryMergeConflicts {
+            base,
+            files,
+            replaying,
+        }))
     }
 
     /// The sync whose merge is still in progress in the task's worktree.
@@ -2533,26 +2616,7 @@ impl DeliveryService {
         sync.created = vec![head];
         self.save_approval(&sync, "merge_concluded_outside")?;
         // Its round ends with that commit, as with Tinto's.
-        let store = self.store()?;
-        for mut round in store.task_rounds(&task.id)? {
-            if round.kind != "sync"
-                || round.source.as_deref() != Some(sync.id.as_str())
-                || !round.is_open()
-            {
-                continue;
-            }
-            round.closed_at_ms = Some(now_ms());
-            round.outcome = Some("merge confirmado fuera de Tinto".to_string());
-            store.put_round(&round)?;
-            store.record_event(
-                now_ms(),
-                "round_closed",
-                Some(&task.id),
-                None,
-                &super::rounds::round_text(&round),
-            )?;
-        }
-        drop(store);
+        self.close_sync_rounds(&task.id, &sync, "merge confirmado fuera de Tinto")?;
         // The commit Tinto asked to conclude it has nothing left to commit.
         for asked in approvals.iter().filter(|approval| {
             approval.rung == DeliveryRung::Commit
@@ -2562,6 +2626,148 @@ impl DeliveryService {
             self.withdraw_approval(&asked.id, "el merge se confirmó fuera de Tinto")?;
         }
         Ok(())
+    }
+
+    /// Closes the open rounds of a sync's conflicts with `outcome`.
+    fn close_sync_rounds(
+        &self,
+        task_id: &str,
+        sync: &DeliveryApproval,
+        outcome: &str,
+    ) -> Result<(), DeliveryError> {
+        let store = self.store()?;
+        for mut round in store.task_rounds(task_id)? {
+            if !super::phase::is_sync_round(&round, sync) || !round.is_open() {
+                continue;
+            }
+            round.closed_at_ms = Some(now_ms());
+            round.outcome = Some(outcome.to_string());
+            store.put_round(&round)?;
+            store.record_event(
+                now_ms(),
+                "round_closed",
+                Some(task_id),
+                None,
+                &super::rounds::round_text(&round),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// A paused restack whose conflicts the stages resolved: Tinto stages
+    /// the files that were conflicted and continues the rebase. It ends, or
+    /// stops on the next commit's conflicts, which open a round of their
+    /// own. A rebase that cannot go on for another reason (a hook, a lock)
+    /// stays paused, with the reason on the step, and is tried again.
+    fn continue_paused_restack(
+        &self,
+        task: &DeliveryTask,
+        mut sync: DeliveryApproval,
+    ) -> Result<(), DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let marked = tasks::unresolved_conflicts(place, &task.worktree);
+        if !marked.is_empty() {
+            return self.restack_stopped(task, sync, marked, "quedaron marcadores de conflicto");
+        }
+        match tasks::continue_restack(place, &task.worktree, &sync.conflicts) {
+            Err(error) => {
+                sync.notice = Some(format!(
+                    "El restack no pudo seguir y sigue en pausa, con los conflictos resueltos: {}",
+                    error.message
+                ));
+                self.save_approval(&sync, "restack_blocked")
+            }
+            Ok(Err(files)) => self.restack_stopped(task, sync, files, "conflictos resueltos"),
+            Ok(Ok(())) => {
+                let name = self.sync_base(task)?;
+                let before = sync.before.clone().unwrap_or_default();
+                let outcome = self.finish_restack(task, &mut sync, &name, &before)?;
+                sync.conflicts.clear();
+                sync.notice = None;
+                sync.outcome = Some(outcome);
+                self.close_sync_rounds(&task.id, &sync, "conflictos resueltos; restack terminado")?;
+                self.save_approval(&sync, "restack_completed")
+            }
+        }
+    }
+
+    /// The paused restack stopped again (or its conflicts are not resolved
+    /// yet): the round of the last stop closes and one opens for `files`.
+    fn restack_stopped(
+        &self,
+        task: &DeliveryTask,
+        mut sync: DeliveryApproval,
+        files: Vec<String>,
+        closed: &str,
+    ) -> Result<(), DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let at = tasks::rebase_head(place, &task.worktree)
+            .map(|commit| short(&commit).to_string())
+            .unwrap_or_default();
+        self.close_sync_rounds(&task.id, &sync, closed)?;
+        let now = now_ms();
+        // The stages of this stop are the ones run after it.
+        sync.executed_at_ms = Some(now);
+        sync.notice = None;
+        sync.outcome = Some(format!(
+            "El restack sigue en pausa, ahora en {at}, con conflictos en: {}. Un job de implementación los resuelve y Tinto sigue el rebase.",
+            files.join(", ")
+        ));
+        sync.conflicts = files.clone();
+        self.save_approval(&sync, "restack_paused")?;
+        let store = self.store()?;
+        super::rounds::open_round(
+            &store,
+            &task.id,
+            super::rounds::NewRound {
+                kind: "sync",
+                short: "conflictos del restack".to_string(),
+                cause: format!("Conflictos del restack en el commit {at}"),
+                items: files,
+                source: Some(format!("{}#{now}", sync.id)),
+            },
+        )?;
+        drop(store);
+        self.notify();
+        Ok(())
+    }
+
+    /// Abandons a restack paused on conflicts, from the user's undo: what
+    /// the worktree held is kept under a recovery ref, the branch goes back
+    /// to where it was and the task stays marked for a restack.
+    fn abort_paused_restack(
+        &self,
+        mut sync: DeliveryApproval,
+    ) -> Result<DeliveryApproval, DeliveryError> {
+        let task = self.task(&sync.task_id)?;
+        let place = Place::of(task.distro.as_deref());
+        let open = self.task_open_merge(&task)?;
+        if !sync.restack
+            || tasks::rebase_head(place, &task.worktree).is_none()
+            || open.as_ref().map(|open| &open.id) != Some(&sync.id)
+        {
+            return Err(DeliveryError::new(
+                "undo_unavailable",
+                "este paso sync no tiene un restack en pausa que abandonar",
+            ));
+        }
+        let kept = tasks::abort_restack(place, &task.worktree, &sync.id)?;
+        sync.advance(StepEvent::Undo)?;
+        sync.outcome = Some(match kept {
+            Some(commit) => format!(
+                "Restack abandonado: la rama volvió a {}. Lo resuelto hasta ahora quedó guardado en refs/tinto/recovery/{} ({}).",
+                sync.before.as_deref().map(short).unwrap_or_default(),
+                sync.id,
+                short(&commit)
+            ),
+            None => format!(
+                "Restack abandonado: la rama volvió a {}.",
+                sync.before.as_deref().map(short).unwrap_or_default()
+            ),
+        });
+        self.close_sync_rounds(&task.id, &sync, "restack abandonado")?;
+        self.save_approval(&sync, "restack_aborted")?;
+        Ok(sync)
     }
 
     fn task_open_merge(
@@ -2576,7 +2782,7 @@ impl DeliveryService {
             .collect();
         let refs: Vec<&DeliveryApproval> = approvals.iter().collect();
         let place = Place::of(task.distro.as_deref());
-        let in_progress = tasks::merge_head(place, &task.worktree).is_some();
+        let in_progress = tasks::sync_in_progress(place, &task.worktree);
         Ok(super::phase::open_merge(&refs, in_progress).cloned())
     }
 
@@ -2620,6 +2826,17 @@ impl DeliveryService {
         };
         let store = self.store()?;
         let jobs = store.task_jobs(task_id)?;
+        let place = Place::of(task.distro.as_deref());
+        if tasks::rebase_head(place, &task.worktree).is_some() {
+            drop(store);
+            let job_refs: Vec<&DeliveryJob> = jobs.iter().collect();
+            // Halfway through a rebase the code is not the branch's yet: the
+            // checks run once it ends, not on each stop.
+            if super::phase::merge_resolved(&[], &job_refs, &sync) {
+                self.continue_paused_restack(&task, sync)?;
+            }
+            return Ok(());
+        }
         let rounds = store.task_rounds(task_id)?;
         let decisions = store.task_decisions(task_id)?;
         let asking = store.approvals()?.into_iter().any(|approval| {
@@ -2683,6 +2900,7 @@ impl DeliveryService {
             single_commit_reason: None,
             comment_url: None,
             resolve_thread: false,
+            record: false,
         };
         if let Err(error) = self.request_approval(request) {
             eprintln!(
@@ -2751,10 +2969,10 @@ impl DeliveryService {
     /// keep it as a parent).
     pub(super) fn check_base_merged(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
         let place = Place::of(task.distro.as_deref());
-        if tasks::merge_head(place, &task.worktree).is_some() {
+        if tasks::sync_in_progress(place, &task.worktree) {
             return Err(DeliveryError::new(
                 "merge_in_progress",
-                "hay un merge en curso en el worktree: concluye con el paso commit antes de publicar",
+                "hay un merge o un restack en curso en el worktree: no se publica hasta que termine (el merge con el paso commit; el restack cuando se resuelven sus conflictos)",
             ));
         }
         let synced = self
@@ -2886,7 +3104,35 @@ impl DeliveryService {
         let lease = published
             .as_deref()
             .filter(|tip| restacked && !tasks::on_branch(place, &task.worktree, tip));
-        let upstream = tasks::push_branch(place, &task.worktree, &task.branch, lease)?;
+        let upstream = tasks::push_branch(place, &task.worktree, &task.branch, lease).map_err(
+            |error| {
+                // Refused because someone else published the branch: say so,
+                // instead of git's rejection, and overwrite nothing.
+                let now = tasks::remote_tip(place, &task.repo, &task.branch)
+                    .ok()
+                    .flatten();
+                let moved = match (now.as_deref(), lease) {
+                    (Some(now), Some(published)) => now != published,
+                    (Some(now), None) => {
+                        now != head && !tasks::is_ancestor(place, &task.worktree, now, &head)
+                    }
+                    (None, _) => false,
+                };
+                match (moved, now) {
+                    (true, Some(now)) => DeliveryError::new(
+                        "remote_moved",
+                        format!(
+                            "No se publicó (remote_moved): la rama remota {} está en {}, que no es lo que Tinto publicó ({}) ni está en la rama local: alguien la publicó fuera de Tinto. No se sobrescribió nada. Revisa qué trae {} y decide con el usuario si se integra en la rama o se reemplaza; luego vuelve a pedir el push.",
+                            task.branch,
+                            short(&now),
+                            published.as_deref().map(short).unwrap_or("nada"),
+                            short(&now)
+                        ),
+                    ),
+                    _ => error,
+                }
+            },
+        )?;
         Ok(match lease {
             Some(_) => {
                 format!("Publicado en {upstream} (rama restackeada, con --force-with-lease){added}")
@@ -2908,17 +3154,37 @@ impl DeliveryService {
         let place = Place::of(task.distro.as_deref());
         let before = tasks::head(place, &task.worktree)?;
         let onto = approval.merge_head.clone().unwrap_or_default();
-        if let Err(files) = tasks::restack(place, &task.worktree, &onto, from)? {
-            return Err(DeliveryError::new(
-                "restack_conflicts",
-                format!(
-                    "El restack sobre {name} tiene conflictos en: {}. La rama quedó como estaba. Si {} no es el último commit del paquete fusionado que la rama trae, pide el sync de nuevo con restack_from en el bueno; si lo es, los conflictos son reales.",
-                    files.join(", "),
-                    short(from)
-                ),
-            ));
-        }
         approval.before = Some(before.clone());
+        if let Err(files) = tasks::restack(place, &task.worktree, &onto, from)? {
+            let outcome = format!(
+                "El restack sobre {name} ({}) se detuvo en {} con conflictos en: {}. El rebase queda en pausa: un job de implementación los resuelve y Tinto sigue el rebase él mismo; puede pararse otra vez en los commits siguientes. Deshacer el paso lo abandona y devuelve la rama a {}.",
+                short(&onto),
+                tasks::rebase_head(place, &task.worktree)
+                    .map(|commit| short(&commit).to_string())
+                    .unwrap_or_default(),
+                files.join(", "),
+                short(&before)
+            );
+            approval.conflicts = files;
+            approval.restack = true;
+            return Ok(outcome);
+        }
+        approval.restack = true;
+        self.finish_restack(task, approval, name, &before)
+    }
+
+    /// The end of a restack, at once or once its last conflicts were
+    /// resolved: the step records the branch's own commits and the task is
+    /// no longer marked for a restack.
+    fn finish_restack(
+        &self,
+        task: &DeliveryTask,
+        approval: &mut DeliveryApproval,
+        name: &str,
+        before: &str,
+    ) -> Result<String, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let onto = approval.merge_head.clone().unwrap_or_default();
         approval.created = tasks::git(
             place,
             &task.worktree,
@@ -2931,17 +3197,84 @@ impl DeliveryService {
         done.restack_from = None;
         done.updated_at_ms = now_ms();
         self.store()?.put_task(&done)?;
-        let content = if self.same_tree(&task.id, Some(&before))? {
+        let content = if self.same_tree(&task.id, Some(before))? {
             "el contenido no cambió: no hace falta repetir las comprobaciones"
         } else {
             "el contenido cambió: Tinto repite las comprobaciones"
         };
         Ok(format!(
-            "Rama rebasada sobre {name} ({}) sin los commits de la base fusionada ({}): {} commit(s) propios; {content}. Publícala con el paso push, que reemplaza la rama remota con --force-with-lease.{}",
+            "Rama rebasada sobre {name} ({}) sin los commits de la base fusionada: {} commit(s) propios; {content}. Publícala con el paso push, que reemplaza la rama remota con --force-with-lease.{}",
             short(&onto),
-            short(from),
             approval.created.len(),
             submodules_note(place, &task.worktree)
+        ))
+    }
+
+    /// The branch's own commits (after its base) that no Tinto step made or
+    /// recorded, oldest first, with their subjects.
+    fn unrecorded_commits(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Vec<(String, String)>, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let base = self.sync_base(task)?;
+        let (_, tip) = tasks::base_tip(place, &task.worktree, &base, false)?;
+        let known: Vec<String> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|step| {
+                step.task_id == task.id
+                    && matches!(step.rung, DeliveryRung::Commit | DeliveryRung::Sync)
+                    && step.status.was_done()
+            })
+            .flat_map(|step| created_commits(&step))
+            .collect();
+        let listed = tasks::git(
+            place,
+            &task.worktree,
+            &[
+                "log",
+                "--reverse",
+                "--first-parent",
+                "--format=%H %s",
+                &format!("{tip}..HEAD"),
+            ],
+        )?;
+        Ok(listed
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(sha, _)| !known.iter().any(|known| known == sha))
+            .map(|(sha, subject)| (sha.to_string(), subject.to_string()))
+            .collect())
+    }
+
+    /// Records the commits a `record` step listed as the task's, while the
+    /// branch is still where the user saw it.
+    fn run_record(
+        &self,
+        task: &DeliveryTask,
+        approval: &mut DeliveryApproval,
+    ) -> Result<String, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let now = tasks::head(place, &task.worktree)?;
+        if approval.head.as_deref() != Some(now.as_str()) {
+            return Err(DeliveryError::new(
+                "head_moved",
+                format!(
+                    "No se registró nada (head_moved): la rama está en {}, no donde estaba cuando se listaron sus commits. Pide el registro de nuevo.",
+                    short(&now)
+                ),
+            ));
+        }
+        approval.created = self
+            .unrecorded_commits(task)?
+            .into_iter()
+            .map(|(sha, _)| sha)
+            .collect();
+        Ok(format!(
+            "Registrados como de la tarea: {}. Tinto no creó ni movió nada; sus comprobaciones, revisión y QA no se dan por hechas.",
+            shorts(&approval.created)
         ))
     }
 
@@ -2963,12 +3296,45 @@ impl DeliveryService {
             return Ok(false);
         }
         let place = Place::of(task.distro.as_deref());
-        // A worktree git cannot read says nothing about the commits.
+        // A worktree git cannot read says nothing about the commits, nor
+        // does a restack halfway (HEAD is detached on its replay).
         if tasks::head(place, &task.worktree).is_err()
+            || tasks::rebase_head(place, &task.worktree).is_some()
             || created
                 .iter()
                 .all(|commit| tasks::on_branch(place, &task.worktree, commit))
         {
+            return Ok(false);
+        }
+        // Tinto's own restack rewrote them, after the step: the step stands
+        // on the commits the restack left, while the branch has them.
+        let carried = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .rev()
+            .find(|sync| {
+                sync.task_id == task.id
+                    && sync.rung == DeliveryRung::Sync
+                    && sync.restack
+                    && sync.status == DeliveryApprovalStatus::Executed
+                    && sync.executed_at_ms >= approval.executed_at_ms
+            })
+            .filter(|sync| {
+                !sync.created.is_empty()
+                    && sync
+                        .created
+                        .iter()
+                        .all(|commit| tasks::on_branch(place, &task.worktree, commit))
+                    && sync.before.as_deref().is_some_and(|before| {
+                        created
+                            .iter()
+                            .all(|commit| tasks::is_ancestor(place, &task.worktree, commit, before))
+                    })
+            });
+        if let Some(sync) = carried {
+            approval.created = sync.created;
+            self.save_approval(&approval, "commit_rewritten")?;
             return Ok(false);
         }
         // The commits were put right outside Tinto with the same content (a
@@ -2988,7 +3354,7 @@ impl DeliveryService {
         let clean = tasks::worktree_state(place, &task.worktree, &task.base_commit)
             .is_ok_and(|state| !state.dirty);
         if clean
-            && tasks::merge_head(place, &task.worktree).is_none()
+            && !tasks::sync_in_progress(place, &task.worktree)
             && tasks::published(place, &task.worktree, &head)
         {
             approval.created = vec![head];
@@ -3194,7 +3560,7 @@ impl DeliveryService {
             return Ok(());
         };
         let published = !round.after_push || (state.has_upstream && state.unpublished == 0);
-        if state.dirty || !published || tasks::merge_head(place, &task.worktree).is_some() {
+        if state.dirty || !published || tasks::sync_in_progress(place, &task.worktree) {
             return Ok(());
         }
         let store = self.store()?;

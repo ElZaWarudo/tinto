@@ -2977,6 +2977,7 @@ function TaskDetail({
       <StepChecks task={task} approvals={approvals} pr={pr} />
 
       <CommitStep approvals={approvals} />
+      <PausedRestack approvals={approvals} />
 
       {step?.rung === "commit" && requesting && (
         <CommitPlanForm task={task} onClose={() => setRequesting(false)} />
@@ -3642,6 +3643,36 @@ function CommitStep({ approvals }: { approvals: DeliveryApproval[] }) {
   );
 }
 
+/** A restack paused on conflicts: Tinto continues it once they are
+ *  resolved, and the user can abandon it, keeping what was resolved. */
+function PausedRestack({ approvals }: { approvals: DeliveryApproval[] }) {
+  const sync = latestApproval(approvals, "sync");
+  const paused =
+    sync?.restack &&
+    sync.status === "executed" &&
+    (sync.conflicts?.length ?? 0) > 0 &&
+    !(sync.created?.length ?? 0);
+  if (!sync || !paused) return null;
+  return (
+    <div className="delivery-commit-step" role="group" aria-label="Restack en pausa">
+      {sync.notice && <p className="delivery-job__note">{sync.notice}</p>}
+      <ActionButton
+        title="La rama vuelve a donde estaba; lo resuelto se guarda en una referencia de recuperación."
+        onAction={async () => {
+          const ok = await confirm(
+            "La rama volverá a donde estaba antes del restack. Lo resuelto hasta ahora queda guardado en una referencia de recuperación, y la tarea sigue pendiente de restack.",
+            { title: "Abandonar el restack", okLabel: "Abandonar" },
+          );
+          if (!ok) return false;
+          await undoDeliveryCommit(sync.id);
+        }}
+      >
+        Abandonar el restack
+      </ActionButton>
+    </div>
+  );
+}
+
 /** The latest step, when the user rejected it and nothing was asked since. */
 function rejectedStep(approvals: DeliveryApproval[]): DeliveryApproval | null {
   const latest = approvals
@@ -4160,7 +4191,8 @@ function ApprovalBanner({
     reviewers.length === 0;
   // A commit, PR or merge step's texts are the user's to edit before approving.
   const planned = approval.rung === "commit" && (approval.commits ?? []).length > 0;
-  const editsText = pending && ["commit", "pr", "merge"].includes(approval.rung);
+  const editsText =
+    pending && !approval.record && ["commit", "pr", "merge"].includes(approval.rung);
   const [title, setTitle] = useState(approval.title);
   const [body, setBody] = useState(approval.body);
   const [messages, setMessages] = useState<string[] | undefined>(undefined);
@@ -4185,8 +4217,9 @@ function ApprovalBanner({
       live = false;
     };
   }, [choosesReviewers, task.id]);
-  const consequence =
-    approval.rung === "commit"
+  const consequence = approval.record
+    ? `Al aprobar, Tinto toma estos commits, que ya están en ${task.branch}, como los de la tarea. No crea ni mueve nada, y sus comprobaciones, revisión y QA no se dan por hechas.`
+    : approval.rung === "commit"
       ? `Al aprobar, Tinto crea ${(approval.commits?.length ?? 1) > 1 ? "estos commits, en este orden," : "el commit"} en ${task.branch} con estos textos exactos y sin añadir firmas. Si uno falla, se detiene. No publica nada: el push se aprueba aparte, y hasta entonces puedes deshacerlo.`
       : approval.rung === "sync"
         ? `Al aprobar, Tinto trae la base y la fusiona en ${task.branch} con este mensaje: un commit de merge, sin publicar. Si hay conflictos, el merge queda en curso, un job de implementación los resuelve y el paso commit lo concluye.`
@@ -4253,6 +4286,14 @@ function ApprovalBanner({
             onChange={(event) => setBody(event.target.value)}
           />
         </div>
+      ) : approval.record ? (
+        <ol className="delivery-commit-plan" aria-label="Commits a registrar">
+          {approval.body.split("\n").map((line) => (
+            <li key={line}>
+              <code>{line}</code>
+            </li>
+          ))}
+        </ol>
       ) : approval.rung === "commit" ? (
         <>
           <CommitPlanView

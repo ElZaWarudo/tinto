@@ -1558,6 +1558,7 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
 
     assert_eq!(
@@ -3258,6 +3259,7 @@ fn a_split_issue_moves_in_jira_once_and_closes_with_its_last_package() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
     // A middle package's ladder ends at its merge; the last climbs the whole
     // one, which the phase leaves unsaid.
@@ -3346,6 +3348,7 @@ fn a_package_merges_after_the_one_it_builds_on_into_that_ones_base() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
     // Its PR goes into package 1's branch: merging it now would land there.
     let refused = h.service.request_approval(merge.clone()).unwrap_err();
@@ -4114,6 +4117,7 @@ fn commit_plan(
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     }
 }
 
@@ -4399,6 +4403,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             jira_statuses: Vec::new(),
             comment_url: None,
             resolve_thread: false,
+            record: false,
         })
         .unwrap();
     let mut done = h.service.decide_approval(&asked.id, true, None).unwrap();
@@ -4472,6 +4477,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             jira_statuses: Vec::new(),
             comment_url: None,
             resolve_thread: false,
+            record: false,
         })
         .unwrap_err();
     assert_eq!(push.category, "commit_missing");
@@ -4651,6 +4657,7 @@ fn step(task: &DeliveryTask, rung: DeliveryRung, title: &str) -> NewApproval {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     }
 }
 
@@ -4860,6 +4867,7 @@ fn a_commit_whose_parents_alone_were_fixed_outside_tinto_stays_done() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     });
     assert!(push.is_ok(), "{push:?}");
 
@@ -5303,6 +5311,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
     assert_eq!(
         h.service
@@ -5623,6 +5632,7 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
     let commit = h
         .service
@@ -5775,6 +5785,7 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
     let next = h.service.request_approval(jira(None)).unwrap();
     assert_eq!(
@@ -5959,6 +5970,7 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
     let refused = h.service.request_approval(merge()).unwrap_err();
@@ -6180,6 +6192,7 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         jira_statuses: statuses,
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
 
     // Without Jira in Tinto the coordinator does it, and must say what it did.
@@ -9651,6 +9664,7 @@ fn a_drifted_push_clears_once_the_remote_branch_has_what_tinto_published() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
     };
     let commit = h
         .service
@@ -12625,6 +12639,261 @@ fn a_task_on_another_tasks_branch_follows_it_and_is_restacked_when_it_merges_squ
     assert_ne!(remote, published);
 }
 
+/// A task on another task's branch, with `commits` of its own (file names,
+/// one commit each), whose base then merged squashed into main with
+/// `main_files` beside it: the task is marked for a restack.
+fn squashed_under(
+    h: &Harness,
+    key: &str,
+    commits: &[&str],
+    main_files: &[(&str, &str)],
+) -> DeliveryTask {
+    let first = h.task(&format!("{key}-A"));
+    write_files(&first, &["one.txt"]);
+    commit_outside(&first, "one");
+    let task = task_on(h, key, &first);
+    for name in commits {
+        write_files(&task, &[name]);
+        commit_outside(&task, name);
+    }
+    let repo = h.repo.path();
+    std::fs::write(repo.join("one.txt"), "one.txt\n").unwrap();
+    for (name, text) in main_files {
+        std::fs::write(repo.join(name), text).unwrap();
+    }
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "first (#1)"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    let mut merge = executed_step(&first.id, "merge");
+    merge.merge_method = Some("squash".into());
+    h.service.store().unwrap().put_approval(&merge).unwrap();
+    h.service.retarget_packages().unwrap();
+    let task = h.service.task(&task.id).unwrap();
+    assert!(task.restack_from.is_some());
+    task
+}
+
+#[test]
+fn a_restack_that_stops_on_conflicts_pauses_and_tinto_continues_it_or_abandons_it() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    // Its 2nd and 3rd of 3 commits conflict with what main got meanwhile.
+    let task = squashed_under(
+        &h,
+        "RC-1",
+        &["two.txt", "notes.txt", "notes2.txt"],
+        &[
+            ("notes.txt", "main's notes\n"),
+            ("notes2.txt", "main's notes 2\n"),
+        ],
+    );
+    let tip = in_worktree(&task, &["rev-parse", "HEAD"]);
+    let sync = |title: &str| {
+        let asked = h
+            .service
+            .request_approval(step(&task, DeliveryRung::Sync, title))
+            .unwrap();
+        h.service.decide_approval(&asked.id, true, None).unwrap()
+    };
+    let paused = sync("Restack");
+    assert_eq!(
+        paused.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        paused.outcome
+    );
+    assert_eq!(paused.conflicts, ["notes.txt"]);
+    let place = super::tasks::Place::Native;
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_some());
+    let open_sync_rounds = || {
+        h.service
+            .store()
+            .unwrap()
+            .task_rounds(&task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|round| round.kind == "sync" && round.is_open())
+            .count()
+    };
+    assert_eq!(open_sync_rounds(), 1);
+    // Nothing is committed or published halfway.
+    for (rung, category) in [
+        (DeliveryRung::Commit, "restack_in_progress"),
+        (DeliveryRung::Push, "merge_in_progress"),
+    ] {
+        let error = h
+            .service
+            .request_approval(step(&task, rung, "x"))
+            .unwrap_err();
+        assert_eq!(error.category, category, "{error}");
+    }
+
+    // The job is told which side is which; it only edits the file, and
+    // Tinto continues once implementation and review passed.
+    let resolve = |file: &str| {
+        let job = h.dispatch(&task, "implementation", "events=codex-ok");
+        let conflicts = job.merge_conflicts.clone().unwrap();
+        assert_eq!(conflicts.files, [file]);
+        assert!(conflicts.replaying.unwrap().ends_with(file), "replaying");
+        std::fs::write(task.worktree.join(file), format!("{file} from both\n")).unwrap();
+        h.wait(&job.id);
+        h.wait(&h.dispatch(&task, "review", "events=codex-ok").id);
+    };
+    resolve("notes.txt");
+    // It stopped again on the next commit: a round of its own.
+    let again = eventually(|| {
+        let sync = h.service.approval(&paused.id).unwrap();
+        (sync.conflicts == ["notes2.txt"]).then_some(sync)
+    });
+    assert!(again.outcome.unwrap().contains("notes2.txt"));
+    assert_eq!(open_sync_rounds(), 1);
+    let resolved_once = in_worktree(&task, &["show", "HEAD:notes.txt"]);
+    assert_eq!(resolved_once, "notes.txt from both");
+
+    // Abandoning it keeps the work and puts the branch back.
+    std::fs::write(task.worktree.join("notes2.txt"), "half done\n").unwrap();
+    let undone = h.service.undo_commit(&paused.id).unwrap();
+    assert_eq!(undone.status, DeliveryApprovalStatus::Undone);
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_none());
+    assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), tip);
+    let kept = format!("refs/tinto/recovery/{}", paused.id);
+    assert_eq!(
+        in_worktree(&task, &["show", &format!("{kept}:notes2.txt")]),
+        "half done"
+    );
+    assert_eq!(open_sync_rounds(), 0);
+    assert!(h.service.task(&task.id).unwrap().restack_from.is_some());
+
+    // Asked again, both stops are resolved and the restack ends.
+    let paused = sync("Restack again");
+    assert_eq!(paused.conflicts, ["notes.txt"]);
+    resolve("notes.txt");
+    eventually(|| {
+        (h.service.approval(&paused.id).unwrap().conflicts == ["notes2.txt"]).then_some(())
+    });
+    resolve("notes2.txt");
+    let done = eventually(|| {
+        let sync = h.service.approval(&paused.id).unwrap();
+        (!sync.created.is_empty()).then_some(sync)
+    });
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_none());
+    assert_eq!(done.created.len(), 3, "{:?}", done.outcome);
+    assert_eq!(
+        in_worktree(&task, &["rev-parse", "HEAD~3"]),
+        in_worktree(&task, &["rev-parse", "origin/main"])
+    );
+    assert_eq!(h.service.task(&task.id).unwrap().restack_from, None);
+    assert_eq!(open_sync_rounds(), 0);
+}
+
+#[test]
+fn a_commit_step_survives_tintos_own_restack_and_the_push_goes_on() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    // The base brings a change of its own, so the restacked tree differs.
+    let task = squashed_under(&h, "RC-3", &[], &[("other.txt", "main\n")]);
+    write_files(&task, &["own.txt"]);
+    let commit = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Commit, "Add own"))
+        .unwrap();
+    let commit = h.service.decide_approval(&commit.id, true, None).unwrap();
+    let asked = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Sync, "Restack"))
+        .unwrap();
+    let restack = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert!(restack.conflicts.is_empty(), "{:?}", restack.outcome);
+    assert!(h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+        .is_ok());
+    let commit = h.service.approval(&commit.id).unwrap();
+    assert_eq!(commit.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(commit.created, restack.created);
+}
+
+#[test]
+fn history_rewritten_outside_tinto_is_recorded_once_the_user_saw_it() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let task = h.task("RE-1");
+    write_files(&task, &["a.txt"]);
+    let commit = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Commit, "Add a"))
+        .unwrap();
+    h.service.decide_approval(&commit.id, true, None).unwrap();
+    // Amended by hand with more content: Tinto's commit is gone.
+    write_files(&task, &["b.txt"]);
+    git(&task.worktree, &["add", "--all"]);
+    git(
+        &task.worktree,
+        &["commit", "-q", "--amend", "-m", "Add a and b"],
+    );
+    let push = |h: &Harness| {
+        h.service
+            .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+    };
+    assert_eq!(push(&h).unwrap_err().category, "commit_missing");
+
+    let mut record = step(&task, DeliveryRung::Commit, "");
+    record.record = true;
+    let asked = h.service.request_approval(record).unwrap();
+    assert!(asked.body.ends_with("Add a and b"), "{}", asked.body);
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert_eq!(done.created, [in_worktree(&task, &["rev-parse", "HEAD"])]);
+    assert!(push(&h).is_ok());
+    // Nothing left to record.
+    let mut again = step(&task, DeliveryRung::Commit, "");
+    again.record = true;
+    assert_eq!(
+        h.service.request_approval(again).unwrap_err().category,
+        "nothing_to_record"
+    );
+}
+
+#[test]
+fn a_push_stops_when_someone_else_published_the_branch() {
+    let h = harness();
+    let origin = bare_origin(&h);
+    let task = h.task("RM-1");
+    write_files(&task, &["a.txt"]);
+    commit_and_push(&h, &task, "Add a");
+    // Someone publishes a commit the local branch does not have.
+    write_files(&task, &["theirs.txt"]);
+    commit_outside(&task, "theirs");
+    git(&task.worktree, &["push", "-q", "origin", &task.branch]);
+    let theirs = in_worktree(&task, &["rev-parse", "HEAD"]);
+    git(&task.worktree, &["reset", "-q", "--hard", "HEAD~1"]);
+    write_files(&task, &["b.txt"]);
+    let commit = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Commit, "Add b"))
+        .unwrap();
+    h.service.decide_approval(&commit.id, true, None).unwrap();
+    let asked = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    let push = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(push.status, DeliveryApprovalStatus::Failed);
+    assert!(push.outcome.unwrap().contains("remote_moved"));
+    let remote = super::tasks::git(
+        super::tasks::Place::Native,
+        origin.path(),
+        &["rev-parse", &format!("refs/heads/{}", task.branch)],
+    )
+    .unwrap();
+    assert_eq!(remote, theirs);
+}
+
 #[test]
 fn merging_a_pr_others_go_into_keeps_its_branch_until_they_point_at_the_merge_target() {
     let h = harness();
@@ -12833,6 +13102,7 @@ fn past_the_brainstorm_tinto_asks_the_push_and_jira_steps_itself() {
             jira_statuses: Vec::new(),
             comment_url: None,
             resolve_thread: false,
+            record: false,
         })
         .unwrap();
     h.service.decide_approval(&commit.id, true, None).unwrap();
