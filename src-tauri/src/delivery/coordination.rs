@@ -984,6 +984,26 @@ impl DeliveryService {
         &self,
         request: NewApproval,
     ) -> Result<DeliveryApproval, DeliveryError> {
+        // Checked and saved under the task's lock: two steps asked at once
+        // (Tinto's own sync and the coordinator's) cannot both find none
+        // open. One Tinto takes on its own runs after, outside the lock.
+        let (approval, runs_now) = {
+            let lock = super::service::keyed_lock(&self.inner.asking, &request.task_id);
+            let _asking = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.save_requested(request)?
+        };
+        if runs_now {
+            return self.decide_approval(&approval.id, true, None);
+        }
+        Ok(approval)
+    }
+
+    /// Checks a requested step and saves it; says whether Tinto takes it on
+    /// its own now.
+    fn save_requested(
+        &self,
+        request: NewApproval,
+    ) -> Result<(DeliveryApproval, bool), DeliveryError> {
         let task = self.task(&request.task_id)?;
         let place = Place::of(task.distro.as_deref());
         let planned = request.rung == DeliveryRung::Commit && !request.commits.is_empty();
@@ -1450,10 +1470,8 @@ impl DeliveryService {
         // A restack rewrites the branch's history: it waits like a commit.
         let unattended = (approval.rung == DeliveryRung::Sync && task.restack_from.is_none())
             || self.unattended(&task)?;
-        if unattended && self.step_allowed(&task, &approval)? {
-            return self.decide_approval(&approval.id, true, None);
-        }
-        Ok(approval)
+        let runs_now = unattended && self.step_allowed(&task, &approval)?;
+        Ok((approval, runs_now))
     }
 
     /// Whether the repo lets Tinto take this step on its own past the
@@ -1651,6 +1669,9 @@ impl DeliveryService {
             DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
         ) {
             let task = self.task(&approval.task_id)?;
+            // One step at a time runs git in the worktree.
+            let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
+            let git_work = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let executed = match approval.rung {
                 DeliveryRung::Commit if approval.record => self.run_record(&task, &mut approval),
                 DeliveryRung::Commit => run_commit_plan(&task, &mut approval),
@@ -1661,6 +1682,7 @@ impl DeliveryService {
                 )),
                 _ => self.run_push(&task, &mut approval),
             };
+            drop(git_work);
             approval.executed_at_ms = Some(now_ms());
             match executed {
                 Ok(outcome) => {
@@ -2664,7 +2686,16 @@ impl DeliveryService {
         task: &DeliveryTask,
         mut sync: DeliveryApproval,
     ) -> Result<(), DeliveryError> {
+        let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
+        let _git_work = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Another reader may have continued this stop meanwhile.
         let place = Place::of(task.distro.as_deref());
+        let now = self.approval(&sync.id)?;
+        if now.executed_at_ms != sync.executed_at_ms
+            || tasks::rebase_head(place, &task.worktree).is_none()
+        {
+            return Ok(());
+        }
         let marked = tasks::unresolved_conflicts(place, &task.worktree);
         if !marked.is_empty() {
             return self.restack_stopped(task, sync, marked, "quedaron marcadores de conflicto");
@@ -2740,6 +2771,8 @@ impl DeliveryService {
         mut sync: DeliveryApproval,
     ) -> Result<DeliveryApproval, DeliveryError> {
         let task = self.task(&sync.task_id)?;
+        let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
+        let _git_work = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let place = Place::of(task.distro.as_deref());
         let open = self.task_open_merge(&task)?;
         if !sync.restack
