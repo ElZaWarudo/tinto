@@ -8027,6 +8027,133 @@ fn a_reply_comes_with_the_users_style_and_is_refused_with_a_label_or_an_unpushed
         .starts_with("https://github.com/o/r/pull/299/commits/"));
 }
 
+/// AIRInstitute/agentos#363: of a reviewer's three comments one got a reply
+/// at once; the other two waited 26 hours for their fix, and the PR looked
+/// ready for review meanwhile. (Resolving still waits for the pushed fix:
+/// `a_reply_comes_with_the_users_style_and_is_refused_with_a_label_or_an_unpushed_fix`.)
+#[test]
+fn a_pr_goes_back_to_review_only_once_every_review_thread_has_a_reply() {
+    let h = harness();
+    github_origin(&h);
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("AGOS-580");
+    // The fix, committed and not pushed yet.
+    std::fs::write(worktree.join("README.md"), "fixed\n").unwrap();
+    git(&worktree, &["commit", "-qam", "fix"]);
+    let thread = |id: u64| {
+        json!({"id": id, "path": "README.md", "line": id, "position": 1,
+               "html_url": format!("https://github.com/o/r/pull/299#discussion_r{id}"),
+               "user": {"login": "rev"}, "created_at": "2026-11-05T11:50:00Z",
+               "body": format!("Change {id}"), "diff_hunk": "@@ -1,1 +1,1 @@\n+base"})
+    };
+    let comments = json!([thread(1), thread(2), thread(3),
+        {"id": 4, "in_reply_to_id": 1, "user": {"login": "me"}, "body": "The name stays."}]);
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "author": {"login": "me"}, "reviewDecision": "CHANGES_REQUESTED",
+               "reviewComments": comments}),
+        json!([]),
+    );
+    *github.review_comments.lock().unwrap() = comments;
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/299").unwrap();
+    h.service
+        .store()
+        .unwrap()
+        .put_pr(&super::prs::DeliveryPr::linked(&task_id, &reference))
+        .unwrap();
+    h.service.refresh_pr(&task_id, Duration::ZERO).unwrap();
+
+    // The changes asked open a round, and read_pr names what has no reply.
+    let read = coordinator.call("read_pr", json!({"task_id": task_id}));
+    let unanswered: Vec<&str> = read["structuredContent"]["unanswered_threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|thread| thread["url"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        unanswered,
+        [
+            "https://github.com/o/r/pull/299#discussion_r2",
+            "https://github.com/o/r/pull/299#discussion_r3"
+        ],
+        "{read}"
+    );
+    let phase = h.service.overview().unwrap().phases[&task_id].clone();
+    assert_eq!(phase.round.unwrap().round.kind, "pr");
+    assert_eq!(phase.threads_unanswered, 2);
+    // Opened days ago: wait_run hears of each thread once.
+    let alerts = || {
+        h.service
+            .coordinator_events(&coordinator.run_id, 0)
+            .unwrap()
+            .0
+            .iter()
+            .filter(|event| {
+                event["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("sigue sin respuesta"))
+            })
+            .count()
+    };
+    assert_eq!(alerts(), 2);
+    h.service.refresh_pr(&task_id, Duration::ZERO).unwrap();
+    assert_eq!(alerts(), 2);
+
+    // Sending it back to review is refused, naming each thread.
+    let refused = error_text(&coordinator.write(
+        "request_approval",
+        json!({"task_id": task_id, "rung": "push", "title": "Publicar"}),
+    ));
+    assert!(refused.contains("threads_unanswered"), "{refused}");
+    for id in [2, 3] {
+        assert!(refused.contains(&format!("discussion_r{id} (rev en README.md:{id})")));
+    }
+    let refused = h
+        .service
+        .resolve_round(&task_id, "Respondido en el PR", None, "coordinator")
+        .unwrap_err();
+    assert_eq!(refused.category, "threads_unanswered");
+
+    // An interim reply goes out before the fix is pushed and answers it.
+    let reply = coordinator.write(
+        "request_approval",
+        json!({"task_id": task_id, "rung": "pr_reply",
+               "comment_url": "https://github.com/o/r/pull/299#discussion_r2",
+               "body": "The parser will reject empty names; the fix comes with the next push.",
+               "resolve_thread": false}),
+    );
+    let reply_id = reply["structuredContent"]["id"].as_str().unwrap();
+    let posted = h.service.decide_approval(reply_id, true, None).unwrap();
+    assert_eq!(posted.status, DeliveryApprovalStatus::Executed);
+    let pr = h.service.task_pr(&task_id).unwrap().unwrap();
+    assert_eq!(pr.unanswered_threads.len(), 1);
+    assert_eq!(pr.unanswered_threads[0].id, 3);
+
+    // A reply posted on GitHub outside Tinto counts once read.
+    github
+        .review_comments
+        .lock()
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": 5, "in_reply_to_id": 3, "user": {"login": "me"}, "body": "On it."}));
+    let on_github = github.review_comments.lock().unwrap().clone();
+    github.snapshot.lock().unwrap()["reviewComments"] = on_github;
+    let asked = coordinator.write(
+        "request_approval",
+        json!({"task_id": task_id, "rung": "push", "title": "Publicar"}),
+    );
+    assert_eq!(asked["isError"], serde_json::Value::Null, "{asked}");
+    assert!(h
+        .service
+        .task_pr(&task_id)
+        .unwrap()
+        .unwrap()
+        .unanswered_threads
+        .is_empty());
+}
+
 #[test]
 fn a_decision_shows_the_review_comment_and_the_code_it_is_about() {
     let h = harness();
@@ -10073,6 +10200,7 @@ fn changes_asked_open_their_round_as_they_arrive_even_with_the_push_drifted() {
         .resolve_round(
             &task.id,
             "Respondido en el PR: el nombre se queda",
+            None,
             "coordinator",
         )
         .unwrap();

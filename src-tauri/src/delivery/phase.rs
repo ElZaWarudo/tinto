@@ -257,6 +257,15 @@ pub struct DeliveryTaskPhase {
     /// next_stage is implementation when no round says so.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failing_checks: Vec<String>,
+    /// Review threads of its PR with no reply yet (read_pr
+    /// `unanswered_threads` names them): the PR cannot go back to review
+    /// until each has one.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub threads_unanswered: usize,
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 /// A task's open round and where it is in it.
@@ -961,7 +970,14 @@ pub fn pr_wait(pr: &DeliveryPr, replies: &[Option<&str>], review_optional: bool)
     if trouble {
         return PrWait::Trouble;
     }
-    let answer = logins(|state| state.awaits_answer());
+    let mut answer = logins(|state| state.awaits_answer());
+    // A review thread without a reply waits on one, whatever the reviewer's
+    // state says.
+    for thread in pr.unanswered() {
+        if !answer.contains(&thread.author) {
+            answer.push(thread.author.clone());
+        }
+    }
     if !answer.is_empty() {
         return PrWait::Answer { reviewers: answer };
     }
@@ -1012,6 +1028,11 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         round: round.clone(),
         at: round_at(&phase),
     });
+    phase.threads_unanswered = facts
+        .prs
+        .iter()
+        .find(|pr| pr.task_id == task.id)
+        .map_or(0, |pr| pr.unanswered().count());
     phase
 }
 
@@ -1113,6 +1134,7 @@ fn phase_in_round(
         round: None,
         warning: warning.clone(),
         failing_checks: failing.clone(),
+        threads_unanswered: 0,
     };
 
     let decisions = facts

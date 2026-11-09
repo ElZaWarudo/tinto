@@ -49,6 +49,7 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "settings_approved",
     "settings_rejected",
     "pr_changed",
+    "thread_unanswered",
     "package_retargeted",
     "task_removed",
     "task_archived",
@@ -661,6 +662,9 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         "settings_approved" => "el usuario aprobó un cambio de ajustes".to_string(),
         "settings_rejected" => "el usuario rechazó un cambio de ajustes".to_string(),
         "pr_changed" => format!("el PR cambió: {detail}"),
+        "thread_unanswered" => format!(
+            "un hilo de revisión sigue sin respuesta: {detail}. Si su arreglo necesita más rondas, pide con pr_reply una respuesta breve sin resolve_thread que diga qué va a cambiar"
+        ),
         "package_retargeted" => format!("Tinto cambió la base de su PR: {detail}"),
         "task_removed" => "el usuario eliminó la tarea".to_string(),
         "task_archived" => "el usuario archivó la tarea".to_string(),

@@ -1252,8 +1252,17 @@ impl DeliveryService {
                     "los commits que hizo Tinto ya no están en la rama; hay que volver a preparar el commit",
                 ));
             }
-            DeliveryRung::Push => self.check_base_merged(&task)?,
-            DeliveryRung::Pr => self.package_pr_refusal(&task)?,
+            DeliveryRung::Push => {
+                // New commits on an open PR send it back to its reviewers.
+                self.check_threads_answered(&task.id, "el push devuelve el PR a revisión")?;
+                self.check_base_merged(&task)?
+            }
+            DeliveryRung::Pr => {
+                self.package_pr_refusal(&task)?;
+                // On an open PR the step only updates its text, which sends
+                // it back to review too.
+                self.check_threads_answered(&task.id, "el paso pr actualiza el PR abierto")?
+            }
             DeliveryRung::Sync => {
                 // A sync runs as it is asked; a restack waits for the user,
                 // who may reject it.
