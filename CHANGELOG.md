@@ -4,6 +4,19 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.2.3] - 2026-11-09
+
+### Features
+
+- **delivery:** show the PR's unanswered review threads in its panel
+- **delivery:** hold the PR back from review while a review thread has no reply
+- **delivery:** pair a phone through a blind relay to follow and act on batches
+- **agents:** send diff line notes to an agent and show who needs you
+
+### Fixes
+
+- **delivery:** keep coordinator results under the size the client reads
+
 ## [1.2.2] - 2026-11-05
 
 ### Features
