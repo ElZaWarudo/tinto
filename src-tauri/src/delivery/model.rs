@@ -1569,7 +1569,8 @@ pub struct DeliveryRepoSettings {
     /// Environment variables, by name, that jobs run the checks and QA
     /// commands with (e.g. a test database's URL). Test settings, not secrets.
     /// `{task}` in a value becomes the job's task key, lowercase with `_` for
-    /// the rest (`agos_474`), so each task can have its own test database.
+    /// the rest (`agos_474`) and a package's number after it (`agos_474_p2`),
+    /// so each task and each package can have its own test database.
     #[serde(default)]
     pub check_env: BTreeMap<String, String>,
     /// Whether QA jobs get a browser.
