@@ -1040,6 +1040,11 @@ pub struct DeliveryApproval {
     /// `pr_reply` only: resolve the review thread once replied.
     #[serde(default)]
     pub resolve_thread: bool,
+    /// `commit` only: it creates nothing, it records the commits the branch
+    /// already has (made outside Tinto) as the task's, once the user saw
+    /// them in `body`. `head` is the branch's HEAD they were listed at.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record: bool,
     /// `pr_reply` only: QA screenshots the user chose to show in the reply.
     #[serde(default)]
     pub images: Vec<DeliveryReplyImage>,

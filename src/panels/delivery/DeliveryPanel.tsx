@@ -4191,7 +4191,8 @@ function ApprovalBanner({
     reviewers.length === 0;
   // A commit, PR or merge step's texts are the user's to edit before approving.
   const planned = approval.rung === "commit" && (approval.commits ?? []).length > 0;
-  const editsText = pending && ["commit", "pr", "merge"].includes(approval.rung);
+  const editsText =
+    pending && !approval.record && ["commit", "pr", "merge"].includes(approval.rung);
   const [title, setTitle] = useState(approval.title);
   const [body, setBody] = useState(approval.body);
   const [messages, setMessages] = useState<string[] | undefined>(undefined);
@@ -4216,8 +4217,9 @@ function ApprovalBanner({
       live = false;
     };
   }, [choosesReviewers, task.id]);
-  const consequence =
-    approval.rung === "commit"
+  const consequence = approval.record
+    ? `Al aprobar, Tinto toma estos commits, que ya están en ${task.branch}, como los de la tarea. No crea ni mueve nada, y sus comprobaciones, revisión y QA no se dan por hechas.`
+    : approval.rung === "commit"
       ? `Al aprobar, Tinto crea ${(approval.commits?.length ?? 1) > 1 ? "estos commits, en este orden," : "el commit"} en ${task.branch} con estos textos exactos y sin añadir firmas. Si uno falla, se detiene. No publica nada: el push se aprueba aparte, y hasta entonces puedes deshacerlo.`
       : approval.rung === "sync"
         ? `Al aprobar, Tinto trae la base y la fusiona en ${task.branch} con este mensaje: un commit de merge, sin publicar. Si hay conflictos, el merge queda en curso, un job de implementación los resuelve y el paso commit lo concluye.`
@@ -4284,6 +4286,14 @@ function ApprovalBanner({
             onChange={(event) => setBody(event.target.value)}
           />
         </div>
+      ) : approval.record ? (
+        <ol className="delivery-commit-plan" aria-label="Commits a registrar">
+          {approval.body.split("\n").map((line) => (
+            <li key={line}>
+              <code>{line}</code>
+            </li>
+          ))}
+        </ol>
       ) : approval.rung === "commit" ? (
         <>
           <CommitPlanView

@@ -62,6 +62,9 @@ pub struct NewApproval {
     pub comment_url: Option<String>,
     /// `pr_reply` only: resolve the review thread once replied.
     pub resolve_thread: bool,
+    /// `commit` only: record the commits the branch already has (made
+    /// outside Tinto) as the task's instead of creating any.
+    pub record: bool,
 }
 
 /// Where a changed file belongs for splitting commits: `docs`, `tests` or
@@ -378,6 +381,7 @@ pub(super) fn found_step(
         corrections: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        record: false,
         images: Vec::new(),
         thread: None,
         style_examples: Vec::new(),
@@ -986,7 +990,7 @@ impl DeliveryService {
         let reply = request.rung == DeliveryRung::PrReply;
         // A merge's text defaults to the PR's approved title.
         let merge = request.rung == DeliveryRung::Merge;
-        if request.title.trim().is_empty() && !planned && !reply && !merge {
+        if request.title.trim().is_empty() && !planned && !reply && !merge && !request.record {
             return Err(DeliveryError::new(
                 "invalid_approval",
                 "la aprobación necesita el texto exacto (título o mensaje)",
@@ -1135,7 +1139,7 @@ impl DeliveryService {
             && self
                 .latest_approval(&task.id, DeliveryRung::Push)?
                 .is_some_and(|push| push.status == DeliveryApprovalStatus::Drifted);
-        if !republish {
+        if !republish && !request.record {
             rung_prerequisites(&task, request.rung)?;
         }
         // The coordinator commits only settled work: findings are fixed or
@@ -1188,11 +1192,51 @@ impl DeliveryService {
             _ => None,
         };
         // A push publishes the commit the user saw when it was asked.
-        let head = match request.rung {
+        let mut head = match request.rung {
             DeliveryRung::Push => tasks::head(place, &task.worktree).ok(),
             _ => None,
         };
         match request.rung {
+            // History made outside Tinto, recorded as it is once the user
+            // saw it: nothing is created or moved.
+            DeliveryRung::Commit if request.record => {
+                if !request.commits.is_empty() {
+                    return Err(invalid_plan(
+                        "record no lleva commits: registra los que la rama ya tiene",
+                    ));
+                }
+                if tasks::sync_in_progress(place, &task.worktree)
+                    || tasks::worktree_state(place, &task.worktree, &task.base_commit)?.dirty
+                {
+                    return Err(DeliveryError::new(
+                        "nothing_to_record",
+                        "solo se registran commits con el worktree limpio y sin merge ni restack en curso: lo que hay sin confirmar se prepara con un plan de commits",
+                    ));
+                }
+                let found = self.unrecorded_commits(&task)?;
+                if found.is_empty() {
+                    return Err(DeliveryError::new(
+                        "nothing_to_record",
+                        "la rama no tiene commits propios que ningún paso de Tinto haya registrado",
+                    ));
+                }
+                title = format!(
+                    "Registrar {} de la rama",
+                    match found.len() {
+                        1 => "1 commit".to_string(),
+                        count => format!("{count} commits"),
+                    }
+                );
+                body = found
+                    .iter()
+                    .map(|(sha, subject)| format!("{} {subject}", short(sha)))
+                    .collect::<Vec<_>>()
+                    .join(
+                        "
+",
+                    );
+                head = Some(tasks::head(place, &task.worktree)?);
+            }
             // A merge in progress is concluded whole, so the commit keeps the
             // merged branch as its second parent.
             DeliveryRung::Commit if merge_head.is_some() => {
@@ -1364,6 +1408,7 @@ impl DeliveryService {
             notice,
             corrections: Vec::new(),
             resolve_thread: reply && request.resolve_thread,
+            record: request.record,
             // The QA screenshots its text shows where it names them.
             images: match request.rung {
                 DeliveryRung::Pr | DeliveryRung::PrReply => {
@@ -1607,6 +1652,7 @@ impl DeliveryService {
         ) {
             let task = self.task(&approval.task_id)?;
             let executed = match approval.rung {
+                DeliveryRung::Commit if approval.record => self.run_record(&task, &mut approval),
                 DeliveryRung::Commit => run_commit_plan(&task, &mut approval),
                 DeliveryRung::Sync => self.run_sync(&task, &mut approval),
                 _ if self.commits_lost(&task)? => Err(DeliveryError::new(
@@ -2042,6 +2088,14 @@ impl DeliveryService {
         if approval.rung == DeliveryRung::Sync {
             return self.abort_paused_restack(approval);
         }
+        // A record made no commit: undoing it forgets it, the branch stays.
+        if approval.record && approval.status == DeliveryApprovalStatus::Executed {
+            approval.advance(StepEvent::Undo)?;
+            approval.outcome =
+                Some("Registro deshecho: los commits siguen en la rama, sin registrar.".into());
+            self.save_approval(&approval, "commit_undone")?;
+            return Ok(approval);
+        }
         let created = created_commits(&approval);
         let undoable = approval.rung == DeliveryRung::Commit
             && matches!(
@@ -2132,6 +2186,7 @@ impl DeliveryService {
             single_commit_reason: None,
             comment_url: None,
             resolve_thread: false,
+            record: false,
         };
         if let Err(error) = self.request_approval(request) {
             eprintln!("tinto: delivery did not sync {}: {error}", task.key);
@@ -2259,6 +2314,7 @@ impl DeliveryService {
                 single_commit_reason: None,
                 comment_url: None,
                 resolve_thread: false,
+                record: false,
             };
             if let Err(error) = self.request_approval(request) {
                 eprintln!("tinto: delivery did not advance {}: {error}", task.key);
@@ -2844,6 +2900,7 @@ impl DeliveryService {
             single_commit_reason: None,
             comment_url: None,
             resolve_thread: false,
+            record: false,
         };
         if let Err(error) = self.request_approval(request) {
             eprintln!(
@@ -3047,7 +3104,35 @@ impl DeliveryService {
         let lease = published
             .as_deref()
             .filter(|tip| restacked && !tasks::on_branch(place, &task.worktree, tip));
-        let upstream = tasks::push_branch(place, &task.worktree, &task.branch, lease)?;
+        let upstream = tasks::push_branch(place, &task.worktree, &task.branch, lease).map_err(
+            |error| {
+                // Refused because someone else published the branch: say so,
+                // instead of git's rejection, and overwrite nothing.
+                let now = tasks::remote_tip(place, &task.repo, &task.branch)
+                    .ok()
+                    .flatten();
+                let moved = match (now.as_deref(), lease) {
+                    (Some(now), Some(published)) => now != published,
+                    (Some(now), None) => {
+                        now != head && !tasks::is_ancestor(place, &task.worktree, now, &head)
+                    }
+                    (None, _) => false,
+                };
+                match (moved, now) {
+                    (true, Some(now)) => DeliveryError::new(
+                        "remote_moved",
+                        format!(
+                            "No se publicó (remote_moved): la rama remota {} está en {}, que no es lo que Tinto publicó ({}) ni está en la rama local: alguien la publicó fuera de Tinto. No se sobrescribió nada. Revisa qué trae {} y decide con el usuario si se integra en la rama o se reemplaza; luego vuelve a pedir el push.",
+                            task.branch,
+                            short(&now),
+                            published.as_deref().map(short).unwrap_or("nada"),
+                            short(&now)
+                        ),
+                    ),
+                    _ => error,
+                }
+            },
+        )?;
         Ok(match lease {
             Some(_) => {
                 format!("Publicado en {upstream} (rama restackeada, con --force-with-lease){added}")
@@ -3125,6 +3210,74 @@ impl DeliveryService {
         ))
     }
 
+    /// The branch's own commits (after its base) that no Tinto step made or
+    /// recorded, oldest first, with their subjects.
+    fn unrecorded_commits(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Vec<(String, String)>, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let base = self.sync_base(task)?;
+        let (_, tip) = tasks::base_tip(place, &task.worktree, &base, false)?;
+        let known: Vec<String> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|step| {
+                step.task_id == task.id
+                    && matches!(step.rung, DeliveryRung::Commit | DeliveryRung::Sync)
+                    && step.status.was_done()
+            })
+            .flat_map(|step| created_commits(&step))
+            .collect();
+        let listed = tasks::git(
+            place,
+            &task.worktree,
+            &[
+                "log",
+                "--reverse",
+                "--first-parent",
+                "--format=%H %s",
+                &format!("{tip}..HEAD"),
+            ],
+        )?;
+        Ok(listed
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(sha, _)| !known.iter().any(|known| known == sha))
+            .map(|(sha, subject)| (sha.to_string(), subject.to_string()))
+            .collect())
+    }
+
+    /// Records the commits a `record` step listed as the task's, while the
+    /// branch is still where the user saw it.
+    fn run_record(
+        &self,
+        task: &DeliveryTask,
+        approval: &mut DeliveryApproval,
+    ) -> Result<String, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let now = tasks::head(place, &task.worktree)?;
+        if approval.head.as_deref() != Some(now.as_str()) {
+            return Err(DeliveryError::new(
+                "head_moved",
+                format!(
+                    "No se registró nada (head_moved): la rama está en {}, no donde estaba cuando se listaron sus commits. Pide el registro de nuevo.",
+                    short(&now)
+                ),
+            ));
+        }
+        approval.created = self
+            .unrecorded_commits(task)?
+            .into_iter()
+            .map(|(sha, _)| sha)
+            .collect();
+        Ok(format!(
+            "Registrados como de la tarea: {}. Tinto no creó ni movió nada; sus comprobaciones, revisión y QA no se dan por hechas.",
+            shorts(&approval.created)
+        ))
+    }
+
     /// Whether the commits of the task's commit step are gone from its
     /// branch (reset, amend or rebase done outside Tinto). The step then
     /// counts as undone, so the commit is prepared again before any push.
@@ -3143,12 +3296,45 @@ impl DeliveryService {
             return Ok(false);
         }
         let place = Place::of(task.distro.as_deref());
-        // A worktree git cannot read says nothing about the commits.
+        // A worktree git cannot read says nothing about the commits, nor
+        // does a restack halfway (HEAD is detached on its replay).
         if tasks::head(place, &task.worktree).is_err()
+            || tasks::rebase_head(place, &task.worktree).is_some()
             || created
                 .iter()
                 .all(|commit| tasks::on_branch(place, &task.worktree, commit))
         {
+            return Ok(false);
+        }
+        // Tinto's own restack rewrote them, after the step: the step stands
+        // on the commits the restack left, while the branch has them.
+        let carried = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .rev()
+            .find(|sync| {
+                sync.task_id == task.id
+                    && sync.rung == DeliveryRung::Sync
+                    && sync.restack
+                    && sync.status == DeliveryApprovalStatus::Executed
+                    && sync.executed_at_ms >= approval.executed_at_ms
+            })
+            .filter(|sync| {
+                !sync.created.is_empty()
+                    && sync
+                        .created
+                        .iter()
+                        .all(|commit| tasks::on_branch(place, &task.worktree, commit))
+                    && sync.before.as_deref().is_some_and(|before| {
+                        created
+                            .iter()
+                            .all(|commit| tasks::is_ancestor(place, &task.worktree, commit, before))
+                    })
+            });
+        if let Some(sync) = carried {
+            approval.created = sync.created;
+            self.save_approval(&approval, "commit_rewritten")?;
             return Ok(false);
         }
         // The commits were put right outside Tinto with the same content (a
