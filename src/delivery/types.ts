@@ -1031,6 +1031,20 @@ export interface DeliveryPr {
   reviewers?: string[];
   /** The branch it merges into, as GitHub last said. */
   base?: string | null;
+  /** Review threads still without a reply from the PR's author, while it is
+   *  open: it cannot go back to review until each has one. */
+  unanswered_threads?: DeliveryReviewThread[];
+}
+
+/** A review thread a reviewer opened on the PR (src-tauri/src/delivery/review_threads.rs). */
+export interface DeliveryReviewThread {
+  url: string;
+  author: string;
+  path: string;
+  line: number | null;
+  state: "unanswered" | "answered" | "resolved";
+  /** Minutes without a reply. */
+  waiting_minutes: number;
 }
 
 /** An archived task as a search finds it. */

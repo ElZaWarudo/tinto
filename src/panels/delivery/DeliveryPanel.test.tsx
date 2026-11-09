@@ -4015,6 +4015,16 @@ describe("DeliveryPanel", () => {
       seen_until: null,
       checked_at_ms: 1,
       error: null,
+      unanswered_threads: [
+        {
+          url: "https://github.com/o/r/pull/5#discussion_r7",
+          author: "ana",
+          path: "src/a.rs",
+          line: 12,
+          state: "unanswered" as const,
+          waiting_minutes: 300,
+        },
+      ],
     };
     const executed = (rung: "commit" | "push" | "pr" | "jira") => ({
       id: rung,
@@ -4045,6 +4055,13 @@ describe("DeliveryPanel", () => {
       "href",
       "https://github.com/o/r/pull/5",
     );
+    // A review thread with no reply shows as a badge, linked to GitHub.
+    expect(within(section).getByText("1 sin respuesta")).toBeInTheDocument();
+    expect(
+      within(within(section).getByRole("list", { name: "Hilos sin respuesta" })).getByRole("link", {
+        name: "src/a.rs:12",
+      }),
+    ).toHaveAttribute("href", "https://github.com/o/r/pull/5#discussion_r7");
     expect(within(section).getByRole("status")).toHaveTextContent(
       "1 revisión nueva y 2 comentarios nuevos de ana, luis",
     );

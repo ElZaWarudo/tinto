@@ -31,6 +31,10 @@ function checked(ms: number | null): string {
   return minutes < 1 ? "leído ahora" : `leído hace ${minutes} min`;
 }
 
+function waited(minutes: number): string {
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
+}
+
 function news(pr: DeliveryPr): string | null {
   const parts = [
     pr.new_reviews > 0 &&
@@ -146,6 +150,7 @@ export function PrSection({ pr }: { pr: DeliveryPr }) {
   const summary = prSummary(pr);
   const fresh = news(pr);
   const { passing, failing, pending } = pr.checks;
+  const unanswered = pr.state === "open" ? (pr.unanswered_threads ?? []) : [];
   return (
     <section className="delivery-section delivery-pr" aria-label="Pull request">
       <h3>Pull request</h3>
@@ -158,7 +163,27 @@ export function PrSection({ pr }: { pr: DeliveryPr }) {
             {summary.label}
           </span>
           {pr.draft && <span className="delivery-badge delivery-badge--muted">borrador</span>}
+          {unanswered.length > 0 && (
+            <span
+              className="delivery-badge delivery-badge--attention"
+              title="Hilos de revisión sin respuesta: el PR no vuelve a revisión hasta que cada uno tenga una."
+            >
+              {unanswered.length} sin respuesta
+            </span>
+          )}
         </p>
+        {unanswered.length > 0 && (
+          <ul className="delivery-pr__facts" aria-label="Hilos sin respuesta">
+            {unanswered.map((thread) => (
+              <li key={thread.url}>
+                <ExternalLink href={thread.url}>
+                  {thread.line ? `${thread.path}:${thread.line}` : thread.path}
+                </ExternalLink>{" "}
+                de {thread.author}, {waited(thread.waiting_minutes)} sin respuesta
+              </li>
+            ))}
+          </ul>
+        )}
         {pr.state === "open" && (
           <ul className="delivery-pr__facts">
             <li>
