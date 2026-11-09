@@ -6736,7 +6736,10 @@ fn after_the_brainstorm_decisions_settle_as_they_are_asked() {
     // During the brainstorm the user answers, and it cannot end before.
     let asked = ask(json!([recommended, unrecommended]));
     assert_eq!(answers(asked.clone()), vec![(None, None), (None, None)]);
-    let open = call("end_brainstorm", fenced(json!({})));
+    let open = call(
+        "end_brainstorm",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1}),
+    );
     assert_eq!(open["isError"], true);
     assert!(open["content"][0]["text"].as_str().unwrap().contains("D-5"));
     for decision in asked["structuredContent"]["result"].as_array().unwrap() {
@@ -6758,11 +6761,20 @@ fn after_the_brainstorm_decisions_settle_as_they_are_asked() {
     };
     let proposed = propose("npm test");
     assert_eq!(proposed["status"], "pending", "{proposed}");
-    assert_eq!(call("end_brainstorm", fenced(json!({})))["isError"], true);
+    assert_eq!(
+        call(
+            "end_brainstorm",
+            json!({"run_id": run_id, "owner": "coord", "generation": 1})
+        )["isError"],
+        true
+    );
     h.service
         .reject_settings_proposal(proposed["id"].as_str().unwrap(), "user")
         .unwrap();
-    let ended = call("end_brainstorm", fenced(json!({})));
+    let ended = call(
+        "end_brainstorm",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1}),
+    );
     assert_eq!(ended["structuredContent"]["unattended"], true, "{ended}");
     let approved = propose("npm run lint");
     assert_eq!(approved["status"], "approved", "{approved}");
