@@ -114,6 +114,20 @@ beforeEach(() => {
 });
 
 describe("CoordinatorDock", () => {
+  it("says the coordinator waits on the user's permission, not that it works", () => {
+    // Its turn reads as working while Claude Code waits for an answer.
+    sessions.value = {
+      s1: {
+        ...session("s1", "working"),
+        acp_permissions: [{ id: "p1", title: "Bash", state: "pending", options: [] }],
+      },
+    };
+    render(<Dock runs={[run({ coordinator_session: "s1", owner: "claude-1" })]} open={false} />);
+    expect(
+      screen.getByRole("button", { name: "Coordinador de Lote A: te pide permiso" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows the batch's coordinator, its state, and its conversation folded", async () => {
     const user = userEvent.setup();
     sessions.value = { s1: session("s1", "working") };

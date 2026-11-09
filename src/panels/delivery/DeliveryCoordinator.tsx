@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
+import { pendingRequests } from "../../agent/sessionSignal";
 import { useAgentSessionState } from "../../agent/sessionStore";
 import { startAgentSession } from "../../bus/client";
 import { handOverDeliveryRun, setDeliveryRunNoNewTasks } from "../../delivery/client";
@@ -33,9 +34,10 @@ import {
 } from "./agentChoice";
 import { batchName } from "./taskStatus";
 
-type CoordinatorState = "waiting" | "working" | "stalled" | "outside" | "none";
+type CoordinatorState = "asks" | "waiting" | "working" | "stalled" | "outside" | "none";
 
 const STATE_LABEL: Record<CoordinatorState, string> = {
+  asks: "te pide permiso",
   waiting: "esperando",
   working: "trabajando",
   stalled: "parado",
@@ -45,6 +47,7 @@ const STATE_LABEL: Record<CoordinatorState, string> = {
 
 /** A batch's state where the user picks the batches a new coordinator takes. */
 const PICK_LABEL: Record<CoordinatorState, string> = {
+  asks: "coordinado en Tinto",
   waiting: "coordinado en Tinto",
   working: "coordinado en Tinto",
   stalled: "parado",
@@ -199,15 +202,19 @@ export function CoordinatorDock({
     const live = id ? sessions[id] : undefined;
     const coordinator = (overview.coordinators ?? []).find((state) => state.run_id === target.id);
     const bound = conversationOf(target);
+    // A permission it waits on holds the whole batch: its turn still reads
+    // as working, so it is said before that.
     return stalled.includes(target.id) || (bound && !isLive(bound))
       ? "stalled"
-      : live?.turn_status === "working"
-        ? "working"
-        : coordinator?.waiting || live
-          ? "waiting"
-          : target.owner && target.owner !== "user"
-            ? "outside"
-            : "none";
+      : live && pendingRequests(live).length > 0
+        ? "asks"
+        : live?.turn_status === "working"
+          ? "working"
+          : coordinator?.waiting || live
+            ? "waiting"
+            : target.owner && target.owner !== "user"
+              ? "outside"
+              : "none";
   };
   const state = stateOf(run);
   const isDetached = session !== undefined && detached === session.id;

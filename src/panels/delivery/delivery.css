@@ -2821,6 +2821,15 @@
 .delivery-coordinator-button__dot.delivery-coordinator-button--stalled {
   background: var(--warn);
 }
+/* It waits on the user: the button itself says so, not only its dot. */
+.delivery-coordinator-button--asks {
+  border-color: var(--warn);
+  color: var(--fg-strong);
+}
+.delivery-coordinator-button--asks .delivery-coordinator-button__dot,
+.delivery-coordinator-button__dot.delivery-coordinator-button--asks {
+  background: var(--warn);
+}
 .delivery-coordinator {
   position: absolute;
   right: 16px;
