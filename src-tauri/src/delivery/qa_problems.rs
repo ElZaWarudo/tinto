@@ -112,6 +112,26 @@ fn labelled(item: &str) -> Option<(String, String)> {
     Some((format!("P{digits}"), rest.to_string()))
 }
 
+/// The labels of an item that only points at problems stated elsewhere in
+/// the record (`P3`, `P1, P2`, `P1 (below, shared with section 6)`); `None`
+/// when the item states a problem of its own.
+fn references(item: &str) -> Option<Vec<String>> {
+    let bare = match item.find('(') {
+        Some(at) if item.trim_end().ends_with(')') => &item[..at],
+        _ => item,
+    };
+    let labels: Vec<String> = bare
+        .split([',', ' '])
+        .map(|word| word.trim_matches(['*', '`', '.', ';']))
+        .filter(|word| !word.is_empty() && *word != "and" && *word != "y")
+        .map(|word| match labelled(word) {
+            Some((label, rest)) if rest.is_empty() => Some(label),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    (!labels.is_empty()).then_some(labels)
+}
+
 /// The problems of a visual changes record.
 pub fn parse_record(record: &str) -> Vec<RecordProblem> {
     struct Section {
@@ -193,6 +213,18 @@ pub fn parse_record(record: &str) -> Vec<RecordProblem> {
         .max()
         .unwrap_or(0);
     let mut problems: Vec<RecordProblem> = Vec::new();
+    // Where each referenced label was pointed at first: a section names a
+    // problem stated elsewhere (often under the verdicts, which have no
+    // place), so that problem belongs to the section that saw it.
+    let mut pointed: Vec<(String, String, String)> = Vec::new();
+    // A label only pointed at, never stated, is kept as before: a problem
+    // with no text the user still sees.
+    let stated: Vec<String> = sections
+        .iter()
+        .flat_map(|section| items(&section.problems))
+        .filter(|item| references(item).is_none())
+        .filter_map(|item| labelled(&item).map(|(label, _)| label))
+        .collect();
     for section in sections {
         let suggestions: Vec<(Option<String>, String)> = items(&section.suggestions)
             .into_iter()
@@ -202,6 +234,16 @@ pub fn parse_record(record: &str) -> Vec<RecordProblem> {
             })
             .collect();
         for item in items(&section.problems) {
+            if let Some(labels) = references(&item) {
+                if labels.iter().all(|label| stated.contains(label)) {
+                    for label in labels {
+                        if !pointed.iter().any(|(seen, _, _)| *seen == label) {
+                            pointed.push((label, section.change.clone(), section.place.clone()));
+                        }
+                    }
+                    continue;
+                }
+            }
             let (label, text) = labelled(&item).unwrap_or_else(|| {
                 next += 1;
                 (format!("P{next}"), item.clone())
@@ -219,6 +261,17 @@ pub fn parse_record(record: &str) -> Vec<RecordProblem> {
                 text,
                 suggestions: mine,
             });
+        }
+    }
+    for problem in problems
+        .iter_mut()
+        .filter(|problem| problem.place.is_empty())
+    {
+        if let Some((_, change, place)) =
+            pointed.iter().find(|(label, _, _)| *label == problem.label)
+        {
+            problem.change = change.clone();
+            problem.place = place.clone();
         }
     }
     problems
@@ -732,6 +785,35 @@ mod tests {
             "The header does not say which services are mocked."
         );
         assert_eq!(problems[2].suggestions, ["Add (mock) next to each one."]);
+    }
+
+    #[test]
+    fn a_section_that_points_at_a_problem_stated_later_adds_none() {
+        // As AGOS-412's record had it: sections name problems the verdicts
+        // state, and section 4 passed with "**Problems:** P3".
+        let record = "# K-2 — Visual changes\n\n## 1. Needs listed\n\n| Where | Composer → + |\n\n**Problems:** P1 (below, shared with section 6)\n\n## 4. Sign in again\n\n| Where | Composer → expired need |\n| Behaviour | The popup opens. |\n\n**Problems:** P3\n\n## 6. Loading and error\n\n| Where | Composer, service stopped |\n\n**Problems:** P1, P2\n\n## Verdicts\n\n| Item | Verdict |\n| --- | --- |\n| 4. Sign in again | pass |\n\n**Problems:**\n- P1: The needs are cut off at the bottom of the menu.\n- P2: Every error looks the same.\n- P3: Nothing says the login expired.\n\n**Suggested solutions:**\n- P3: Add a line for the expired login.\n";
+        let problems = parse_record(record);
+        let found: Vec<(&str, &str, &str)> = problems
+            .iter()
+            .map(|p| (p.label.as_str(), p.change.as_str(), p.place.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("P1", "Needs listed", "Composer → +"),
+                ("P2", "Loading and error", "Composer, service stopped"),
+                ("P3", "Sign in again", "Composer → expired need"),
+            ]
+        );
+        assert_eq!(problems[2].text, "Nothing says the login expired.");
+        assert_eq!(
+            problems[2].suggestions,
+            ["Add a line for the expired login."]
+        );
+        // A label pointed at but never stated is still shown.
+        let orphan = parse_record("## 1. A\n\n**Problems:** P4\n");
+        assert_eq!(orphan.len(), 1);
+        assert_eq!(orphan[0].label, "P4");
     }
 
     #[test]
