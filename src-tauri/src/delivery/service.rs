@@ -227,6 +227,13 @@ pub(super) struct Inner {
     /// One lock per task, held while its PR is read from GitHub and its
     /// steps checked (see `refresh_pr`): reads of other PRs never wait.
     pub(super) pr_reads: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// One lock per task, held while a step for it is checked and saved, so
+    /// two asked at once (Tinto's own sync and the coordinator's) cannot
+    /// both pass the check for an open one.
+    pub(super) asking: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// One lock per task, held while a step runs git in its worktree: two
+    /// at once collide on its index.lock.
+    pub(super) git_work: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Jobs being stopped to be paused rather than cancelled.
     pausing: Mutex<HashSet<String>>,
@@ -575,6 +582,8 @@ impl DeliveryService {
             inner: Arc::new(Inner {
                 store: Mutex::new(store),
                 pr_reads: Mutex::new(HashMap::new()),
+                asking: Mutex::new(HashMap::new()),
+                git_work: Mutex::new(HashMap::new()),
                 cancels: Mutex::new(HashMap::new()),
                 pausing: Mutex::new(HashSet::new()),
                 restart_retries: Mutex::new(Vec::new()),
@@ -5021,6 +5030,19 @@ fn continue_note(stopped: &DeliveryJob) -> Option<String> {
     Some(format!(
         "La ejecución anterior de esta etapa se detuvo antes de terminar: {why}. El worktree conserva los cambios que hiciste. Sigue desde donde lo dejaste, con las mismas instrucciones, sin rehacer lo que ya está hecho, y termina entregando el resultado con el formato pedido."
     ))
+}
+
+/// The lock of `key` in `locks`, created on first use.
+pub(super) fn keyed_lock(
+    locks: &Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    key: &str,
+) -> Arc<Mutex<()>> {
+    locks
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(key.to_string())
+        .or_default()
+        .clone()
 }
 
 /// A task's key as `{task}` gives it in the variables for checks: lowercase,

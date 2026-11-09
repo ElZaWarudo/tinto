@@ -4739,6 +4739,45 @@ fn a_sync_step_merges_the_fetched_base_and_the_push_checks_it_is_still_merged() 
 }
 
 #[test]
+fn two_syncs_asked_at_once_run_once() {
+    // As Tinto's own sync and the coordinator's did in run-86cb18da: both
+    // ran in the worktree, and one failed on its index.lock.
+    let h = harness();
+    let task = h.task("S-9");
+    diverge_from_main(&h, &task, false);
+    let start = std::sync::Barrier::new(2);
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let ask = || {
+            start.wait();
+            h.service
+                .request_approval(step(&task, DeliveryRung::Sync, "Merge main"))
+        };
+        let first = scope.spawn(ask);
+        let second = scope.spawn(ask);
+        vec![first.join().unwrap(), second.join().unwrap()]
+    });
+    let ran: Vec<_> = results
+        .iter()
+        .filter_map(|result| result.as_ref().ok())
+        .collect();
+    assert_eq!(ran.len(), 1, "{results:?}");
+    assert_eq!(
+        ran[0].status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        ran[0].outcome
+    );
+    let refused = results
+        .iter()
+        .find_map(|result| result.as_ref().err())
+        .unwrap();
+    assert!(
+        matches!(refused.category.as_str(), "approval_exists" | "base_merged"),
+        "{refused}"
+    );
+}
+
+#[test]
 fn a_sync_with_conflicts_goes_back_to_implementation_and_a_commit_concludes_it() {
     let h = harness();
     let task = h.task("S-2");
