@@ -187,6 +187,7 @@ import {
   roundOf,
   roundRung,
   roundStage,
+  reviewerBlock,
   stageLabel,
   taskStatus,
   qaProblemsToDecide as problemsToDecide,
@@ -3673,6 +3674,37 @@ function PausedRestack({ approvals }: { approvals: DeliveryApproval[] }) {
   );
 }
 
+/** The people who could review a repo's PRs, as GitHub last listed them:
+ *  shown while it is asked again. Per viewer; it may be empty or gone. */
+const REVIEWERS_KEY = "tinto:pr-reviewers";
+
+function cachedReviewers(repo: string): string[] | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(REVIEWERS_KEY) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    const logins = saved[repo];
+    return Array.isArray(logins) && logins.every((login) => typeof login === "string")
+      ? logins
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheReviewers(repo: string, logins: string[]) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(REVIEWERS_KEY) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    localStorage.setItem(REVIEWERS_KEY, JSON.stringify({ ...saved, [repo]: logins }));
+  } catch {
+    /* unavailable storage: the list is read from GitHub each time */
+  }
+}
+
 /** The latest step, when the user rejected it and nothing was asked since. */
 function rejectedStep(approvals: DeliveryApproval[]): DeliveryApproval | null {
   const latest = approvals
@@ -4163,32 +4195,52 @@ function ApprovalBanner({
   const pending = approval.status === "pending";
   const choosesReviewers = pending && approval.rung === "pr";
   const [reviewers, setReviewers] = useState<string[]>(approval.reviewers ?? []);
-  // The repo's people who can review, or why they could not be read.
-  const [candidates, setCandidates] = useState<string[] | null>(null);
+  // The repo's people who can review: the list last read shows at once, and
+  // `fresh` says GitHub answered this time.
+  const [candidates, setCandidates] = useState<string[] | null>(() => cachedReviewers(task.repo));
+  const [fresh, setFresh] = useState(false);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   // "PR sin revisor" in the repo's settings lets the step go without one.
   const [reviewerOptional, setReviewerOptional] = useState(false);
+  const [settingsRead, setSettingsRead] = useState(false);
   useEffect(() => {
     if (!choosesReviewers) return;
     let live = true;
+    setCandidatesError(null);
     getDeliveryPrReviewers(task.id).then(
-      (logins) => live && setCandidates(logins),
+      (logins) => {
+        if (!live) return;
+        setCandidates(logins);
+        setFresh(true);
+        cacheReviewers(task.repo, logins);
+      },
       (cause) => live && setCandidatesError(errorText(cause)),
     );
     getDeliveryRepoSettings(task.repo).then(
-      (settings) => live && setReviewerOptional(settings.pr_without_reviewer ?? false),
-      () => undefined,
+      (settings) => {
+        if (!live) return;
+        setReviewerOptional(settings.pr_without_reviewer ?? false);
+        setSettingsRead(true);
+      },
+      () => live && setSettingsRead(true),
     );
     return () => {
       live = false;
     };
-  }, [choosesReviewers, task.id, task.repo]);
-  // Without a reviewer nobody can approve the PR, and it cannot be merged.
-  const needsReviewer =
-    choosesReviewers &&
-    !reviewerOptional &&
-    (candidates?.length ?? 0) > 0 &&
-    reviewers.length === 0;
+  }, [choosesReviewers, task.id, task.repo, attempt]);
+  // Without a reviewer nobody can approve the PR, and it cannot be merged:
+  // the step goes without one only when the repo allows it or GitHub said
+  // nobody else can review. Until then it says what it waits for.
+  const reviewerHold = reviewerBlock({
+    choosesReviewers,
+    chosen: reviewers.length,
+    settingsRead,
+    reviewerOptional,
+    candidates,
+    fresh,
+    failed: candidatesError !== null,
+  });
   // A commit, PR or merge step's texts are the user's to edit before approving.
   const planned = approval.rung === "commit" && (approval.commits ?? []).length > 0;
   const editsText =
@@ -4322,15 +4374,23 @@ function ApprovalBanner({
       {choosesReviewers && (
         <fieldset className="delivery-reviewers">
           <legend>Revisores</legend>
-          {candidates === null && !candidatesError && (
-            <p className="delivery-muted">Leyendo quién puede revisar en GitHub…</p>
+          {!fresh && !candidatesError && (
+            <p className="delivery-muted">
+              {candidates === null
+                ? "Leyendo quién puede revisar en GitHub…"
+                : "La última lista leída; comprobándola en GitHub…"}
+            </p>
           )}
           {candidatesError && (
             <p className="delivery-job__note">
-              No se pudo leer quién puede revisar: {candidatesError}. Pídelo en GitHub.
+              No se pudo leer quién puede revisar: {candidatesError}.
+              {candidates !== null && " Es la última lista leída."}{" "}
+              <button type="button" onClick={() => setAttempt((count) => count + 1)}>
+                Reintentar
+              </button>
             </p>
           )}
-          {candidates?.length === 0 && (
+          {fresh && candidates?.length === 0 && (
             <p className="delivery-job__note">
               El repositorio no tiene a nadie más que pueda revisar.
             </p>
@@ -4367,8 +4427,8 @@ function ApprovalBanner({
           <div className="delivery-actions">
             <ActionButton
               className="delivery-button--primary"
-              disabled={needsReviewer}
-              title={needsReviewer ? "Elige al menos un revisor." : undefined}
+              disabled={reviewerHold !== null}
+              title={reviewerHold ?? undefined}
               onAction={() =>
                 choosesReviewers
                   ? decideDeliveryApproval(

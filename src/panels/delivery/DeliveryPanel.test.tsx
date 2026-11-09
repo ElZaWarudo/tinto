@@ -3672,6 +3672,36 @@ describe("DeliveryPanel", () => {
     },
   );
 
+  it("holds the PR step without a reviewer while GitHub has not answered, showing the list last read", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("tinto:pr-reviewers", JSON.stringify({ [REPO]: ["ana"] }));
+    const pr = {
+      id: "pr",
+      task_id: "t1",
+      rung: "pr" as const,
+      title: "AGOS-501: Fix the thing",
+      body: "",
+      status: "pending" as const,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: null,
+      executed_at_ms: null,
+      outcome: null,
+    };
+    client.getDeliveryOverview.mockResolvedValue(overview({ approvals: [pr] }));
+    client.getDeliveryPrReviewers.mockReturnValueOnce(new Promise(() => {}));
+    renderPanel();
+    const banner = await openStep("Revisar PR", "pr");
+    const approve = within(banner).getByRole("button", { name: "Aprobar y abrir el PR" });
+    const reviewers = within(banner).getByRole("group", { name: "Revisores" });
+    expect(reviewers).toHaveTextContent("La última lista leída");
+    await waitFor(() => expect(client.getDeliveryRepoSettings).toHaveBeenCalledWith(REPO));
+    expect(approve).toBeDisabled();
+    await user.click(within(reviewers).getByRole("checkbox", { name: "ana" }));
+    expect(approve).toBeEnabled();
+    localStorage.removeItem("tinto:pr-reviewers");
+  });
+
   it("shows every pending reply to a reviewer in one place, with the user's style, and posts the edited texts", async () => {
     const user = userEvent.setup();
     const reply = (over: Partial<DeliveryApproval>): DeliveryApproval => ({

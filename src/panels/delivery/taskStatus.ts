@@ -1177,3 +1177,26 @@ export function scopeActivity(
     commands,
   };
 }
+
+/** Why a PR step cannot be approved yet, or `null` when it can. It goes
+ *  without a reviewer only when the repo allows it ("PR sin revisor") or
+ *  GitHub itself said nobody else can review: never while either is still
+ *  being read, nor on a list it could not read or only remembered. */
+export function reviewerBlock(state: {
+  choosesReviewers: boolean;
+  chosen: number;
+  settingsRead: boolean;
+  reviewerOptional: boolean;
+  candidates: string[] | null;
+  fresh: boolean;
+  failed: boolean;
+}): string | null {
+  if (!state.choosesReviewers || state.chosen > 0) return null;
+  if (!state.settingsRead) return "Leyendo los ajustes del repositorio…";
+  if (state.reviewerOptional) return null;
+  if (state.candidates !== null && state.candidates.length > 0) return "Elige al menos un revisor.";
+  if (state.fresh) return null;
+  return state.failed
+    ? "No se pudo leer quién puede revisar: reinténtalo."
+    : "Leyendo quién puede revisar en GitHub…";
+}
