@@ -453,6 +453,15 @@ pub fn job_prompt(
                 .to_string(),
         );
     }
+    // Jobs that came back blocked on what Tinto does itself left the
+    // coordinator settling each one: a merge job asked to stage files whose
+    // sandbox could not write the index, Codex jobs on Windows whose test
+    // runner could not start. Neither is the job's to do.
+    lines.push(String::new());
+    lines.push(
+        "Whatever the assignment says, git's index and history are Tinto's: do not run git add, git rm, git commit, git merge, git rebase or git stash, and never report blocked because you could not. Tinto stages and commits what you leave in the worktree. A test or check your sandbox cannot start (a process it refuses to spawn, a file it will not let you write outside the worktree) is neither a finding nor a reason to report blocked: list it under checks with the result `not run: <the error>`, finish the rest of the work, and Tinto runs it on your result."
+            .to_string(),
+    );
     lines.join("\n")
 }
 
@@ -4087,14 +4096,22 @@ pub(crate) mod tests {
         // Results from before the field existed still read.
         let old = parse_result(&serde_json::json!({"status": "pass", "summary": "ok"})).unwrap();
         assert_eq!(old.blocked_by, "");
+        // An assignment that asks to stage gets Tinto's rule after it: git's
+        // index is Tinto's, and a check the sandbox cannot start blocks nothing.
+        let mut job = sample_job(DeliveryAgent::Codex);
+        job.prompt = "Stage the resolved files and run the focused tests.".into();
         let prompt = job_prompt(
-            &sample_job(DeliveryAgent::Codex),
+            &job,
             &sample_task(),
             &JobPaths::in_dir(PathBuf::from("jobs")),
             false,
             &[],
         );
         assert!(prompt.contains("Set blocked_by"));
+        let asked = prompt.find("Stage the resolved files").unwrap();
+        let rule = prompt.find("git's index and history are Tinto's").unwrap();
+        assert!(rule > asked);
+        assert!(prompt.contains("`not run: <the error>`"));
     }
 
     #[test]
