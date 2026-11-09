@@ -32,6 +32,7 @@ import type {
   DeliveryAgent,
   DeliveryArchivedTask,
   DeliveryCoordinatorEndpoint,
+  DeliverySettings,
   DeliveryPlatform,
   DeliveryKnownFailure,
   DeliveryRepoSettings,
@@ -735,7 +736,83 @@ export function CorrectResultDialog({
   );
 }
 
-/** One stage's agent in Ajustes: not fixed, or an agent with its model, reasoning and time limit. */
+/** An agent with its model and reasoning, or none (`emptyLabel`), for a stage row. */
+function AgentFields({
+  label,
+  name,
+  emptyLabel,
+  shown,
+  onChange,
+}: {
+  label: string;
+  /** Names the selects for screen readers: "Agente de {name}"… */
+  name: string;
+  emptyLabel: string;
+  shown: AgentChoice | null;
+  onChange: (next: AgentChoice | null) => void;
+}) {
+  return (
+    <>
+      <Field label={label}>
+        <select
+          aria-label={`Agente de ${name}`}
+          value={shown?.agent ?? ""}
+          onChange={(event) =>
+            onChange(
+              event.target.value
+                ? agentChoice({
+                    agent: event.target.value as DeliveryAgent,
+                    model: null,
+                    reasoning: null,
+                  })
+                : null,
+            )
+          }
+        >
+          <option value="">{emptyLabel}</option>
+          <option value="codex">Codex</option>
+          <option value="claude">Claude Code</option>
+          <option value="muse">Muse Code</option>
+          <option value="opencode">OpenCode</option>
+        </select>
+      </Field>
+      {shown && (
+        <>
+          <Field label="Modelo">
+            <select
+              aria-label={`Modelo de ${name}`}
+              value={shown.model}
+              onChange={(event) => onChange(withModel(shown, event.target.value))}
+            >
+              {modelChoices(shown.agent).choices.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Razonamiento">
+            <select
+              aria-label={`Razonamiento de ${name}`}
+              value={shown.reasoning}
+              onChange={(event) => onChange({ ...shown, reasoning: event.target.value })}
+            >
+              {effortChoices(shown.agent, shown.model).choices.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </>
+      )}
+    </>
+  );
+}
+
+/** One stage's agent in Ajustes: not fixed, or an agent with its model, reasoning and time
+ *  limit, and the fallback that runs its queued jobs while that agent's account is near its
+ *  limit. */
 export function StageAgentRow({
   label,
   value,
@@ -747,66 +824,29 @@ export function StageAgentRow({
 }) {
   const shown = value ? agentChoice(value) : null;
   const timeout = value?.timeout_minutes ?? null;
-  const set = (next: AgentChoice, timeoutMinutes = timeout) =>
+  const fallback = value?.fallback ? agentChoice(value.fallback) : null;
+  const pick = (next: AgentChoice) => ({
+    agent: next.agent,
+    model: next.model || null,
+    reasoning: next.reasoning || null,
+  });
+  const set = (next: AgentChoice, timeoutMinutes = timeout, nextFallback = fallback) =>
     onChange({
-      agent: next.agent,
-      model: next.model || null,
-      reasoning: next.reasoning || null,
+      ...pick(next),
       timeout_minutes: timeoutMinutes,
+      fallback: nextFallback && pick(nextFallback),
     });
   return (
-    <div className="delivery-field-row">
-      <Field label={label}>
-        <select
-          aria-label={`Agente de ${label}`}
-          value={shown?.agent ?? ""}
-          onChange={(event) =>
-            event.target.value
-              ? set(
-                  agentChoice({
-                    agent: event.target.value as DeliveryAgent,
-                    model: null,
-                    reasoning: null,
-                  }),
-                )
-              : onChange(null)
-          }
-        >
-          <option value="">Sin fijar</option>
-          <option value="codex">Codex</option>
-          <option value="claude">Claude Code</option>
-          <option value="muse">Muse Code</option>
-          <option value="opencode">OpenCode</option>
-        </select>
-      </Field>
-      {shown && (
-        <>
-          <Field label="Modelo">
-            <select
-              aria-label={`Modelo de ${label}`}
-              value={shown.model}
-              onChange={(event) => set(withModel(shown, event.target.value))}
-            >
-              {modelChoices(shown.agent).choices.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Razonamiento">
-            <select
-              aria-label={`Razonamiento de ${label}`}
-              value={shown.reasoning}
-              onChange={(event) => set({ ...shown, reasoning: event.target.value })}
-            >
-              {effortChoices(shown.agent, shown.model).choices.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </Field>
+    <>
+      <div className="delivery-field-row">
+        <AgentFields
+          label={label}
+          name={label}
+          emptyLabel="Sin fijar"
+          shown={shown}
+          onChange={(next) => (next ? set(next) : onChange(null))}
+        />
+        {shown && (
           <Field label="Tiempo máximo (min)">
             {/* Saved when the field is left, not on every key; shows the saved limit again
                 when it changes. */}
@@ -823,9 +863,20 @@ export function StageAgentRow({
               }}
             />
           </Field>
-        </>
+        )}
+      </div>
+      {shown && (
+        <div className="delivery-field-row">
+          <AgentFields
+            label={`${label}: alternativo`}
+            name={`${label} (alternativo)`}
+            emptyLabel="Ninguno"
+            shown={fallback}
+            onChange={(next) => set(shown, timeout, next)}
+          />
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -1825,10 +1876,13 @@ function CopySnippet({ label, shown, copied }: { label: string; shown: string; c
 }
 
 type DeliveryWideProps = {
-  capacity: number;
+  settings: DeliverySettings;
   endpoint: DeliveryCoordinatorEndpoint | null;
-  onCapacity: (capacity: number) => void;
+  onSettings: (settings: DeliverySettings) => void;
 };
+
+/** The shares of an account's usage limit the settings offer to stop at. */
+const QUOTA_STOP_CHOICES = [50, 60, 70, 80, 90, 95, 97, 98, 99, 100];
 
 /** What applies to Delivery in every repo: how many agents run at once and
  *  how an outside coordinator connects. */
@@ -1845,7 +1899,8 @@ export function DeliverySettingsDialog({
 
 /** How many agents run at once and how an outside coordinator connects:
  *  the same in the dialog and on a repo's settings page. */
-function DeliveryWideSettings({ capacity, endpoint, onCapacity }: DeliveryWideProps) {
+function DeliveryWideSettings({ settings, endpoint, onSettings }: DeliveryWideProps) {
+  const { capacity, quota_stop_percent: quotaStop } = settings;
   // The token is a credential: the page shows it masked and only the copy
   // buttons carry it.
   // Through Tinto's proxy as a stdio server, which updates leave running,
@@ -1873,7 +1928,10 @@ function DeliveryWideSettings({ capacity, endpoint, onCapacity }: DeliveryWidePr
         label="Agentes en paralelo"
         hint="Automático: uno por cada tarea activa (cada issue), hasta uno por núcleo físico menos uno (para las comprobaciones de Tinto), que corren de una en una. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
       >
-        <select value={capacity} onChange={(event) => onCapacity(Number(event.target.value))}>
+        <select
+          value={capacity}
+          onChange={(event) => onSettings({ ...settings, capacity: Number(event.target.value) })}
+        >
           <option value={0}>Automático: uno por issue</option>
           {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
             <option key={value} value={value}>
@@ -1881,6 +1939,26 @@ function DeliveryWideSettings({ capacity, endpoint, onCapacity }: DeliveryWidePr
             </option>
           ))}
           <option value={UNLIMITED_CAPACITY}>Sin límite</option>
+        </select>
+      </Field>
+      <Field
+        label="Límite de uso de cada cuenta"
+        hint="Desde esta parte del límite de uso de su cuenta, Tinto no empieza trabajos nuevos de un agente hasta que se renueve (o los empieza con el agente alternativo de la etapa); los que corren siguen. Un trabajo que se queda sin cuota a medias falla con sus cambios a medio hacer y se reintenta una hora después."
+      >
+        <select
+          value={quotaStop}
+          onChange={(event) =>
+            onSettings({ ...settings, quota_stop_percent: Number(event.target.value) })
+          }
+        >
+          {(QUOTA_STOP_CHOICES.includes(quotaStop)
+            ? QUOTA_STOP_CHOICES
+            : [...QUOTA_STOP_CHOICES, quotaStop].sort((a, b) => a - b)
+          ).map((value) => (
+            <option key={value} value={value}>
+              {value === 100 ? "100%: no detener nunca" : `${value}%`}
+            </option>
+          ))}
         </select>
       </Field>
       <h3 className="delivery-dialog__subtitle">Conectar un coordinador</h3>

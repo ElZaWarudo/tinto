@@ -112,7 +112,7 @@ import type {
   DeliveryTiming,
   DeliveryUsage,
 } from "../../delivery/types";
-import { UNLIMITED_CAPACITY } from "../../delivery/types";
+import { QUOTA_STOP_PERCENT, UNLIMITED_CAPACITY } from "../../delivery/types";
 import {
   DispatchDialog,
   ArchivedTasksDialog,
@@ -898,7 +898,11 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   const running = jobs.filter((job) => job.status === "pending" || job.status === "started");
   const queued = jobs.filter((job) => job.status === "queued");
   // The setting, and the agents it allows now (automatic: one per active task).
-  const capacitySetting = overview?.settings.capacity ?? 0;
+  const wideSettings = overview?.settings ?? {
+    capacity: 0,
+    quota_stop_percent: QUOTA_STOP_PERCENT,
+  };
+  const capacitySetting = wideSettings.capacity;
   const capacity = overview?.capacity ?? Math.max(1, capacitySetting);
   // QA's resources, one per environment it tests on: the one in quarantine
   // first, else the busy ones.
@@ -1153,9 +1157,9 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
 
           {dialog?.kind === "settings" && (
             <DeliverySettingsDialog
-              capacity={capacitySetting}
+              settings={wideSettings}
               endpoint={overview?.coordinator ?? null}
-              onCapacity={(value) => void run(() => updateDeliverySettings(value))}
+              onSettings={(value) => void run(() => updateDeliverySettings(value))}
               onClose={() => setDialog(null)}
             />
           )}
@@ -1985,9 +1989,9 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           repo={choice}
           section={settingsAt || undefined}
           onBack={() => setSettingsAt(null)}
-          capacity={overview?.settings.capacity ?? 0}
+          settings={overview?.settings ?? { capacity: 0, quota_stop_percent: QUOTA_STOP_PERCENT }}
           endpoint={overview?.coordinator ?? null}
-          onCapacity={(value) => void run(() => updateDeliverySettings(value))}
+          onSettings={(value) => void run(() => updateDeliverySettings(value))}
         />
       ) : (
         <div className="delivery-panel__body">

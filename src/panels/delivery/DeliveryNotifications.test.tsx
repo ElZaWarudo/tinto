@@ -64,7 +64,7 @@ function overview(decisions: DeliveryDecision[]): DeliveryOverview {
     leases: [],
     approvals: [],
     decisions,
-    settings: { capacity: 3 },
+    settings: { capacity: 3, quota_stop_percent: 99 },
     coordinator: null,
   };
 }

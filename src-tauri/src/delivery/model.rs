@@ -613,8 +613,9 @@ pub struct DeliveryJob {
     pub visual_record_extras: Vec<String>,
     #[serde(default)]
     pub visual_record_warnings: Vec<String>,
-    /// Why the job runs with another agent than the one asked for (it was
-    /// not installed on this machine).
+    /// Why the job runs with another agent than the one asked for: it was
+    /// not installed on this machine, or its account was near its limit and
+    /// the job started on its stage's fallback.
     #[serde(default)]
     pub substituted: Option<String>,
     /// The interrupted job this one repeats, queued by Tinto when it
@@ -1493,12 +1494,30 @@ pub struct DeliveryEvent {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliverySettings {
     /// Agents running at once. 0 is automatic: one per active task (each
     /// issue), up to what the machine's cores bear ([`auto_capacity_limit`]);
     /// [`UNLIMITED_CAPACITY`] starts every queued job.
     pub capacity: u32,
+    /// From this share of its account's usage limit on, Tinto starts no new
+    /// job of an agent until the limit renews; 100 never holds one. From
+    /// [`MIN_QUOTA_STOP_PERCENT`] to 100.
+    #[serde(default = "default_quota_stop_percent")]
+    pub quota_stop_percent: u32,
+}
+
+impl Default for DeliverySettings {
+    fn default() -> Self {
+        Self {
+            capacity: 0,
+            quota_stop_percent: QUOTA_STOP_PERCENT,
+        }
+    }
+}
+
+fn default_quota_stop_percent() -> u32 {
+    QUOTA_STOP_PERCENT
 }
 
 pub const MAX_CAPACITY: u32 = 8;
@@ -1772,6 +1791,20 @@ pub struct DeliveryStageAgent {
     /// default when `None`.
     #[serde(default)]
     pub timeout_minutes: Option<u32>,
+    /// The agent a queued job of the stage starts on instead while its own
+    /// agent's account is over `quota_stop_percent` of its limit.
+    #[serde(default)]
+    pub fallback: Option<DeliveryStageFallback>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryStageFallback {
+    pub agent: DeliveryAgent,
+    /// The CLI's default when `None`.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1824,10 +1857,12 @@ pub struct DeliveryOverview {
     pub quotas: Vec<DeliveryQuota>,
 }
 
-/// From this share of its account's limit on, Tinto starts no new job of
-/// an agent until the limit renews: past 100% every running job would
-/// fail mid-stage.
-pub const QUOTA_STOP_PERCENT: u32 = 95;
+/// The default of [`DeliverySettings::quota_stop_percent`]. Below 100: a
+/// job that runs out mid-stage fails, its edits left half-done in the
+/// worktree, and only runs again an hour later.
+pub const QUOTA_STOP_PERCENT: u32 = 99;
+/// The lowest `quota_stop_percent` the settings take.
+pub const MIN_QUOTA_STOP_PERCENT: u32 = 50;
 
 /// How much of an agent account's usage limit is spent, as its jobs last
 /// reported it (Claude Code's `rate_limit_event`).
@@ -1845,9 +1880,9 @@ pub struct DeliveryQuota {
 }
 
 impl DeliveryQuota {
-    /// It stops new jobs of its agent now.
-    pub fn stops(&self, now: u64) -> bool {
-        self.utilization >= QUOTA_STOP_PERCENT && now < self.resets_at_ms
+    /// It stops new jobs of its agent now, at the settings' `percent`.
+    pub fn stops(&self, percent: u32, now: u64) -> bool {
+        percent < 100 && self.utilization >= percent && now < self.resets_at_ms
     }
 }
 
@@ -1922,6 +1957,18 @@ fn blocking_by_default() -> bool {
 mod tests {
     use super::DeliveryApprovalStatus::*;
     use super::StepEvent::*;
+
+    #[test]
+    fn settings_saved_before_the_quota_fields_load_with_their_defaults() {
+        let settings: super::DeliverySettings = serde_json::from_str(r#"{"capacity":3}"#).unwrap();
+        assert_eq!(
+            (settings.capacity, settings.quota_stop_percent),
+            (3, super::QUOTA_STOP_PERCENT)
+        );
+        let stage: super::DeliveryStageAgent =
+            serde_json::from_str(r#"{"agent":"claude"}"#).unwrap();
+        assert_eq!(stage.fallback, None);
+    }
 
     #[test]
     fn a_step_moves_only_through_its_lifecycle() {
