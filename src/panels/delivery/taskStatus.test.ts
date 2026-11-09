@@ -13,6 +13,7 @@ import type {
 } from "../../delivery/types";
 import {
   attemptOutcome,
+  reviewerBlock,
   batchName,
   historyKey,
   isDelivered,
@@ -952,5 +953,49 @@ describe("Alcance", () => {
     expect(seen.commands).toEqual([
       { command: "npm test --prefix services/session-executor", outcome: "terminó bien" },
     ]);
+  });
+});
+
+describe("reviewerBlock", () => {
+  const read = {
+    choosesReviewers: true,
+    chosen: 0,
+    settingsRead: true,
+    reviewerOptional: false,
+    candidates: ["ana"] as string[] | null,
+    fresh: true,
+    failed: false,
+  };
+  it.each([
+    [
+      "a reviewer is chosen",
+      { chosen: 1, settingsRead: false, candidates: null, fresh: false },
+      null,
+    ],
+    ["the repo allows it", { reviewerOptional: true, candidates: null, fresh: false }, null],
+    ["GitHub said nobody else can review", { candidates: [] }, null],
+    ["people could review", {}, "Elige al menos un revisor."],
+    [
+      "the settings are still read",
+      { settingsRead: false },
+      "Leyendo los ajustes del repositorio…",
+    ],
+    [
+      "the list is still read",
+      { candidates: null, fresh: false },
+      "Leyendo quién puede revisar en GitHub…",
+    ],
+    [
+      "only an empty list is remembered",
+      { candidates: [], fresh: false },
+      "Leyendo quién puede revisar en GitHub…",
+    ],
+    [
+      "the list could not be read",
+      { candidates: null, fresh: false, failed: true },
+      "No se pudo leer quién puede revisar: reinténtalo.",
+    ],
+  ])("when %s", (_, over, expected) => {
+    expect(reviewerBlock({ ...read, ...over })).toBe(expected);
   });
 });
