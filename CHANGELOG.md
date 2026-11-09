@@ -4,6 +4,12 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.2.4] - 2026-11-09
+
+### Features
+
+- **delivery:** make the quota stop a setting and add per-stage fallback agents
+
 ## [1.2.3] - 2026-11-09
 
 ### Features
