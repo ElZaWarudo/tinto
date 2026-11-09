@@ -423,6 +423,8 @@ export interface DeliveryApproval {
   merge_head?: string | null;
   /** `sync`: files left in conflict; the merge stays in progress until a commit concludes it. */
   conflicts?: string[];
+  /** `sync`: it restacked the branch; with open `conflicts` the rebase is paused and undoing the step abandons it. */
+  restack?: boolean;
   /** `commit`: the commits Tinto created. */
   created?: string[];
   /** `commit`: the author git records on the commits (`Name <email>`), from the worktree's config. */

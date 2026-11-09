@@ -2977,6 +2977,7 @@ function TaskDetail({
       <StepChecks task={task} approvals={approvals} pr={pr} />
 
       <CommitStep approvals={approvals} />
+      <PausedRestack approvals={approvals} />
 
       {step?.rung === "commit" && requesting && (
         <CommitPlanForm task={task} onClose={() => setRequesting(false)} />
@@ -3638,6 +3639,36 @@ function CommitStep({ approvals }: { approvals: DeliveryApproval[] }) {
           {made === 1 ? "Deshacer el commit" : `Deshacer los ${made} commits`}
         </ActionButton>
       )}
+    </div>
+  );
+}
+
+/** A restack paused on conflicts: Tinto continues it once they are
+ *  resolved, and the user can abandon it, keeping what was resolved. */
+function PausedRestack({ approvals }: { approvals: DeliveryApproval[] }) {
+  const sync = latestApproval(approvals, "sync");
+  const paused =
+    sync?.restack &&
+    sync.status === "executed" &&
+    (sync.conflicts?.length ?? 0) > 0 &&
+    !(sync.created?.length ?? 0);
+  if (!sync || !paused) return null;
+  return (
+    <div className="delivery-commit-step" role="group" aria-label="Restack en pausa">
+      {sync.notice && <p className="delivery-job__note">{sync.notice}</p>}
+      <ActionButton
+        title="La rama vuelve a donde estaba; lo resuelto se guarda en una referencia de recuperación."
+        onAction={async () => {
+          const ok = await confirm(
+            "La rama volverá a donde estaba antes del restack. Lo resuelto hasta ahora queda guardado en una referencia de recuperación, y la tarea sigue pendiente de restack.",
+            { title: "Abandonar el restack", okLabel: "Abandonar" },
+          );
+          if (!ok) return false;
+          await undoDeliveryCommit(sync.id);
+        }}
+      >
+        Abandonar el restack
+      </ActionButton>
     </div>
   );
 }

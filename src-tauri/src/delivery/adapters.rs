@@ -366,7 +366,20 @@ pub fn job_prompt(
     }
     if let Some(merge) = &job.merge_conflicts {
         let files = merge.files.join(", ");
-        lines.push(if job.writes {
+        lines.push(if let Some(commit) = &merge.replaying {
+            // In a rebase git's "ours" is the base and "theirs" the task's
+            // commit, the reverse of a merge: name each side instead.
+            match job.writes {
+                true => format!(
+                    "Tinto is moving this branch's own commits onto {} (a restack) and stopped while replaying the commit {commit}, with conflicts in: {files}. In each conflict, the side between <<<<<<< and ======= is {} with the commits already moved, and the side between ======= and >>>>>>> is that commit's change. Resolve each one: edit the file so it keeps what the commit meant on top of {}, and remove every conflict marker. Only edit files: do not run git add, git commit, git rebase, git reset or git checkout. Tinto continues the restack itself once the stages pass, and it may stop again on a later commit.",
+                    merge.base, merge.base, merge.base
+                ),
+                false => format!(
+                    "Tinto is moving this branch's own commits onto {} (a restack); replaying {commit} it has conflicts in: {files}.",
+                    merge.base
+                ),
+            }
+        } else if job.writes {
             format!(
                 "Tinto is merging {} into this branch and the merge stopped on conflicts in: {files}. Resolve each one first: edit the file so it keeps what both sides meant, and remove every conflict marker (<<<<<<<, =======, >>>>>>>). Do not run git merge, git add, git commit, git reset or git checkout: the merge stays in progress and Tinto concludes it with the commit step.",
                 merge.base

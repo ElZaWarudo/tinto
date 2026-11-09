@@ -894,8 +894,7 @@ impl DeliveryService {
                     .filter(|approval| approval.task_id == task.id)
                     .collect();
                 super::phase::open_merge(&steps, true).is_some()
-                    && tasks::merge_head(Place::of(task.distro.as_deref()), &task.worktree)
-                        .is_some()
+                    && tasks::sync_in_progress(Place::of(task.distro.as_deref()), &task.worktree)
             })
             .map(|task| task.id.clone())
             .collect();

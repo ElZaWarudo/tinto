@@ -12613,6 +12613,153 @@ fn a_task_on_another_tasks_branch_follows_it_and_is_restacked_when_it_merges_squ
     assert_ne!(remote, published);
 }
 
+/// A task on another task's branch, with `commits` of its own (file names,
+/// one commit each), whose base then merged squashed into main with
+/// `main_files` beside it: the task is marked for a restack.
+fn squashed_under(
+    h: &Harness,
+    key: &str,
+    commits: &[&str],
+    main_files: &[(&str, &str)],
+) -> DeliveryTask {
+    let first = h.task(&format!("{key}-A"));
+    write_files(&first, &["one.txt"]);
+    commit_outside(&first, "one");
+    let task = task_on(h, key, &first);
+    for name in commits {
+        write_files(&task, &[name]);
+        commit_outside(&task, name);
+    }
+    let repo = h.repo.path();
+    std::fs::write(repo.join("one.txt"), "one.txt\n").unwrap();
+    for (name, text) in main_files {
+        std::fs::write(repo.join(name), text).unwrap();
+    }
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "first (#1)"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    let mut merge = executed_step(&first.id, "merge");
+    merge.merge_method = Some("squash".into());
+    h.service.store().unwrap().put_approval(&merge).unwrap();
+    h.service.retarget_packages().unwrap();
+    let task = h.service.task(&task.id).unwrap();
+    assert!(task.restack_from.is_some());
+    task
+}
+
+#[test]
+fn a_restack_that_stops_on_conflicts_pauses_and_tinto_continues_it_or_abandons_it() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    // Its 2nd and 3rd of 3 commits conflict with what main got meanwhile.
+    let task = squashed_under(
+        &h,
+        "RC-1",
+        &["two.txt", "notes.txt", "notes2.txt"],
+        &[
+            ("notes.txt", "main's notes\n"),
+            ("notes2.txt", "main's notes 2\n"),
+        ],
+    );
+    let tip = in_worktree(&task, &["rev-parse", "HEAD"]);
+    let sync = |title: &str| {
+        let asked = h
+            .service
+            .request_approval(step(&task, DeliveryRung::Sync, title))
+            .unwrap();
+        h.service.decide_approval(&asked.id, true, None).unwrap()
+    };
+    let paused = sync("Restack");
+    assert_eq!(
+        paused.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        paused.outcome
+    );
+    assert_eq!(paused.conflicts, ["notes.txt"]);
+    let place = super::tasks::Place::Native;
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_some());
+    let open_sync_rounds = || {
+        h.service
+            .store()
+            .unwrap()
+            .task_rounds(&task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|round| round.kind == "sync" && round.is_open())
+            .count()
+    };
+    assert_eq!(open_sync_rounds(), 1);
+    // Nothing is committed or published halfway.
+    for (rung, category) in [
+        (DeliveryRung::Commit, "restack_in_progress"),
+        (DeliveryRung::Push, "merge_in_progress"),
+    ] {
+        let error = h
+            .service
+            .request_approval(step(&task, rung, "x"))
+            .unwrap_err();
+        assert_eq!(error.category, category, "{error}");
+    }
+
+    // The job is told which side is which; it only edits the file, and
+    // Tinto continues once implementation and review passed.
+    let resolve = |file: &str| {
+        let job = h.dispatch(&task, "implementation", "events=codex-ok");
+        let conflicts = job.merge_conflicts.clone().unwrap();
+        assert_eq!(conflicts.files, [file]);
+        assert!(conflicts.replaying.unwrap().ends_with(file), "replaying");
+        std::fs::write(task.worktree.join(file), format!("{file} from both\n")).unwrap();
+        h.wait(&job.id);
+        h.wait(&h.dispatch(&task, "review", "events=codex-ok").id);
+    };
+    resolve("notes.txt");
+    // It stopped again on the next commit: a round of its own.
+    let again = eventually(|| {
+        let sync = h.service.approval(&paused.id).unwrap();
+        (sync.conflicts == ["notes2.txt"]).then_some(sync)
+    });
+    assert!(again.outcome.unwrap().contains("notes2.txt"));
+    assert_eq!(open_sync_rounds(), 1);
+    let resolved_once = in_worktree(&task, &["show", "HEAD:notes.txt"]);
+    assert_eq!(resolved_once, "notes.txt from both");
+
+    // Abandoning it keeps the work and puts the branch back.
+    std::fs::write(task.worktree.join("notes2.txt"), "half done\n").unwrap();
+    let undone = h.service.undo_commit(&paused.id).unwrap();
+    assert_eq!(undone.status, DeliveryApprovalStatus::Undone);
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_none());
+    assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), tip);
+    let kept = format!("refs/tinto/recovery/{}", paused.id);
+    assert_eq!(
+        in_worktree(&task, &["show", &format!("{kept}:notes2.txt")]),
+        "half done"
+    );
+    assert_eq!(open_sync_rounds(), 0);
+    assert!(h.service.task(&task.id).unwrap().restack_from.is_some());
+
+    // Asked again, both stops are resolved and the restack ends.
+    let paused = sync("Restack again");
+    assert_eq!(paused.conflicts, ["notes.txt"]);
+    resolve("notes.txt");
+    eventually(|| {
+        (h.service.approval(&paused.id).unwrap().conflicts == ["notes2.txt"]).then_some(())
+    });
+    resolve("notes2.txt");
+    let done = eventually(|| {
+        let sync = h.service.approval(&paused.id).unwrap();
+        (!sync.created.is_empty()).then_some(sync)
+    });
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_none());
+    assert_eq!(done.created.len(), 3, "{:?}", done.outcome);
+    assert_eq!(
+        in_worktree(&task, &["rev-parse", "HEAD~3"]),
+        in_worktree(&task, &["rev-parse", "origin/main"])
+    );
+    assert_eq!(h.service.task(&task.id).unwrap().restack_from, None);
+    assert_eq!(open_sync_rounds(), 0);
+}
+
 #[test]
 fn merging_a_pr_others_go_into_keeps_its_branch_until_they_point_at_the_merge_target() {
     let h = harness();

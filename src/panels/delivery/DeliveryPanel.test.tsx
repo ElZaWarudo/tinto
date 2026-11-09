@@ -1522,6 +1522,25 @@ describe("DeliveryPanel", () => {
     expect(screen.queryByRole("button", { name: /Deshacer (el|los)/ })).toBeNull();
   });
 
+  it("offers to abandon a restack paused on conflicts, and not a merge in progress", async () => {
+    const user = userEvent.setup();
+    const sync = (over: Partial<DeliveryApproval>) =>
+      commitStep({ id: "s1", rung: "sync", status: "executed", conflicts: ["a.ts"], ...over });
+    client.getDeliveryOverview.mockResolvedValue(overview({ approvals: [sync({})] }));
+    const view = renderPanel();
+    expect(await screen.findByRole("button", { name: "Preparar commit…" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Abandonar el restack" })).toBeNull();
+    view.unmount();
+
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ approvals: [sync({ restack: true })] }),
+    );
+    client.undoDeliveryCommit.mockResolvedValue({});
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Abandonar el restack" }));
+    await waitFor(() => expect(client.undoDeliveryCommit).toHaveBeenCalledWith("s1"));
+  });
+
   it("undoes the latest job after confirming", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(overview());
