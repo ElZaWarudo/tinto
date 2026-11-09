@@ -284,6 +284,13 @@ pub struct DeliveryPr {
     /// What the PR waits on comes from it.
     #[serde(default)]
     pub review_states: Vec<super::reviews::ReviewerState>,
+    /// Every review thread a reviewer opened, with whether it has a reply.
+    #[serde(default)]
+    pub review_threads: Vec<super::review_threads::ReviewThread>,
+    /// Those still without a reply while it is open, with how long each
+    /// has waited: what blocks sending it back to review.
+    #[serde(default)]
+    pub unanswered_threads: Vec<super::review_threads::ReviewThread>,
 }
 
 impl DeliveryPr {
@@ -323,6 +330,8 @@ impl DeliveryPr {
             removed_in_tinto: Vec::new(),
             changes_requested_by: Vec::new(),
             review_states: Vec::new(),
+            review_threads: Vec::new(),
+            unanswered_threads: Vec::new(),
         }
     }
 
@@ -464,7 +473,7 @@ pub(super) const APPROVED_NEWS: &str = " aprobó";
 
 /// `gh pr view --json` fields Tinto reads.
 pub const PR_FIELDS: &str =
-    "title,body,state,isDraft,mergeable,reviewDecision,reviewRequests,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit,baseRefName,headRefOid,labels";
+    "title,body,author,state,isDraft,mergeable,reviewDecision,reviewRequests,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit,baseRefName,headRefOid,labels";
 
 /// Whether the repo has CI at all: workflow files in the worktree's commit.
 pub fn has_ci(place: Place<'_>, worktree: &std::path::Path) -> bool {
@@ -904,6 +913,8 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) -> Vec<St
         .filter(|(_, _, _, line)| !line.is_empty())
         .map(|(_, _, _, line)| line.clone())
         .collect();
+    super::review_threads::follow_threads(pr, snapshot, me);
+    pr.count_waits(now_ms());
     pr.error = None;
     changes
 }
@@ -1545,6 +1556,26 @@ impl GhCli {
             .map(Value::Array)
     }
 
+    /// The first comment's id of each resolved review thread of the PR.
+    fn resolved_threads(repo: &str, number: u64) -> Result<Value, DeliveryError> {
+        let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
+        let query = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { databaseId } } } } } } }";
+        Self::json(&[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={query}"),
+            "-f",
+            &format!("owner={owner}"),
+            "-f",
+            &format!("name={name}"),
+            "-F",
+            &format!("number={number}"),
+            "--jq",
+            "[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved) | .comments.nodes[0].databaseId]",
+        ])
+    }
+
     fn json(args: &[&str]) -> Result<Value, DeliveryError> {
         let output = Self::run(args)?;
         if !output.status.success() {
@@ -1604,6 +1635,10 @@ impl GitHub for GhCli {
             // What a review said on the code: news a round must carry.
             if let Ok(comments) = self.pr_review_comments(&pr.repo, pr.number) {
                 snapshot["reviewComments"] = comments;
+            }
+            // Which review threads are resolved, by their first comment.
+            if let Ok(resolved) = Self::resolved_threads(&pr.repo, pr.number) {
+                snapshot["resolvedThreads"] = resolved;
             }
             // Who asked or took back a review, and when: who must approve
             // it follows GitHub.
@@ -2370,7 +2405,12 @@ impl DeliveryService {
             if asked(&pr) && !asked(&before) {
                 pr.changes_requested_at_ms = pr.checked_at_ms;
             }
+            // Threads past their time without a reply, once each.
+            let alerts = pr.due_alerts(now_ms());
             store.put_pr(&pr)?;
+            for alert in alerts {
+                store.record_event(now_ms(), "thread_unanswered", Some(task_id), None, &alert)?;
+            }
             if let Some(news) = pr_news(&before, &pr, &reviewers) {
                 store.record_event(now_ms(), "pr_changed", Some(task_id), None, &news)?;
             }
@@ -2851,6 +2891,9 @@ impl DeliveryService {
                 .collect()
         };
         let (request, remove) = (clean(request), clean(remove));
+        if !request.is_empty() {
+            self.check_threads_answered(task_id, "volver a pedir la revisión")?;
+        }
         let github = self.github();
         if !remove.is_empty() {
             github.remove_reviewers(&pr.url, &remove)?;
@@ -3005,16 +3048,21 @@ impl DeliveryService {
                 .reply_to_review_comment(&repo, number, first, body)
                 .map_err(reply_failure)?,
         };
-        let notice = approval
+        let unresolved = approval
             .resolve_thread
             .then(|| github.resolve_review_thread(&repo, number, first).err())
-            .flatten()
-            .map(|error| {
-                format!(
-                    "Respondido, pero no se pudo resolver el hilo: {}",
-                    reply_failure(error).message
-                )
-            });
+            .flatten();
+        self.mark_thread_answered(
+            &approval.task_id,
+            first,
+            approval.resolve_thread && unresolved.is_none(),
+        )?;
+        let notice = unresolved.map(|error| {
+            format!(
+                "Respondido, pero no se pudo resolver el hilo: {}",
+                reply_failure(error).message
+            )
+        });
         Ok((posted, notice))
     }
 

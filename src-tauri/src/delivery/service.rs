@@ -868,6 +868,10 @@ impl DeliveryService {
             .prs()?
             .into_iter()
             .filter(|pr| live.contains(pr.task_id.as_str()))
+            .map(|mut pr| {
+                pr.count_waits(now_ms());
+                pr
+            })
             .collect();
         let qa_problems: Vec<_> = store
             .qa_problems()?
@@ -2774,14 +2778,17 @@ impl DeliveryService {
     /// Closes the task's open round without more work: what it had to
     /// address was settled another way (answered with a reply, a check that
     /// passed when run again with nothing to publish). The note, one line,
-    /// is its outcome.
+    /// is its outcome. A round of PR comments whose review threads still
+    /// have no reply closes only with `unanswered_reason`, which the user
+    /// reads in its outcome.
     pub fn resolve_round(
         &self,
         task_id: &str,
         note: &str,
+        unanswered_reason: Option<&str>,
         by: &str,
     ) -> Result<super::model::DeliveryRound, DeliveryError> {
-        let note = resolve_note(note)?;
+        let mut note = resolve_note(note)?;
         let store = self.store()?;
         let mut round = super::rounds::open_of(&store, task_id)?.ok_or_else(|| {
             DeliveryError::new("no_open_round", "la tarea no tiene una ronda abierta")
@@ -2798,6 +2805,25 @@ impl DeliveryService {
                     open.role, open.id
                 ),
             ));
+        }
+        let pr = store.pr(task_id)?;
+        let refusal = pr
+            .as_ref()
+            .filter(|_| round.kind == "pr")
+            .and_then(|pr| pr.threads_refusal("la ronda viene de comentarios del PR"));
+        if let Some(refusal) = refusal {
+            match unanswered_reason.map(resolve_note).transpose()? {
+                Some(reason) => note = format!("{note} (hilos sin respuesta: {reason})"),
+                None => {
+                    return Err(DeliveryError::new(
+                        refusal.category,
+                        format!(
+                            "{}; o explica en unanswered_reason por qué se cierra así",
+                            refusal.message
+                        ),
+                    ))
+                }
+            }
         }
         round.closed_at_ms = Some(now_ms());
         round.outcome = Some(format!("resuelta por {by}: {note}"));
