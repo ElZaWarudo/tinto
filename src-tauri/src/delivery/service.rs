@@ -2093,7 +2093,10 @@ impl DeliveryService {
         // and `{job}` each job (a check run, an agent's session): two of
         // the task's jobs running at once never share it.
         let id = uuid::Uuid::new_v4().to_string();
-        let slug = task_slug(&task.key);
+        let slug = task_slug(
+            &task.key,
+            task.package.as_ref().map(|package| package.index),
+        );
         let check_env = settings
             .check_env
             .into_iter()
@@ -5022,14 +5025,21 @@ fn continue_note(stopped: &DeliveryJob) -> Option<String> {
 }
 
 /// A task's key as `{task}` gives it in the variables for checks: lowercase,
-/// with `_` for anything not a letter or digit (`AGOS-474` → `agos_474`).
-fn task_slug(key: &str) -> String {
-    key.chars()
+/// with `_` for anything not a letter or digit (`AGOS-474` → `agos_474`),
+/// and a package's number after it (`agos_474_p2`): the packages of one
+/// issue run their checks at once and must not share a test database.
+fn task_slug(key: &str, package: Option<u32>) -> String {
+    let slug: String = key
+        .chars()
         .map(|c| match c.is_ascii_alphanumeric() {
             true => c.to_ascii_lowercase(),
             false => '_',
         })
-        .collect()
+        .collect();
+    match package {
+        Some(index) => format!("{slug}_p{index}"),
+        None => slug,
+    }
 }
 
 pub(crate) fn agent_name(agent: DeliveryAgent) -> &'static str {
@@ -5046,6 +5056,12 @@ pub(crate) fn agent_name(agent: DeliveryAgent) -> &'static str {
 mod tests {
     use super::*;
     use crate::delivery::adapters::tests::sample_job;
+
+    #[test]
+    fn each_package_of_an_issue_gets_its_own_task_slug() {
+        assert_eq!(task_slug("AGOS-129", None), "agos_129");
+        assert_eq!(task_slug("AGOS-129", Some(3)), "agos_129_p3");
+    }
 
     #[test]
     fn a_stage_on_other_code_hears_how_long_each_check_took() {
