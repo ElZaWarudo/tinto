@@ -691,6 +691,49 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("line 599")).toBeInTheDocument();
   });
 
+  it("opens the log of a stage launched while the task is open", async () => {
+    let changed = () => {};
+    client.onDeliveryChanged.mockImplementation((...args: unknown[]) => {
+      changed = args[0] as () => void;
+      return Promise.resolve(() => {});
+    });
+    client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [job()] }));
+    renderPanel();
+    const tests = await screen.findByRole("button", { name: /^Tests\s*· intento 1/ });
+    await waitFor(() => expect(tests).toHaveAttribute("aria-expanded", "true"));
+    const review = job({ id: "j2", role: "review", status: "started", result: null });
+    client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [job(), review] }));
+    act(() => changed());
+    const started = await screen.findByRole(
+      "button",
+      { name: /^Revisión\s*· intento 1/ },
+      { timeout: 3000 },
+    );
+    expect(started).toHaveAttribute("aria-expanded", "true");
+    expect(tests).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("says what could not be read, until a later read works", async () => {
+    let changed = () => {};
+    client.onDeliveryChanged.mockImplementation((...args: unknown[]) => {
+      changed = args[0] as () => void;
+      return Promise.resolve(() => {});
+    });
+    client.getDeliveryOverview.mockRejectedValueOnce({ message: "store ocupado" });
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.checkDeliveryTask.mockRejectedValue({ message: "gh no responde" });
+    renderPanel();
+    expect(await screen.findByText("store ocupado")).toBeInTheDocument();
+    act(() => changed());
+    await waitFor(() => expect(screen.queryByText("store ocupado")).toBeNull(), {
+      timeout: 3000,
+    });
+    // Checking the open task against GitHub failed: it says so.
+    expect(
+      await screen.findByText("No se pudo comprobar la tarea en GitHub: gh no responde"),
+    ).toBeInTheDocument();
+  });
+
   it("resumes a paused stage and pauses the batch", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(

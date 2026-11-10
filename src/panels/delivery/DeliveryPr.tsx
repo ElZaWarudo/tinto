@@ -66,7 +66,11 @@ function PrReviewers({ pr }: { pr: DeliveryPr }) {
     if (!open || candidates) return;
     let live = true;
     getDeliveryPrReviewers(pr.task_id).then(
-      (logins) => live && setCandidates(logins),
+      (logins) => {
+        if (!live) return;
+        setError(null);
+        setCandidates(logins);
+      },
       (cause) =>
         live &&
         setError(

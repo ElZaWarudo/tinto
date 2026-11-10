@@ -663,6 +663,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [dialog, setDialog] = useState<Dialog>(null);
   const [error, setError] = useState<string | null>(null);
+  // Why the overview could not be read: the next good read clears it.
+  const [readError, setReadError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [repoSettings, setRepoSettings] = useState<DeliveryRepoSettings | null>(null);
   const [listView, setListView] = useState(savedListView);
@@ -714,11 +716,12 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   // The overview, then the guides of its batches' repos.
   const show = useCallback((next: DeliveryOverview) => {
     setOverview(next);
+    setReadError(null);
     void guideProposals(next).then(setGuides);
   }, []);
 
   const refresh = useCallback(
-    () => getDeliveryOverview().then(show, (cause: unknown) => setError(errorText(cause))),
+    () => getDeliveryOverview().then(show, (cause: unknown) => setReadError(errorText(cause))),
     [show],
   );
 
@@ -743,7 +746,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
         if (active) show(next);
       },
       (cause: unknown) => {
-        if (active) setError(errorText(cause));
+        if (active) setReadError(errorText(cause));
       },
     );
     // Running agents change things several times a second: read the
@@ -1210,10 +1213,17 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             </button>
           </header>
 
-          {error && (
+          {(error ?? readError) && (
             <div className="delivery-panel__error" role="alert">
-              <span>{error}</span>
-              <button type="button" aria-label="Descartar error" onClick={() => setError(null)}>
+              <span>{error ?? readError}</span>
+              <button
+                type="button"
+                aria-label="Descartar error"
+                onClick={() => {
+                  setError(null);
+                  setReadError(null);
+                }}
+              >
                 ×
               </button>
             </div>
@@ -2398,6 +2408,13 @@ function TaskDetail({
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
   const taskRun = overview.runs.find((candidate) => candidate.id === task.run_id);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(newestFirst[0]?.id ?? null);
+  // A stage launched while the task is open shows its log as it runs.
+  const newestStage = newestFirst.find((job) => job.agent !== "shell")?.id ?? null;
+  const [seenStage, setSeenStage] = useState(newestStage);
+  if (newestStage !== seenStage) {
+    setSeenStage(newestStage);
+    if (newestStage) setExpandedJobId(newestStage);
+  }
   const latestUndoable = newestFirst.find(
     (job) => job.agent !== "shell" && !job.undone_at_ms && job.changes.length > 0,
   );
@@ -2482,8 +2499,17 @@ function TaskDetail({
   const failedMerge = lastMerge?.status === "failed" && pr?.state === "open" ? lastMerge : null;
   // Opening the task checks its steps against GitHub: the PR is found by its
   // branch if needed and read, unless it was read moments ago.
+  // A check that failed says so: what the task shows may be out of date.
+  const [checkFailed, setCheckFailed] = useState<{ taskId: string; why: string } | null>(null);
   useEffect(() => {
-    void checkDeliveryTask(task.id).catch(() => {});
+    let live = true;
+    checkDeliveryTask(task.id).then(
+      () => live && setCheckFailed(null),
+      (cause) => live && setCheckFailed({ taskId: task.id, why: errorText(cause) }),
+    );
+    return () => {
+      live = false;
+    };
   }, [task.id]);
   const taskDecisions = (overview.decisions ?? []).filter(
     (decision) => decision.task_id === task.id,
@@ -3052,6 +3078,11 @@ function TaskDetail({
           </ApprovalBar>
         ))}
       {failedMerge && pr && <MergeFailed approval={failedMerge} pr={pr} />}
+      {checkFailed?.taskId === task.id && (
+        <p className="delivery-job__note" role="status">
+          No se pudo comprobar la tarea en GitHub: {checkFailed.why}
+        </p>
+      )}
       {replies.length > 0 && (
         <StepBar
           id={askId("replies")}
@@ -4431,10 +4462,10 @@ function ApprovalBanner({
   useEffect(() => {
     if (!choosesReviewers) return;
     let live = true;
-    setCandidatesError(null);
     getDeliveryPrReviewers(task.id).then(
       (logins) => {
         if (!live) return;
+        setCandidatesError(null);
         setCandidates(logins);
         setFresh(true);
         cacheReviewers(task.repo, logins);
@@ -4614,7 +4645,13 @@ function ApprovalBanner({
             <p className="delivery-job__note">
               No se pudo leer quién puede revisar: {candidatesError}.
               {candidates !== null && " Es la última lista leída."}{" "}
-              <button type="button" onClick={() => setAttempt((count) => count + 1)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCandidatesError(null);
+                  setAttempt((count) => count + 1);
+                }}
+              >
                 Reintentar
               </button>
             </p>
