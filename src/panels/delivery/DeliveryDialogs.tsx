@@ -1094,16 +1094,19 @@ function RepoSettings({
             className="delivery-button--primary"
             disabled={!loaded}
             onAction={async () => {
-              if (!loaded) return;
+              if (!loaded) return false;
               const fieldsByTransition = parseTransitionFields(transitionFields);
+              // A failure shows next to the button, which does not mark it done.
               if (!fieldsByTransition) {
-                setStatus(
+                throw new Error(
                   "No se pudo guardar: los campos por transición no son un objeto JSON de transición → campos.",
                 );
-                return;
               }
+              // Over the settings as they are now: guides, approved proposals
+              // and stage agents are saved elsewhere while this page is open.
+              const current = await getDeliveryRepoSettings(repo);
               return setDeliveryRepoSettings(repo, {
-                ...loaded,
+                ...current,
                 qa_browser: browser,
                 qa_commands: parseChecks(commands),
                 setup: parseChecks(setup),
@@ -1124,7 +1127,11 @@ function RepoSettings({
                 paid_model_calls: paidCalls === "" ? null : paidCalls === "yes",
                 single_commit_max_files: positive(maxFiles),
                 single_commit_max_lines: positive(maxLines),
-                stages,
+                // The stage agents as they are now, unless edited here.
+                stages:
+                  JSON.stringify(stages) === JSON.stringify(loaded.stages ?? {})
+                    ? (current.stages ?? {})
+                    : stages,
                 retry_on_restart: retryOnRestart,
                 pr_without_reviewer: prWithoutReviewer,
                 ci_on_push: skipCiOnPush ? "skip" : "run",
@@ -1142,19 +1149,15 @@ function RepoSettings({
                       transition_fields: fieldsByTransition,
                     }
                   : null,
-              })
-                .then(async (saved) => {
-                  // The token goes apart and only when typed: empty keeps it.
-                  if (jiraToken.trim()) await setDeliveryJiraToken(repo, jiraToken);
-                  setJiraToken("");
-                  setLoaded(await getDeliveryRepoSettings(repo));
-                  setEdited(false);
-                  setStatus(`Guardado para ${label}.`);
-                  return saved;
-                })
-                .catch((cause) =>
-                  setStatus(`No se pudo guardar: ${String(cause?.message ?? cause)}`),
-                );
+              }).then(async (saved) => {
+                // The token goes apart and only when typed: empty keeps it.
+                if (jiraToken.trim()) await setDeliveryJiraToken(repo, jiraToken);
+                setJiraToken("");
+                setLoaded(await getDeliveryRepoSettings(repo));
+                setEdited(false);
+                setStatus(`Guardado para ${label}.`);
+                return saved;
+              });
             }}
           >
             Guardar
@@ -1520,11 +1523,22 @@ function RepoSettings({
         </Field>
         <Field
           label="Estados al abrir el PR"
-          hint="En orden, separados por comas: En ejecución, In Review"
+          hint={
+            jiraHost.trim() && parseStatuses(afterPr).length === 0
+              ? "Vacío: al abrir el PR, Tinto no mueve la issue en Jira; lo hace el coordinador."
+              : "En orden, separados por comas: En ejecución, In Review"
+          }
         >
           <input value={afterPr} onChange={(event) => setAfterPr(event.target.value)} />
         </Field>
-        <Field label="Estados al fusionar el PR" hint="Por ejemplo: Cerrada">
+        <Field
+          label="Estados al fusionar el PR"
+          hint={
+            jiraHost.trim() && parseStatuses(afterMerge).length === 0
+              ? "Vacío: al fusionar el PR, Tinto no mueve la issue en Jira; lo hace el coordinador."
+              : "Por ejemplo: Cerrada"
+          }
+        >
           <input value={afterMerge} onChange={(event) => setAfterMerge(event.target.value)} />
         </Field>
         <Field

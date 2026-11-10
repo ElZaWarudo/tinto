@@ -2874,6 +2874,52 @@ describe("DeliveryPanel", () => {
     );
   });
 
+  it("saves the repo settings over what was saved elsewhere, and says when it failed", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    const opened = { worktree_root: null, bootstrap: null, default_base: null };
+    client.getDeliveryRepoSettings.mockResolvedValue(opened);
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Ajustes de agentos" }));
+    const settings = screen.getByRole("region", { name: "Ajustes de agentos" });
+    const save = await screen.findByRole("button", { name: "Guardar" });
+    await waitFor(() => expect(save).toBeEnabled());
+    // Guides and a stage's agent are saved by other paths while it is open.
+    const review = { agent: "codex" as const, model: null, reasoning: null };
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      ...opened,
+      guides: [{ login: "ana", kinds: ["technical"] }],
+      stages: { review },
+    });
+    await user.type(within(settings).getByRole("textbox", { name: /Entorno de QA/ }), "Windows");
+    // With a Jira host and no statuses, it says who moves the issue then.
+    await user.type(
+      within(settings).getByRole("textbox", { name: /^Host de Jira/ }),
+      "https://jira.example.com",
+    );
+    expect(within(settings).getByText(/^Vacío: al abrir el PR, Tinto no mueve/)).toBeVisible();
+    expect(within(settings).getByText(/^Vacío: al fusionar el PR, Tinto no mueve/)).toBeVisible();
+    client.setDeliveryRepoSettings.mockRejectedValueOnce({ message: "disco lleno" });
+    await user.click(save);
+    expect(await screen.findByText("disco lleno")).toHaveAttribute("role", "alert");
+    expect(screen.queryByText(/^Guardado para/)).toBeNull();
+
+    client.setDeliveryRepoSettings.mockImplementation((_repo, saved) => Promise.resolve(saved));
+    await user.click(save);
+    await waitFor(() =>
+      expect(client.setDeliveryRepoSettings).toHaveBeenLastCalledWith(
+        REPO,
+        expect.objectContaining({
+          qa_environment: "Windows",
+          jira: expect.objectContaining({ host: "https://jira.example.com", after_pr: [] }),
+          guides: [{ login: "ana", kinds: ["technical"] }],
+          stages: { review },
+        }),
+      ),
+    );
+    expect(await screen.findByText(/^Guardado para/)).toBeInTheDocument();
+  });
+
   it("picks the model and reasoning from selectors, Sol 6.1 at medium by default", async () => {
     const user = userEvent.setup();
     const effort = (value: string) => ({ value, description: value });
