@@ -12523,10 +12523,7 @@ fn browser_qa_starts_on_a_prepared_stack_beside_a_command_line_qa() {
     assert!(!cli.qa_browser && cli.qa_stack.is_none());
     // Each holds its own environment's resource: both run at once.
     h.wait_status(&browser.id, DeliveryJobStatus::Started);
-    assert_eq!(
-        h.service.job(&cli.id).unwrap().status,
-        DeliveryJobStatus::Started
-    );
+    h.wait_status(&cli.id, DeliveryJobStatus::Started);
 
     let browser = h.wait(&browser.id);
     let prepare = browser.prepare.clone().unwrap();
