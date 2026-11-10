@@ -1826,9 +1826,11 @@ mod tests {
             }
         );
         assert_eq!(phase.waits_on, Waiter::Coordinator);
-        // A push is refused until the replies waiting for the user's
-        // approval are posted: then the user holds it, not the coordinator.
+        // A reply waiting for the user's approval does not hold the push
+        // (fixes publish before their replies); it holds the PR step.
         world.approvals.push(step("pr_reply", "pending", None));
+        assert_eq!(world.phase().waits_on, Waiter::Coordinator);
+        world.approvals.push(step("push", "executed", Some(11_000)));
         assert_eq!(world.phase().waits_on, Waiter::User);
     }
 
