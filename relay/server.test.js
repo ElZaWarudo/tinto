@@ -6,8 +6,8 @@ import { MAX_FRAME, RATE_FRAMES, startRelay } from "./server.js";
 
 const ROOM = "AAAAAAAAAAAAAAAAAAAAAA";
 
-async function withRelay(run) {
-  const relay = startRelay({ port: 0, host: "127.0.0.1" });
+async function withRelay(run, options = {}) {
+  const relay = startRelay({ port: 0, host: "127.0.0.1", ...options });
   await once(relay.http, "listening");
   const base = `ws://127.0.0.1:${relay.http.address().port}`;
   try {
@@ -69,6 +69,20 @@ test("refuses bad rooms and roles, text frames, oversized frames and floods", ()
     await once(second, "close");
     while (relay.rooms.size > 0) await new Promise((resolve) => setImmediate(resolve));
   }));
+
+test("refuses sockets beyond its cap until one leaves", () =>
+  withRelay(
+    async (base, relay) => {
+      const desktop = await connect(base, "desktop");
+      const other = new WebSocket(`${base}/v1/rooms/${"B".repeat(22)}?role=phone`);
+      const [, response] = await once(other, "unexpected-response");
+      assert.equal(response.statusCode, 503);
+      desktop.close();
+      while (relay.rooms.size > 0) await new Promise((resolve) => setImmediate(resolve));
+      (await connect(base, "phone")).close();
+    },
+    { maxSockets: 1 },
+  ));
 
 test("answers its health check", () =>
   withRelay(async (base) => {

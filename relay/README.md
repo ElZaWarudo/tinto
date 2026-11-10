@@ -8,6 +8,7 @@ in [`docs/contracts/mobile-link.md`](../docs/contracts/mobile-link.md).
 - `GET /healthz` → `200 ok`
 - `wss://<host>/v1/rooms/<roomId>?role=desktop|phone`
 - Frames ≤ 256 KiB, binary only; ≤ 60 frames and 4 MiB per 10 s per socket.
+- At most 2 000 sockets (and so rooms) at once; more get HTTP 503.
 
 ## Run
 

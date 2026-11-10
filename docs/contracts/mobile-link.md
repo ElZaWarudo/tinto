@@ -32,7 +32,7 @@ Each device has its own room and key: revoking one leaves the others untouched.
 - Both peers open `wss://<relay>/v1/rooms/<roomId>?role=desktop|phone`.
 - A room holds at most one `desktop` and one `phone`. A second connection with the same role replaces the first (close code 4000).
 - The relay forwards each **binary** frame from one peer to the other, unchanged. A frame sent while the other peer is absent is dropped. Text frames close the socket (1003).
-- Limits: a frame is at most **256 KiB** (larger closes with 1009); at most **60 frames and 4 MiB per 10 s** per socket (more closes with 1008). The relay pings every 30 s and drops sockets that miss a pong. A room exists only while one of its sockets does.
+- Limits: a frame is at most **256 KiB** (larger closes with 1009); at most **60 frames and 4 MiB per 10 s** per socket (more closes with 1008). The relay pings every 30 s and drops sockets that miss a pong. A room exists only while one of its sockets does. The relay holds at most **2 000 sockets** (so at most 2 000 rooms); a connection beyond that is refused with HTTP 503 until one leaves.
 - `GET /healthz` answers `200 ok`.
 
 ## 3. Encryption and framing

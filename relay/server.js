@@ -11,11 +11,12 @@ export const MAX_FRAME = 256 * 1024;
 export const RATE_WINDOW_MS = 10_000;
 export const RATE_FRAMES = 60;
 export const RATE_BYTES = 4 * 1024 * 1024;
+export const MAX_SOCKETS = 2_000;
 const PING_MS = 30_000;
 const ROOM_PATH = /^\/v1\/rooms\/([A-Za-z0-9_-]{22})$/;
 const ROLES = ["desktop", "phone"];
 
-export function startRelay({ port = 8787, host } = {}) {
+export function startRelay({ port = 8787, host, maxSockets = MAX_SOCKETS } = {}) {
   /** roomId -> { desktop?: WebSocket, phone?: WebSocket } */
   const rooms = new Map();
 
@@ -36,6 +37,11 @@ export function startRelay({ port = 8787, host } = {}) {
     const role = url?.searchParams.get("role");
     if (!room || !ROLES.includes(role)) {
       socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+      return;
+    }
+    // A room lives only while one of its sockets does, so this caps rooms too.
+    if (wss.clients.size >= maxSockets) {
+      socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => join(ws, room, role));
