@@ -4,6 +4,12 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.2.6] - 2026-11-10
+
+### Fixes
+
+- **delivery:** show what waits on the user as theirs, not as blocked
+
 ## [1.2.5] - 2026-11-09
 
 ### Features
