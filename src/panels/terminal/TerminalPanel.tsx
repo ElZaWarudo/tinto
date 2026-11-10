@@ -1024,14 +1024,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         queueAwaitingTurnStartRef.current = true;
         setQueuedMessages((current) => current.filter((message) => message.id !== next.id));
       })
-      .catch((queueError) =>
+      .catch((queueError) => {
+        // Paused, or the effect would resend at once and fail again in a loop.
+        setQueuePaused(true);
         setError(
           reportAgentFailure(
             queueError,
-            "El mensaje sigue en cola. No se pudo enviar; vuelve a intentarlo cuando la sesión esté disponible.",
+            "El mensaje sigue en cola y la cola quedó pausada. No se pudo enviar; reanúdala cuando la sesión esté disponible.",
           ),
-        ),
-      )
+        );
+      })
       .finally(() => {
         queueDispatchingRef.current = false;
         setSending(false);
@@ -1044,6 +1046,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     readOnly,
     runtimeOptionsHydratedSessionId,
     sending,
+    setQueuePaused,
     setQueuedMessages,
     session?.status,
     session?.turn_status,

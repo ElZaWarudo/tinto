@@ -1794,6 +1794,27 @@ describe("TerminalPanel", () => {
     );
   });
 
+  it("pauses the queue when a queued message fails to send instead of retrying", async () => {
+    localStorage.setItem(
+      "tinto.agent-message-queues.v2",
+      JSON.stringify({
+        "sess-1": {
+          messages: [{ id: "sess-1:queued:1", text: "Con adjunto borrado", attachments: [] }],
+          paused: false,
+        },
+      }),
+    );
+    writeAgentSessionTurnMock.mockRejectedValueOnce(new Error("attachment missing"));
+    listAgentSessionsMock.mockResolvedValue([
+      sessionFixture({ turn_status: "waiting", runtime_options: { speed: "standard" } }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    expect(await screen.findByText("Cola pausada", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(writeAgentSessionTurnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("pauses messages queued after interrupt and keeps the control single-flight", async () => {
     const user = userEvent.setup();
     let resolveInterrupt: (() => void) | undefined;
