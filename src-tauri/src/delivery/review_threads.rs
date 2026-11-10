@@ -46,7 +46,7 @@ pub struct ReviewThread {
 
 impl ReviewThread {
     /// "https://…#discussion_r1 (ana en src/a.rs:12)".
-    fn label(&self) -> String {
+    pub fn label(&self) -> String {
         let at = match self.line {
             Some(line) => format!("{}:{line}", self.path),
             None => self.path.clone(),

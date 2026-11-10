@@ -8126,8 +8126,8 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
     let ask = |url: &str, body: &str| {
         coordinator.write(
             "request_approval",
-            json!({"task_id": task_id, "rung": "pr_reply", "comment_url": url,
-                   "body": body, "resolve_thread": true}),
+            // A reply that describes its fix resolves its thread by default.
+            json!({"task_id": task_id, "rung": "pr_reply", "comment_url": url, "body": body}),
         )
     };
 

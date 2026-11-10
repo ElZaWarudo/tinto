@@ -314,9 +314,13 @@ impl DeliveryService {
                 "{unposted} respuesta(s) a la revisión sin publicar"
             )));
         }
-        let open = pr.unanswered().count();
+        let approvals = self.store()?.approvals()?;
+        let approvals: Vec<&DeliveryApproval> = approvals.iter().collect();
+        let open = super::phase::threads_to_answer(pr, &approvals).len();
         if open > 0 {
-            return Ok(Some(format!("{open} hilo(s) de revisión sin respuesta")));
+            return Ok(Some(format!(
+                "{open} hilo(s) de revisión sin la respuesta que describe su corrección"
+            )));
         }
         if let Some(why) = self.ci_refusal(task, pr) {
             return Ok(Some(why));

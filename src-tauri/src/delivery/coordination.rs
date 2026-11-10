@@ -1460,7 +1460,8 @@ impl DeliveryService {
             author,
             notice,
             corrections: Vec::new(),
-            resolve_thread: reply && request.resolve_thread,
+            // Only a review comment has a thread to resolve.
+            resolve_thread: reply && request.resolve_thread && thread.is_some(),
             interim: reply && request.interim,
             record: request.record,
             // The QA screenshots its text shows where it names them.
