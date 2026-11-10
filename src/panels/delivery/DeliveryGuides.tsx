@@ -3,7 +3,7 @@
 // them, the rules approved so far and the next version a coordinator
 // proposed. Nothing changes until the user approves it here.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   collectDeliveryGuideComments,
   decideDeliveryGuide,
@@ -54,7 +54,14 @@ const kindsOf = (role: Role): DeliveryGuideKind[] =>
   role === "both" ? ["visual", "technical"] : role ? [role] : [];
 
 /** A repo's guides, as a section of its settings: saved apart from the rest. */
-export function GuidesSection({ repo }: { repo: RepoChoice }) {
+export function GuidesSection({
+  repo,
+  focusProposal,
+}: {
+  repo: RepoChoice;
+  /** The rules proposed are scrolled to and focused as soon as they show. */
+  focusProposal?: boolean;
+}) {
   const [view, setView] = useState<DeliveryGuideView | null>(null);
   const [candidates, setCandidates] = useState<string[] | null>(null);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
@@ -203,6 +210,7 @@ export function GuidesSection({ repo }: { repo: RepoChoice }) {
           proposed={view.proposal.rules}
           note={view.proposal.note}
           by={view.proposal.requested_by}
+          focused={focusProposal}
           onDecide={async (approve) => {
             setView(await decideDeliveryGuide(repo.path, approve));
             setStatus(approve ? "Reglas aprobadas." : "Propuesta rechazada.");
@@ -278,14 +286,24 @@ function ProposalReview({
   proposed,
   note,
   by,
+  focused,
   onDecide,
 }: {
   current: DeliveryGuideRule[];
   proposed: DeliveryGuideRule[];
   note: string;
   by: string;
+  focused?: boolean;
   onDecide: (approve: boolean) => Promise<void>;
 }) {
+  const card = useRef<HTMLDivElement>(null);
+  // Once, as it shows.
+  useEffect(() => {
+    if (!focused) return;
+    card.current?.scrollIntoView?.({ block: "start" });
+    card.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const before = new Map(current.map((rule) => [rule.id, rule]));
   const changed = proposed.filter((rule) => {
     const old = before.get(rule.id);
@@ -294,9 +312,11 @@ function ProposalReview({
   const removed = current.filter((rule) => !proposed.some((next) => next.id === rule.id));
   return (
     <div
+      ref={card}
       className="delivery-banner delivery-banner--step"
       role="group"
       aria-label="Reglas propuestas"
+      tabIndex={-1}
     >
       <p className="delivery-banner__title">
         <strong>Reglas propuestas</strong>
