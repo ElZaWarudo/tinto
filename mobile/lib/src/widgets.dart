@@ -150,8 +150,14 @@ class DecisionCard extends StatelessWidget {
       ],
       if (d.kind == 'permission') ...[
         if (d.command != null) _Mono(d.command!),
+        if (d.inTinto)
+          Text('Concede más de lo que el móvil muestra: permítelo en Tinto.',
+              style: TextStyle(color: Theme.of(context).colorScheme.error)),
         Row(children: [
-          FilledButton(onPressed: () => _answer(context, 'allowed'), child: const Text('Permitir')),
+          FilledButton(
+            onPressed: d.inTinto ? null : () => _answer(context, 'allowed'),
+            child: const Text('Permitir'),
+          ),
           const SizedBox(width: 8),
           OutlinedButton(onPressed: () => _answer(context, 'denied'), child: const Text('Denegar')),
         ]),

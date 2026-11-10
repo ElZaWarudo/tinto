@@ -81,7 +81,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
 | `send_qa_problems`   | `task_id`, `choices: [{ "problem_id", "solution" }]`       | `send_qa_problems(task_id, choices)`             |
 | `set_run_paused`     | `run_id`, `paused` (bool)                                  | `set_run_paused(run_id, paused)`                 |
 
-  Anything else (an unknown action, an extra field) is refused with `error`. `decide_approval` with `approve: true` is refused unless `digest` equals the approval's current digest (§5), so the phone approves exactly the text it showed; an approval whose text did not fit (`truncated`) can only be approved in Tinto. The same service validation as in the desktop panel applies to all of them.
+  Anything else (an unknown action, an extra field) is refused with `error`. `decide_approval` with `approve: true` is refused unless `digest` equals the approval's current digest (§5), so the phone approves exactly the text it showed; an approval whose text did not fit (`truncated`) can only be approved in Tinto. `answer_decision` on a decision with `in_tinto` (§5) is refused, except `denied` on a permission. The same service validation as in the desktop panel applies to all of them.
 
 ### Desktop → phone
 
@@ -102,7 +102,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
               "pr": { "number", "url", "state", "draft", "conflicts", "ci", "review_decision" } | null }],
   "decisions": [{ "id", "task_id", "kind", "question", "detail", "text", "command",
                   "options": [{ "label", "consequence", "recommended" }],
-                  "recommendation": { "why", "basis", "unknown" } | null, "blocking" }],
+                  "recommendation": { "why", "basis", "unknown" } | null, "blocking", "in_tinto" }],
   "approvals": [{ "id", "task_id", "rung", "stage", "title", "body",
                   "commits": ["<message>"], "merge_method", "jira_statuses", "reviewers",
                   "requested_at_ms", "digest", "truncated" }],
@@ -117,6 +117,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
 - `failures`: the 5 latest failed jobs, newest first, `error` cut to 500 characters.
 - `digest`: lowercase hex SHA-256 of the approval's fields as sent (before cutting). Opaque to the phone.
 - `truncated`: some text of the approval was longer than 16 000 characters and was cut.
+- `in_tinto`: the phone does not show all the decision would grant: a permission with full access, read or write folders, scripts, warnings, unfrozen files or a command over 4 000 characters. Only Tinto allows it; the phone can deny it.
 - Strings other than approval texts are cut to 4 000 characters. If the snapshot is still too large, `failures` and decision `detail` are dropped.
 
 Not sent, ever: file contents, diffs, logs, prompts, paths, tokens, settings. The only code the phone shows is what a decision already carries (`text`, `command`).

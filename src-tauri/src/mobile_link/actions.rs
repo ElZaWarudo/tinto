@@ -5,7 +5,9 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::delivery::model::DeliveryApprovalStatus;
+use crate::delivery::model::{
+    DeliveryApprovalStatus, DeliveryDecisionKind, DeliveryDecisionStatus,
+};
 use crate::delivery::qa_problems::QaProblemChoice;
 use crate::delivery::service::DeliveryService;
 
@@ -51,9 +53,20 @@ pub fn run(service: &DeliveryService, action: Action) -> Result<(), String> {
         Action::AnswerDecision {
             decision_id,
             answer,
-        } => service
-            .answer_decision(&decision_id, &answer, "user")
-            .map(drop),
+        } => {
+            let decision = service
+                .overview()
+                .map_err(|error| error.message)?
+                .decisions
+                .into_iter()
+                .find(|decision| decision.id == decision_id);
+            if let Some(decision) = decision {
+                answerable(&decision, &answer)?;
+            }
+            service
+                .answer_decision(&decision_id, &answer, "user")
+                .map(drop)
+        }
         Action::AcceptRecommended { task_id } => {
             service.accept_recommended(&task_id, "user").map(drop)
         }
@@ -87,6 +100,22 @@ pub fn run(service: &DeliveryService, action: Action) -> Result<(), String> {
         }
     };
     done.map_err(|error| error.message)
+}
+
+/// The phone allows or approves only what it showed whole; it can always
+/// deny a permission.
+fn answerable(
+    decision: &crate::delivery::model::DeliveryDecision,
+    answer: &str,
+) -> Result<(), String> {
+    let denies = decision.kind == DeliveryDecisionKind::Permission && answer.trim() != "allowed";
+    if decision.status == DeliveryDecisionStatus::Pending
+        && !denies
+        && super::snapshot::in_tinto(decision)
+    {
+        return Err("El móvil no muestra todo lo que concede: respóndela en Tinto.".into());
+    }
+    Ok(())
 }
 
 /// The phone approves only the text it showed, and only a text it showed
@@ -138,6 +167,33 @@ mod tests {
             json!("answer_decision"),
         ] {
             assert!(parse(&refused).is_err(), "{refused}");
+        }
+    }
+
+    fn decision(kind: &str, extra: Value) -> crate::delivery::model::DeliveryDecision {
+        let mut value = json!({
+            "id": "d1", "task_id": "t1", "kind": kind, "question": "¿Vale?",
+            "command": "npm run e2e", "status": "pending", "answer": null,
+            "requested_by": "coordinator", "requested_at_ms": 1,
+            "decided_by": null, "decided_at_ms": null
+        });
+        value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn the_phone_allows_a_permission_only_when_it_showed_all_it_grants() {
+        assert_eq!(answerable(&decision("permission", json!({})), "allowed"), Ok(()));
+        for hidden in [
+            json!({ "full_access": true }),
+            json!({ "write_dirs": ["C:/fuera"] }),
+            json!({ "read_dirs": ["C:/fuera"] }),
+            json!({ "warnings": ["no arranca en el sandbox"] }),
+            json!({ "scripts": [{ "path": "e2e.sh", "content": "rm -rf /" }] }),
+        ] {
+            let hidden = decision("permission", hidden);
+            assert!(answerable(&hidden, "allowed").is_err(), "{hidden:?}");
+            assert_eq!(answerable(&hidden, "denied"), Ok(()));
         }
     }
 
