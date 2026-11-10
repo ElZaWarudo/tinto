@@ -167,6 +167,7 @@ import {
   prSummary,
   ciLine,
   waitsOnLabel,
+  waitsOnPhrase,
   quietFor,
   rolesOf,
   stepKey,
@@ -266,12 +267,12 @@ const TONE_ICON: Record<Tone, StatusIcon> = {
 /** The task's state; `who` it waits on follows it, unless the state already
  *  asks the user or an agent is at work. */
 function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }) {
-  const shown = who && status.group !== "attention" && status.group !== "running";
+  const shown = status.group !== "attention" && status.group !== "running" ? who : null;
   return (
     <span className={`delivery-status-line delivery-tone--${status.tone}`}>
       <StatusMark icon={status.icon} />
       {status.label}
-      {shown && <small className="delivery-status-line__who">espera a {who}</small>}
+      {shown && <small className="delivery-status-line__who">{waitsOnPhrase(shown)}</small>}
     </span>
   );
 }

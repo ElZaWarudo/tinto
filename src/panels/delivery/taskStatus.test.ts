@@ -31,6 +31,7 @@ import {
   nowLine,
   prSummary,
   waitsOnLabel,
+  waitsOnPhrase,
   roundHistory,
   roundRung,
   roundStage,
@@ -580,10 +581,15 @@ describe("a followed PR", () => {
       group: "idle",
       label: "PR aprobado · siguiente: merge",
     });
-    const merged = [...upToJira, approval({ id: "m", rung: "merge", status: "executed" })];
-    expect(withPr({ state: "merged" }, ready, "coordinator", merged).label).toBe(
-      "PR fusionado · siguiente: Jira (merge)",
-    );
+    // AGOS-129 · 1/6: merged with its PR's Jira step left reads as unfinished.
+    expect(
+      status(
+        { kind: "next_step", rung: "jira", stage: "after_pr" },
+        { prs: [pr({ state: "merged" })] },
+      ).label,
+    ).toBe("PR fusionado · falta Jira (PR)");
+    expect(waitsOnPhrase("el coordinador")).toBe("espera al coordinador");
+    expect(waitsOnPhrase("ti")).toBe("espera a ti");
     // Without the PR's Jira step, that one comes before the merge.
     expect(
       withPr({ review_decision: "approved" }, ready, "coordinator", upToJira.slice(0, 3)).label,
