@@ -4,6 +4,64 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.3.0] - 2026-11-10
+
+### Features
+
+- **delivery:** take «te necesita» to what waits, and surface proposed guide rules
+
+### Fixes
+
+- **delivery:** name every review thread still to answer once its fix is pushed
+- **delivery:** open Delivery's settings as a page, not a cramped dialog
+- **delivery:** claim steps, lock the store, re-arm limit retries and other review fixes
+- **delivery:** give git push, fetch and ls-remote a timeout
+- **delivery:** read every run of a wait_run up to one event (B14)
+- **delivery:** open a new stage's log, and show errors swallowed until now
+- **delivery:** keep edited commit, PR and merge texts until approved
+- **delivery:** say once who a row waits on, in plain Spanish
+- **delivery:** add a slow job-log read only once
+- **delivery:** do not notify again when the user settles a QA problem
+- **delivery:** keep a float open while its confirm is answered
+- **delivery:** count only open QA problems as waiting on the user
+- **delivery:** save repo settings over the current ones, and fail visibly
+- **delivery:** keep a restack paused when its continue fails
+- **agents:** do not fail a PTY stop whose process was reaped
+- **agents:** say why a queue is stuck and confirm deletes in the app
+- **agents:** do not stop a session moved to another window
+- **agents:** keep the saved layout when Agents was open at exit
+- **agents:** count the session time limit from the last activity
+- **agents:** keep files the snapshot could not read on undo
+- **agents:** keep a live session's checkpoints out of retention
+- **agents:** pause the queue when a queued message fails to send
+- **agents:** refuse an undo while another session works in the repo
+- **agents:** keep the dock mounted in Glance mode
+- **agents:** deny a Claude Code tool when its permission is cancelled
+- **delivery:** embed only QA screenshots inside the QA folder
+- **delivery:** publish fixes before the replies and review that describe them
+- **files:** operate on symlinks as links instead of following them
+- **dashboard:** show the repo filter set from the explorer
+- **wsl:** keep login-profile output off the WSL agent's stdout
+- **files:** keep markdown links from navigating the app window
+- **relay:** cap the sockets, and so the rooms, the relay holds
+- **mobile:** withdraw presence when the other side goes quiet
+- **mobile:** approve a text decision from the phone only when it was shown whole
+- **mobile:** refuse a hello from a peer session already replaced
+- **mobile:** allow a permission from the phone only when it shows all it grants
+- **notifications:** announce a repo error or signal once, not per revision
+- **files:** move instead of copying on delete and purge old undo copies
+- **watcher:** see commit, stage and checkout in linked worktrees
+- **watcher:** keep a missing root dead after a failed retry
+- **files:** ignore an OS file drop outside the explorer's own tree
+- **relay:** answer 400 instead of crashing on an unparsable upgrade path
+- **delivery:** show a merged task's step left and say «espera al»
+- **delivery:** name the step left on a merged PR for the coordinator
+
+### Performance
+
+- **delivery:** post a review's replies a few at a time
+- **bus:** cap what the secret scan copies and the untracked diff reads
+
 ## [1.2.6] - 2026-11-10
 
 ### Fixes
