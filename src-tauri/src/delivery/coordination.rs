@@ -62,6 +62,9 @@ pub struct NewApproval {
     pub comment_url: Option<String>,
     /// `pr_reply` only: resolve the review thread once replied.
     pub resolve_thread: bool,
+    /// `pr_reply` only: it says the fix is in progress and is posted at
+    /// once; never with `resolve_thread`.
+    pub interim: bool,
     /// `commit` only: record the commits the branch already has (made
     /// outside Tinto) as the task's instead of creating any.
     pub record: bool,
@@ -381,6 +384,7 @@ pub(super) fn found_step(
         corrections: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
         images: Vec::new(),
         thread: None,
@@ -1048,17 +1052,14 @@ impl DeliveryService {
                     "comment_url tiene que ser un comentario de revisión (…/pull/<n>#discussion_r<id>) o el PR, para un comentario general",
                 ));
             };
-            if request.resolve_thread {
-                match thread.as_ref().filter(|thread| thread.error.is_none()) {
-                    Some(thread) => self.check_fix_pushed(&task, &thread.path)?,
-                    None if thread.is_some() => {
-                        return Err(DeliveryError::new(
-                            "fix_unpushed",
-                            "no se pudo leer el comentario para comprobar que su arreglo está publicado: pide la respuesta sin resolve_thread",
-                        ))
-                    }
-                    None => {}
-                }
+            // A reply that describes a fix, and resolving its thread, wait
+            // for the fix on GitHub once approved: only an interim one goes
+            // out before it.
+            if request.interim && request.resolve_thread {
+                return Err(DeliveryError::new(
+                    "invalid_approval",
+                    "una respuesta provisional (interim) no resuelve el hilo: el hilo se resuelve con la respuesta que describe la corrección",
+                ));
             }
             (Some(url.to_string()), thread)
         } else {
@@ -1326,11 +1327,10 @@ impl DeliveryService {
                     "los commits que hizo Tinto ya no están en la rama; hay que volver a preparar el commit",
                 ));
             }
-            DeliveryRung::Push => {
-                // New commits on an open PR send it back to its reviewers.
-                self.check_threads_answered(&task.id, "el push devuelve el PR a revisión")?;
-                self.check_base_merged(&task)?
-            }
+            // Fixes publish before their replies: review threads without a
+            // reply never hold the push; asking for the review again waits
+            // for them instead.
+            DeliveryRung::Push => self.check_base_merged(&task)?,
             DeliveryRung::Pr => {
                 self.package_pr_refusal(&task)?;
                 // On an open PR the step only updates its text, which sends
@@ -1428,6 +1428,7 @@ impl DeliveryService {
             notice,
             corrections: Vec::new(),
             resolve_thread: reply && request.resolve_thread,
+            interim: reply && request.interim,
             record: request.record,
             // The QA screenshots its text shows where it names them.
             images: match request.rung {
@@ -1646,23 +1647,9 @@ impl DeliveryService {
                 since_ms: now_ms(),
             });
         }
-        // Posted once, never retried: a failure says why, and the
-        // coordinator asks again if it still makes sense.
+        // Posted once its fix is on GitHub; until then it stays approved.
         if approval.rung == DeliveryRung::PrReply {
-            let posted = self.post_reply(&approval);
-            approval.executed_at_ms = Some(now_ms());
-            match posted {
-                Ok((url, notice)) => {
-                    approval.advance(StepEvent::Ran { ok: true })?;
-                    approval.outcome = Some(url);
-                    approval.notice = notice;
-                }
-                Err(error) => {
-                    approval.advance(StepEvent::Ran { ok: false })?;
-                    approval.outcome = Some(error.message);
-                    approval.notice = None;
-                }
-            }
+            self.post_reply_once_published(&mut approval, None)?;
         }
         if matches!(
             approval.rung,
@@ -1705,21 +1692,8 @@ impl DeliveryService {
             }
         }
         self.save_approval(&approval, "approval_approved")?;
-        // A posted reply answers its reviewer.
-        if approval.rung == DeliveryRung::PrReply
-            && approval.status == DeliveryApprovalStatus::Executed
-        {
-            if let Some(reviewer) = approval.reply_to() {
-                let store = self.store()?;
-                if let Some(mut pr) = store.pr(&approval.task_id)? {
-                    super::reviews::apply(
-                        &mut pr.review_states,
-                        reviewer,
-                        super::reviews::ReviewEvent::Answered,
-                    );
-                    store.put_pr(&pr)?;
-                }
-            }
+        if approval.rung == DeliveryRung::PrReply {
+            self.reply_answered(&approval)?;
         }
         // A sync that merged cleanly changed the code no stage made: Tinto's
         // checks verify it, not an agent.
@@ -1915,7 +1889,10 @@ impl DeliveryService {
     /// ask it again with other text. The reason stays in the log.
     pub fn withdraw_approval(&self, approval_id: &str, reason: &str) -> Result<(), DeliveryError> {
         let approval = self.approval(approval_id)?;
-        if approval.status != DeliveryApprovalStatus::Pending {
+        // A reply held for its fix posted nothing yet: it can still go.
+        let held = approval.rung == DeliveryRung::PrReply
+            && approval.status == DeliveryApprovalStatus::Approved;
+        if approval.status != DeliveryApprovalStatus::Pending && !held {
             return Err(DeliveryError::new(
                 "approval_not_pending",
                 "esta aprobación ya tiene una decisión del usuario y no se puede retirar ni sustituir; pide el paso siguiente o informa su resultado",
@@ -1955,6 +1932,13 @@ impl DeliveryService {
             return Err(DeliveryError::new(
                 "approval_not_approved",
                 "solo se informa el resultado de un paso aprobado",
+            ));
+        }
+        // Tinto posts an approved reply itself once its fix is on GitHub.
+        if approval.rung == DeliveryRung::PrReply {
+            return Err(DeliveryError::new(
+                "reply_held",
+                "Tinto publica la respuesta aprobada en cuanto el PR en GitHub tiene su corrección: publica la corrección (push), no la respuesta",
             ));
         }
         // A Jira step done by hand says what was done in Jira.
@@ -2208,6 +2192,7 @@ impl DeliveryService {
             single_commit_reason: None,
             comment_url: None,
             resolve_thread: false,
+            interim: false,
             record: false,
         };
         if let Err(error) = self.request_approval(request) {
@@ -2246,11 +2231,14 @@ impl DeliveryService {
                 .iter()
                 .filter(|approval| approval.task_id == task.id)
                 .collect();
+            // A reply is outside the ladder: one waiting for the user or for
+            // its fix on GitHub holds no step, least of all the push.
             let busy = approvals.iter().any(|approval| {
-                matches!(
-                    approval.status,
-                    DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
-                )
+                approval.rung != DeliveryRung::PrReply
+                    && matches!(
+                        approval.status,
+                        DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                    )
             }) || overview
                 .jobs
                 .iter()
@@ -2336,6 +2324,7 @@ impl DeliveryService {
                 single_commit_reason: None,
                 comment_url: None,
                 resolve_thread: false,
+                interim: false,
                 record: false,
             };
             if let Err(error) = self.request_approval(request) {
@@ -2933,6 +2922,7 @@ impl DeliveryService {
             single_commit_reason: None,
             comment_url: None,
             resolve_thread: false,
+            interim: false,
             record: false,
         };
         if let Err(error) = self.request_approval(request) {

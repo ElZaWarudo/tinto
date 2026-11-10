@@ -441,6 +441,9 @@ export interface DeliveryApproval {
   comment_url?: string | null;
   /** `pr_reply`: resolve the review thread once replied. */
   resolve_thread?: boolean;
+  /** pr_reply: says the fix is in progress, so it is posted at once. Any
+   *  other reply waits until the PR's head on GitHub has `head`. */
+  interim?: boolean;
   /** `pr_reply`: the QA screenshots shown after the text, pushed to the PR's evidence branch. */
   images?: DeliveryReplyImage[];
   /** `pr_reply`: the review comment and its diff, as Tinto read them. */
@@ -1057,6 +1060,11 @@ export interface DeliveryPr {
   /** Review threads still without a reply from the PR's author, while it is
    *  open: it cannot go back to review until each has one. */
   unanswered_threads?: DeliveryReviewThread[];
+  /** Reviewers asked to review again, held until GitHub has the fixes,
+   *  their replies are posted and the checks passed on its head. */
+  review_again?: string[];
+  /** Why `review_again` still waits. */
+  review_again_blocker?: string | null;
 }
 
 /** A review thread a reviewer opened on the PR (src-tauri/src/delivery/review_threads.rs). */
