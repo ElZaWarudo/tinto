@@ -4,11 +4,28 @@
 // markup. Mirrors FullFileView's fetch/degrade states; the source toggle is
 // owned by the parent FileView (which swaps in FullFileView for raw source).
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps, type MouseEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { FileContent } from "../../bus/contract";
+import { openDeliveryUrl } from "../../delivery/client";
 import { fileLoadErrorMessage, loadFileContentWithRetry } from "./fileContentLoader";
+
+/** A link in the rendered file never navigates the app window: web
+ *  addresses open in the system browser, in-page anchors scroll, anything
+ *  else (relative repo paths, other schemes) does nothing. */
+export function MarkdownLink({ href, children }: ComponentProps<"a">) {
+  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (href?.startsWith("#")) return;
+    event.preventDefault();
+    if (href && /^https?:\/\//i.test(href)) void openDeliveryUrl(href).catch(() => {});
+  };
+  return (
+    <a href={href} onClick={onClick} rel="noreferrer">
+      {children}
+    </a>
+  );
+}
 
 interface LoadedFileContent {
   key: string;
@@ -67,7 +84,9 @@ export function MarkdownView({ repo, path }: { repo: string; path: string }) {
   return (
     <div className="markdown-view" data-testid="markdown-view">
       <div className="markdown-view__body">
-        <Markdown remarkPlugins={[remarkGfm]}>{content.content}</Markdown>
+        <Markdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
+          {content.content}
+        </Markdown>
       </div>
       {content.truncated && (
         <div className="diff-view__notice" data-testid="md-truncated">
