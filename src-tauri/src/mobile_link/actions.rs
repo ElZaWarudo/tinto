@@ -177,13 +177,19 @@ mod tests {
             "requested_by": "coordinator", "requested_at_ms": 1,
             "decided_by": null, "decided_at_ms": null
         });
-        value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
         serde_json::from_value(value).unwrap()
     }
 
     #[test]
     fn the_phone_allows_a_permission_only_when_it_showed_all_it_grants() {
-        assert_eq!(answerable(&decision("permission", json!({})), "allowed"), Ok(()));
+        assert_eq!(
+            answerable(&decision("permission", json!({})), "allowed"),
+            Ok(())
+        );
         for hidden in [
             json!({ "full_access": true }),
             json!({ "write_dirs": ["C:/fuera"] }),

@@ -9,8 +9,8 @@ use std::collections::HashSet;
 
 use crate::delivery::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryDecision, DeliveryDecisionKind,
-    DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJobStatus, DeliveryOverview, DeliveryQaProblemStatus,
-    DeliveryRecommendation, DeliveryRung, DeliverySettingsProposalStatus,
+    DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJobStatus, DeliveryOverview,
+    DeliveryQaProblemStatus, DeliveryRecommendation, DeliveryRung, DeliverySettingsProposalStatus,
 };
 use crate::delivery::phase::{DeliveryTaskPhase, Phase, PrWait};
 
