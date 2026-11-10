@@ -595,7 +595,9 @@ describe("a followed PR", () => {
       ).label,
     ).toBe("PR fusionado · falta Jira (PR)");
     expect(waitsOnPhrase("el coordinador")).toBe("espera al coordinador");
-    expect(waitsOnPhrase("ti")).toBe("espera a ti");
+    expect(waitsOnPhrase("ti")).toBe("te espera");
+    // A row that already says it does not say it twice.
+    expect(waitsOnPhrase("el coordinador", "Desbloqueada · espera al coordinador")).toBeNull();
     // Without the PR's Jira step, that one comes before the merge.
     expect(
       withPr({ review_decision: "approved" }, ready, "coordinator", upToJira.slice(0, 3)).label,

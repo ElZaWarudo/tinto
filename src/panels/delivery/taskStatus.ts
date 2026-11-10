@@ -1064,9 +1064,18 @@ export function waitsOnLabel(overview: DeliveryOverview, taskId: string): string
   }
 }
 
-/** "espera a ti", "espera al coordinador": `a` + `el` contract. */
-export function waitsOnPhrase(who: string): string {
-  return who.startsWith("el ") ? `espera al ${who.slice(3)}` : `espera a ${who}`;
+/** "te espera", "espera al coordinador" (`a` + `el` contract); `null` when
+ *  the row's `label` already says it. */
+export function waitsOnPhrase(who: string, label = ""): string | null {
+  const phrase =
+    who === "ti"
+      ? "te espera"
+      : who === "su turno"
+        ? "espera su turno"
+        : who.startsWith("el ")
+          ? `espera al ${who.slice(3)}`
+          : `espera a ${who}`;
+  return label.includes(phrase) ? null : phrase;
 }
 
 /** One line for the state of a followed PR, from most to least urgent. */
