@@ -46,6 +46,9 @@ void main() {
     final restarted = Session(role: 'desktop');
     phone.accept(restarted.wrap('hello', {}));
     expect(phone.accept(desktop.wrap('snapshot', {})), isNull); // old session
+    // The relay replays the old session's hello, then what followed it.
+    expect(phone.accept(desktop.wrap('hello', {})), isNull);
+    expect(phone.accept(desktop.wrap('revoked', {})), isNull);
   });
 
   test('a pairing link gives the room, the relay and the key', () {

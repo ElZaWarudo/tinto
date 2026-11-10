@@ -8,6 +8,7 @@ use base64::Engine;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::{json, Map, Value};
+use std::collections::HashSet;
 
 pub const AAD: &[u8] = b"tinto-link/1";
 pub const VERSION: u64 = 1;
@@ -84,6 +85,8 @@ pub struct Session {
     pub sid: String,
     seq: u64,
     peer: Option<(String, u64)>,
+    /// The other side's earlier sessions: a hello from one is a replay.
+    retired: HashSet<String>,
 }
 
 /// A message that passed the freshness rules.
@@ -103,6 +106,7 @@ impl Session {
             sid: b64(&random::<16>()),
             seq: 0,
             peer: None,
+            retired: HashSet::new(),
         }
     }
 
@@ -153,7 +157,7 @@ impl Session {
                 .is_none_or(|(known, last)| *known != sid || seq > *last)
         };
         let answer_hello = if kind == "hello" {
-            if !fresh(&self.peer) {
+            if !fresh(&self.peer) || self.retired.contains(&sid) {
                 return None;
             }
             peer != self.sid
@@ -164,7 +168,11 @@ impl Session {
             }
             false
         };
-        self.peer = Some((sid, seq));
+        if let Some((old, _)) = self.peer.replace((sid.clone(), seq)) {
+            if old != sid {
+                self.retired.insert(old);
+            }
+        }
         for field in ["v", "from", "type", "sid", "peer", "seq"] {
             body.remove(field);
         }
@@ -240,5 +248,14 @@ mod tests {
         phone.accept(&desktop.wrap("hello", json!({}))).unwrap();
         let action = phone.wrap("action", json!({ "id": "3" }));
         assert_eq!(desktop.accept(&action).unwrap().body["id"], "3");
+
+        // The phone reconnects; the relay replays the old session's hello
+        // and action, which named this desktop session.
+        let old_hello = phone.wrap("hello", json!({}));
+        let old_action = phone.wrap("action", json!({ "id": "4" }));
+        let mut phone = Session::new("phone");
+        desktop.accept(&phone.wrap("hello", json!({}))).unwrap();
+        assert_eq!(desktop.accept(&old_hello), None);
+        assert_eq!(desktop.accept(&old_action), None);
     }
 }

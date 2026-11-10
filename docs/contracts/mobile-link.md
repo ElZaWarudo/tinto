@@ -60,7 +60,7 @@ Every plaintext carries:
 
 ### Freshness (replay rejection)
 
-- `hello` is accepted unless its `seq` is not greater than the last seen for the same `sid`. A new `sid` becomes the current peer session.
+- `hello` is accepted unless its `seq` is not greater than the last seen for the same `sid`, or its `sid` is one the receiver's session already replaced. A new `sid` becomes the current peer session, and the one it replaces is retired for good.
 - Every other message is accepted only if its `sid` is the current peer session, its `peer` equals the receiver's own `sid`, and its `seq` is greater than the last accepted one.
 - When a `hello` arrives whose `peer` is not the receiver's `sid`, the receiver answers with its own `hello` (with `peer` set). So each side learns the other's session without the relay telling anyone who is present.
 
