@@ -225,7 +225,6 @@ const AGENT_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 
 const panelCloseStopTimers = new Map<string, number>();
 const PANEL_CLOSE_STOP_DELAY_MS = 250;
-const DETACHED_TRANSFER_STOP_DELAY_MS = 5000;
 
 const AGENT_SKILL_SHORTCUTS = [
   {
@@ -1024,14 +1023,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         queueAwaitingTurnStartRef.current = true;
         setQueuedMessages((current) => current.filter((message) => message.id !== next.id));
       })
-      .catch((queueError) =>
+      .catch((queueError) => {
+        // Paused, or the effect would resend at once and fail again in a loop.
+        setQueuePaused(true);
         setError(
           reportAgentFailure(
             queueError,
-            "El mensaje sigue en cola. No se pudo enviar; vuelve a intentarlo cuando la sesión esté disponible.",
+            "El mensaje sigue en cola y la cola quedó pausada. No se pudo enviar; reanúdala cuando la sesión esté disponible.",
           ),
-        ),
-      )
+        );
+      })
       .finally(() => {
         queueDispatchingRef.current = false;
         setSending(false);
@@ -1044,6 +1045,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     readOnly,
     runtimeOptionsHydratedSessionId,
     sending,
+    setQueuePaused,
     setQueuedMessages,
     session?.status,
     session?.turn_status,
@@ -1269,13 +1271,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     }
     return () => {
       active = false;
-      if (readOnly) return;
-      schedulePanelCloseStop(
-        sessionId,
-        consumeTerminalDetachedMarker(sessionId)
-          ? DETACHED_TRANSFER_STOP_DELAY_MS
-          : PANEL_CLOSE_STOP_DELAY_MS,
-      );
+      // Moved to another window: that window's panel owns it now, and its
+      // mount there cannot cancel a timer set in this window.
+      if (readOnly || consumeTerminalDetachedMarker(sessionId)) return;
+      schedulePanelCloseStop(sessionId);
     };
   }, [mode, readOnly, sessionId]);
 
@@ -2589,7 +2588,13 @@ También se desharán los cambios hechos después en este repo, incluidos los de
             aria-live="polite"
             data-paused={queuePaused || undefined}
           >
-            <span>{queuePaused ? "Cola pausada" : `${queuedMessages.length} en cola`}</span>
+            <span>
+              {session && session.status !== "starting" && session.status !== "running"
+                ? `${queuedMessages.length} en cola: la sesión terminó y no se enviarán`
+                : queuePaused
+                  ? "Cola pausada"
+                  : `${queuedMessages.length} en cola`}
+            </span>
             <div className="agent-panel__queue-items">
               {queuedMessages.map((message, index) => (
                 <div className="agent-panel__queue-item" key={message.id}>
@@ -9073,7 +9078,7 @@ function cancelPanelCloseStop(sessionId: string) {
   panelCloseStopTimers.delete(sessionId);
 }
 
-function schedulePanelCloseStop(sessionId: string, delayMs = PANEL_CLOSE_STOP_DELAY_MS) {
+function schedulePanelCloseStop(sessionId: string) {
   cancelPanelCloseStop(sessionId);
   const timer = window.setTimeout(() => {
     panelCloseStopTimers.delete(sessionId);
@@ -9081,6 +9086,6 @@ function schedulePanelCloseStop(sessionId: string, delayMs = PANEL_CLOSE_STOP_DE
       .then(() => listAgentSessions())
       .then((sessions) => agentSessionStore.setSessions(sessions))
       .catch(() => {});
-  }, delayMs);
+  }, PANEL_CLOSE_STOP_DELAY_MS);
   panelCloseStopTimers.set(sessionId, timer);
 }

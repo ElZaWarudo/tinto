@@ -68,6 +68,7 @@ import type { WorkbenchConfig } from "./bus/contract";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { setWindowsHostOverrideForTests } from "./workbench/platform";
+import { qualityStore } from "./qol/state";
 
 describe("App", () => {
   beforeEach(() => {
@@ -147,6 +148,25 @@ describe("App", () => {
 
     expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
     expect(screen.queryByTestId("startup-loading")).not.toBeInTheDocument();
+  });
+
+  it("keeps the workspace mounted under Glance so running agents are not stopped", () => {
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [] }],
+      });
+      busStore.loadSnapshot([], { available: true });
+    });
+    render(<App />);
+    const workspace = screen.getByTestId("workspace-stub");
+
+    act(() => qualityStore.setGlanceMode(true));
+
+    expect(screen.getByTestId("workspace-stub")).toBe(workspace);
+    expect(workspace).not.toBeVisible();
+    act(() => qualityStore.reset());
   });
 
   it("surfaces a background snapshot failure without discarding the workspace", () => {

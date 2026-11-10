@@ -18,7 +18,7 @@ use crate::wsl_agent::{
 
 use super::{
     checkpoint::{
-        create_checkpoint, create_ephemeral_checkpoint, load_session_checkpoint,
+        create_ephemeral_checkpoint, create_turn_checkpoint, load_session_checkpoint,
         remove_ephemeral_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
         CheckpointConfig, CheckpointRecord,
     },
@@ -41,6 +41,9 @@ pub struct AgentSessionRecord {
     status: AgentSessionStatus,
     pid: Option<u32>,
     started_at_ms: u64,
+    /// Last input, agent event or timeline item: the lifetime limit counts
+    /// from here, so a long conversation that keeps working is not killed.
+    last_activity_ms: u64,
     ended_at_ms: Option<u64>,
     exit_code: Option<i32>,
     error: Option<AgentConsoleError>,
@@ -99,6 +102,7 @@ impl AgentSessionRecord {
             status: AgentSessionStatus::Starting,
             pid: None,
             started_at_ms,
+            last_activity_ms: started_at_ms,
             ended_at_ms: None,
             exit_code: None,
             error: None,
@@ -226,6 +230,7 @@ impl AgentSessionRecord {
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
         self.error = None;
+        self.last_activity_ms = now_ms();
         let planned_input = plan_mode_input(self.plan_mode.as_ref(), input);
         let input = planned_input.as_deref().unwrap_or(input);
         let native_goal = self
@@ -256,6 +261,7 @@ impl AgentSessionRecord {
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
         self.error = None;
+        self.last_activity_ms = now_ms();
         let mut input = text.as_bytes().to_vec();
         input.push(b'\r');
         let planned_input = plan_mode_input(self.plan_mode.as_ref(), &input);
@@ -339,6 +345,7 @@ impl AgentSessionRecord {
         attachments: &[AgentTurnAttachment],
     ) -> Result<(), AgentConsoleError> {
         self.error = None;
+        self.last_activity_ms = now_ms();
         if self.turn_status != AgentSessionTurnStatus::Working {
             return Err(AgentConsoleError::new(
                 "steer_unavailable",
@@ -628,6 +635,9 @@ impl AgentSessionRecord {
                 self.acp_runtime = acp_runtime;
             }
             self.acp_permissions = acp_permissions;
+            if !events.is_empty() {
+                self.last_activity_ms = now_ms();
+            }
             for event in events {
                 self.apply_process_event(event)?;
             }
@@ -808,14 +818,14 @@ impl AgentSessionRecord {
         if !self.is_active() || max_lifetime_ms == 0 {
             return Ok(());
         }
-        if now_ms.saturating_sub(self.started_at_ms) <= max_lifetime_ms {
+        if now_ms.saturating_sub(self.last_activity_ms) <= max_lifetime_ms {
             return Ok(());
         }
         let _ = self.stop();
         self.status = AgentSessionStatus::Failed;
         self.error = Some(AgentConsoleError::new(
             "session_lifetime_exceeded",
-            "session exceeded the configured lifetime limit",
+            "session was idle longer than the configured lifetime limit",
         ));
         self.ended_at_ms = Some(now_ms);
         Ok(())
@@ -907,6 +917,7 @@ impl AgentSessionRecord {
         if self.timeline.iter().any(|existing| existing.id == item.id) {
             return;
         }
+        self.last_activity_ms = now_ms();
         self.timeline.push(item);
         if self.timeline.len() > MAX_TIMELINE_ITEMS_PER_SESSION {
             let overflow = self.timeline.len() - MAX_TIMELINE_ITEMS_PER_SESSION;
@@ -1325,9 +1336,13 @@ impl AgentSessionRecord {
     ) -> Result<CheckpointRecord, AgentConsoleError> {
         let checkpoint_id = format!("{}-turn-{index}-after", self.id);
         match self.checkpoint_backend {
-            CheckpointBackend::Local => {
-                create_checkpoint(&self.repo, &checkpoint_id, now_ms, &self.checkpoint_config)
-            }
+            CheckpointBackend::Local => create_turn_checkpoint(
+                &self.repo,
+                &self.id,
+                &checkpoint_id,
+                now_ms,
+                &self.checkpoint_config,
+            ),
             CheckpointBackend::Wsl => create_wsl_checkpoint(
                 self.wsl_distro.as_deref(),
                 &self.repo,
@@ -2109,6 +2124,7 @@ fn plan_mode_input(plan_mode: Option<&AgentSessionPlanMode>, input: &[u8]) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_console::checkpoint::create_checkpoint;
     use crate::bus::contract::{
         AgentSessionCheckpoint, AgentSessionCheckpointType, AgentSessionTimelineKind,
         AgentSubagentActivity, AgentSubagentCapabilities, AgentSubagentThread,
@@ -2443,6 +2459,30 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.status, AgentSessionStatus::Completed);
         assert_eq!(contract.exit_code, Some(0));
+    }
+
+    #[test]
+    fn the_lifetime_limit_counts_from_the_last_activity() {
+        // Started long ago (at 1 ms), but the user just wrote to it.
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        session
+            .start(Box::new(FakeProcess {
+                pid: Some(42),
+                exit_code: None,
+                status_error: None,
+                writes: None,
+            }))
+            .unwrap();
+        session.write_input(b"sigue", None).unwrap();
+        let hour = 60 * 60 * 1000;
+
+        session.enforce_lifetime(now_ms() + hour, 4 * hour).unwrap();
+        assert_eq!(session.to_contract().status, AgentSessionStatus::Running);
+
+        session
+            .enforce_lifetime(now_ms() + 5 * hour, 4 * hour)
+            .unwrap();
+        assert_eq!(session.to_contract().status, AgentSessionStatus::Failed);
     }
 
     /// Exits with `code` when killed, as Claude Code exits 1 on SIGTERM.

@@ -84,7 +84,36 @@ pub fn create_checkpoint(
     created_at_ms: u64,
     config: &CheckpointConfig,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
-    create_checkpoint_inner(repo, session_id, created_at_ms, config, true, false)
+    create_checkpoint_inner(
+        repo,
+        session_id,
+        session_id,
+        created_at_ms,
+        config,
+        true,
+        false,
+    )
+}
+
+/// A checkpoint taken during `session_id`'s life. Retention never prunes
+/// that session's own checkpoints (its start and earlier turns): undoing
+/// it still needs them.
+pub fn create_turn_checkpoint(
+    repo: &Path,
+    session_id: &str,
+    checkpoint_id: &str,
+    created_at_ms: u64,
+    config: &CheckpointConfig,
+) -> Result<CheckpointRecord, AgentConsoleError> {
+    create_checkpoint_inner(
+        repo,
+        checkpoint_id,
+        session_id,
+        created_at_ms,
+        config,
+        true,
+        false,
+    )
 }
 
 pub fn create_ephemeral_checkpoint(
@@ -93,7 +122,15 @@ pub fn create_ephemeral_checkpoint(
     created_at_ms: u64,
     config: &CheckpointConfig,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
-    create_checkpoint_inner(repo, session_id, created_at_ms, config, false, false)
+    create_checkpoint_inner(
+        repo,
+        session_id,
+        session_id,
+        created_at_ms,
+        config,
+        false,
+        false,
+    )
 }
 
 /// A job-boundary snapshot for Delivery. It is always a shadow tree, even on
@@ -121,7 +158,7 @@ pub fn snapshot_worktree(
     config: &CheckpointConfig,
     compare_to: Option<&str>,
 ) -> Result<WorktreeSnapshot, AgentConsoleError> {
-    let checkpoint = create_checkpoint_inner(repo, name, created_at_ms, config, true, true)?;
+    let checkpoint = create_checkpoint_inner(repo, name, name, created_at_ms, config, true, true)?;
     let tree = read_metadata(&checkpoint.checkpoint_dir)?
         .shadow_tree
         .ok_or_else(|| {
@@ -185,6 +222,7 @@ fn diff_snapshot_trees(
 fn create_checkpoint_inner(
     repo: &Path,
     session_id: &str,
+    owner: &str,
     created_at_ms: u64,
     config: &CheckpointConfig,
     enforce_retention: bool,
@@ -251,8 +289,8 @@ fn create_checkpoint_inner(
     };
 
     if enforce_retention {
-        prune_checkpoints(&repo_dir, config.retention_per_repo)?;
-        enforce_repo_budget(&repo_dir, config.max_repo_bytes)?;
+        prune_checkpoints(&repo_dir, config.retention_per_repo, owner)?;
+        enforce_repo_budget(&repo_dir, config.max_repo_bytes, owner)?;
     } else if let Err(error) = snapshot_ephemeral_git_index(&repo, &checkpoint_dir) {
         let _ = fs::remove_dir_all(&checkpoint_dir);
         return Err(error);
@@ -906,6 +944,9 @@ fn scan_dirty_git_snapshot_changes(
 const SHADOW_STORE_DIR: &str = "store.git";
 const SHADOW_INDEX: &str = "index";
 const SHADOW_LATEST_INDEX: &str = "latest.index";
+/// Untracked files the snapshot could not read (a locked database), NUL
+/// separated: they existed before the session, so undo must not delete them.
+const SHADOW_SKIPPED: &str = "skipped";
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const INHERITED_GIT_ENV: &[&str] = &[
     "GIT_DIR",
@@ -942,6 +983,7 @@ struct ShadowGit {
 
 struct ShadowCheckpoint {
     git: ShadowGit,
+    skipped: Vec<PathBuf>,
 }
 
 impl ShadowGit {
@@ -1150,6 +1192,10 @@ fn shadow_snapshot(
         Err(error) => return Err(error),
     };
     git.run(&["update-ref", &shadow_ref(checkpoint_name), &tree])?;
+    let skipped = git.run(&["ls-files", "--others", "--exclude-standard", "-z"])?;
+    if !skipped.is_empty() {
+        fs::write(checkpoint_dir.join(SHADOW_SKIPPED), &skipped).map_err(io_error)?;
+    }
 
     let head = repository
         .and_then(|repository| repository.head().ok())
@@ -1203,7 +1249,10 @@ fn shadow_of(record: &CheckpointRecord) -> Result<Option<ShadowCheckpoint>, Agen
     if !git.index.is_file() {
         git.run(&["read-tree", &tree])?;
     }
-    Ok(Some(ShadowCheckpoint { git }))
+    let skipped = fs::read(record.checkpoint_dir.join(SHADOW_SKIPPED))
+        .map(|paths| nul_separated_paths(&paths))
+        .unwrap_or_default();
+    Ok(Some(ShadowCheckpoint { git, skipped }))
 }
 
 fn scan_shadow_changes(
@@ -1239,8 +1288,9 @@ fn scan_shadow_changes(
     }
     let created = git.run(&["ls-files", "--others", "--exclude-standard", "-z"])?;
     for path in nul_separated_paths(&created) {
-        // A nested repository shows up as "dir/"; it is not ours to track.
-        if !path.to_string_lossy().ends_with('/') {
+        // A nested repository shows up as "dir/"; it is not ours to track,
+        // nor is a file that was there but unreadable at snapshot time.
+        if !path.to_string_lossy().ends_with('/') && !shadow.skipped.contains(&path) {
             changes.push(change(&path, AgentSessionChangeKind::Created, timestamp_ms));
         }
     }
@@ -1282,6 +1332,11 @@ fn revert_shadow_file(
     if in_snapshot {
         prepare_restore_target(&record.repo, rel)?;
         restore_from_shadow(&shadow.git, &[rel.to_path_buf()])
+    } else if shadow.skipped.iter().any(|path| path == rel) {
+        Err(AgentConsoleError::new(
+            "checkpoint_file_unreadable",
+            "este archivo ya existía pero no se pudo leer al crear el checkpoint",
+        ))
     } else {
         remove_created_file(&record.repo, rel)
     }
@@ -1513,31 +1568,53 @@ fn read_metadata(checkpoint_dir: &Path) -> Result<CheckpointMetadata, AgentConso
         .map_err(|e| AgentConsoleError::new("checkpoint_metadata_failed", e.to_string()))
 }
 
-fn prune_checkpoints(repo_dir: &Path, keep: usize) -> Result<(), AgentConsoleError> {
+/// The checkpoints retention may remove, oldest first: never those of
+/// `owner`, the session the new checkpoint belongs to (`<owner>` and
+/// `<owner>-turn-…`).
+fn prunable_checkpoint_dirs(
+    repo_dir: &Path,
+    owner: &str,
+) -> Result<Vec<(PathBuf, std::time::SystemTime)>, AgentConsoleError> {
+    let turn_prefix = format!("{owner}-");
+    let mut dirs = checkpoint_dirs(repo_dir)?;
+    dirs.retain(|(path, _)| {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        name != owner && !name.starts_with(&turn_prefix)
+    });
+    dirs.sort_by_key(|(_, modified)| *modified);
+    Ok(dirs)
+}
+
+fn prune_checkpoints(repo_dir: &Path, keep: usize, owner: &str) -> Result<(), AgentConsoleError> {
     if keep == 0 {
         return Ok(());
     }
-    let mut dirs = checkpoint_dirs(repo_dir)?;
-    dirs.sort_by_key(|(_, modified)| *modified);
-    while dirs.len() > keep {
-        if let Some((path, _)) = dirs.first() {
-            remove_checkpoint_dir(repo_dir, path)?;
-        }
-        dirs.remove(0);
+    let excess = checkpoint_dirs(repo_dir)?.len().saturating_sub(keep);
+    for (path, _) in prunable_checkpoint_dirs(repo_dir, owner)?
+        .iter()
+        .take(excess)
+    {
+        remove_checkpoint_dir(repo_dir, path)?;
     }
     Ok(())
 }
 
-fn enforce_repo_budget(repo_dir: &Path, max_bytes: u64) -> Result<(), AgentConsoleError> {
+fn enforce_repo_budget(
+    repo_dir: &Path,
+    max_bytes: u64,
+    owner: &str,
+) -> Result<(), AgentConsoleError> {
     let mut total = dir_size(repo_dir)?;
     if total <= max_bytes {
         return Ok(());
     }
 
-    let mut dirs = checkpoint_dirs(repo_dir)?;
-    dirs.sort_by_key(|(_, modified)| *modified);
+    let mut dirs = prunable_checkpoint_dirs(repo_dir, owner)?;
 
-    while total > max_bytes && dirs.len() > 1 {
+    while total > max_bytes && !dirs.is_empty() {
         let (path, _) = dirs.remove(0);
         remove_checkpoint_dir(repo_dir, &path)?;
         // Shared objects are reclaimed once no remaining checkpoint uses them.
@@ -1714,6 +1791,44 @@ mod tests {
         assert!(record.checkpoint_dir.join(SHADOW_INDEX).is_file());
         let repo_dir = record.checkpoint_dir.parent().unwrap();
         assert!(repo_dir.join(SHADOW_STORE_DIR).join("HEAD").is_file());
+    }
+
+    // Windows locks files against reading (a running dev server's sqlite).
+    #[cfg(windows)]
+    #[test]
+    fn undo_keeps_a_file_that_was_unreadable_at_snapshot_time() {
+        use std::os::windows::fs::OpenOptionsExt;
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "dirty\n");
+        repo.write("dev.sqlite", "data\n");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(repo.path().join("dev.sqlite"))
+            .unwrap();
+        let record =
+            create_checkpoint(repo.path(), "sess-locked", 1, &CheckpointConfig::default()).unwrap();
+        drop(lock);
+        assert!(
+            !record
+                .contract
+                .snapshot_files
+                .contains(&PathBuf::from("dev.sqlite")),
+            "the lock kept it out of the snapshot"
+        );
+        repo.write("created.txt", "by the agent\n");
+
+        revert_checkpoint(&record).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(repo.path().join("dev.sqlite")).unwrap(),
+            "data\n"
+        );
+        assert!(!repo.path().join("created.txt").exists());
     }
 
     #[test]
@@ -2073,6 +2188,32 @@ mod tests {
         let repo_dir = last_dir.unwrap().parent().unwrap().to_path_buf();
         let dirs = checkpoint_dirs(&repo_dir).unwrap();
         assert_eq!(dirs.len(), 5);
+    }
+
+    #[test]
+    fn retention_keeps_the_live_sessions_own_checkpoints() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "dirty\n");
+        let config = CheckpointConfig {
+            retention_per_repo: 2,
+            ..CheckpointConfig::default()
+        };
+        let old = create_checkpoint(repo.path(), "old", 1, &config).unwrap();
+        let start = create_checkpoint(repo.path(), "live", 2, &config).unwrap();
+        for i in 1..=3 {
+            let id = format!("live-turn-{i}-after");
+            create_turn_checkpoint(repo.path(), "live", &id, 2 + i, &config).unwrap();
+        }
+
+        assert!(
+            start.checkpoint_dir.exists(),
+            "undoing the session needs it"
+        );
+        assert!(!old.checkpoint_dir.exists());
     }
 
     #[test]
