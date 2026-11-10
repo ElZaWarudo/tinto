@@ -2588,7 +2588,13 @@ También se desharán los cambios hechos después en este repo, incluidos los de
             aria-live="polite"
             data-paused={queuePaused || undefined}
           >
-            <span>{queuePaused ? "Cola pausada" : `${queuedMessages.length} en cola`}</span>
+            <span>
+              {session && session.status !== "starting" && session.status !== "running"
+                ? `${queuedMessages.length} en cola: la sesión terminó y no se enviarán`
+                : queuePaused
+                  ? "Cola pausada"
+                  : `${queuedMessages.length} en cola`}
+            </span>
             <div className="agent-panel__queue-items">
               {queuedMessages.map((message, index) => (
                 <div className="agent-panel__queue-item" key={message.id}>

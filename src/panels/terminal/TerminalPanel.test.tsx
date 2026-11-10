@@ -1815,6 +1815,29 @@ describe("TerminalPanel", () => {
     expect(writeAgentSessionTurnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("says why a queued message waits on a session that ended", async () => {
+    localStorage.setItem(
+      "tinto.agent-message-queues.v2",
+      JSON.stringify({
+        "sess-1": {
+          messages: [{ id: "sess-1:queued:1", text: "Para luego", attachments: [] }],
+          paused: false,
+        },
+      }),
+    );
+    listAgentSessionsMock.mockResolvedValue([sessionFixture({ status: "exited" })]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    expect(
+      await screen.findByText(
+        "1 en cola: la sesión terminó y no se enviarán",
+        {},
+        { timeout: 5000 },
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("pauses messages queued after interrupt and keeps the control single-flight", async () => {
     const user = userEvent.setup();
     let resolveInterrupt: (() => void) | undefined;
