@@ -84,7 +84,7 @@ export function collectRelevantNotifications(
 
     if (delta.error?.class === "terminal") {
       notifications.push({
-        key: `repo-error:${delta.repo}:${delta.revision}:${delta.error.category}`,
+        key: `repo-error:${delta.repo}:${delta.error.category}`,
         title: repoTitle(name),
         body: `Error terminal del repositorio: ${label(delta.error.category)}.`,
       });
@@ -92,7 +92,7 @@ export function collectRelevantNotifications(
 
     for (const signal of criticalSignals(delta)) {
       notifications.push({
-        key: `signal:${delta.repo}:${delta.revision}:${signal.kind}:${signal.path ?? "repo"}`,
+        key: `signal:${delta.repo}:${signal.kind}:${signal.path ?? "repo"}`,
         title: repoTitle(name),
         body: `Se detectó una señal crítica: ${label(signal.kind)}.`,
       });
@@ -221,9 +221,11 @@ export function NotificationWatcher({
 
   useEffect(() => {
     if (!notificationsEnabled) return;
-    for (const notification of collectRelevantNotifications(busState, (repo) =>
-      busStore.displayName(repo),
-    )) {
+    const current = collectRelevantNotifications(busState, (repo) => busStore.displayName(repo));
+    // A condition that cleared is forgotten, so it is announced again if it returns.
+    const currentKeys = new Set(current.map(({ key }) => key));
+    for (const key of sent.current) if (!currentKeys.has(key)) sent.current.delete(key);
+    for (const notification of current) {
       if (sent.current.has(notification.key)) continue;
       sent.current.add(notification.key);
       sendOrMarkUnavailable(adapter, notification, () => sent.current.delete(notification.key));

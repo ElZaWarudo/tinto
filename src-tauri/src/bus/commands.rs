@@ -671,8 +671,14 @@ pub(crate) fn validate_media_path(path: &Path) -> Result<(), CommandError> {
 /// → `FileDiff` sin hunks marcado binario. `None` si no se puede leer.
 pub(crate) fn synthesize_untracked_diff(repo: &Path, rel: &Path) -> Option<FileDiff> {
     let abs = repo.join(rel);
-    let bytes = std::fs::read(&abs).ok()?;
-    let too_big = bytes.len() > FILE_CONTENT_MAX_BYTES;
+    // El tamaño se mira antes de leer: un untracked enorme (un dump, un
+    // build) no se carga entero en memoria para descartarlo.
+    let too_big = std::fs::metadata(&abs).ok()?.len() > FILE_CONTENT_MAX_BYTES as u64;
+    let bytes = if too_big {
+        Vec::new()
+    } else {
+        std::fs::read(&abs).ok()?
+    };
     let text = std::str::from_utf8(&bytes).ok();
     if too_big || text.is_none() {
         return Some(FileDiff {

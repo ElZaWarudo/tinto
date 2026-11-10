@@ -105,8 +105,9 @@ describe("quality notifications", () => {
     expect(notifications.map((item) => item.key)).toEqual(
       expect.arrayContaining([
         "watching:degraded:inotify",
-        "repo-error:/secret/root:7:repo-removed",
-        "signal:/secret/root:7:possible_secret:private/.env",
+        // No revision: the same condition keeps its key across revisions.
+        "repo-error:/secret/root:repo-removed",
+        "signal:/secret/root:possible_secret:private/.env",
         "fs-signal:/secret/root:1700000000000:modified:private/.env:sensitive_path",
       ]),
     );

@@ -2,7 +2,8 @@
 // These are the global filters (they also scope the in-project explorers); the
 // Dashboard is their natural home now that it is the project launcher.
 
-import { qualityStore, useQualityState } from "../qol/state";
+import { busStore } from "../bus/store";
+import { ALL_REPOS, qualityStore, useQualityState } from "../qol/state";
 
 export function DashboardFilters() {
   const { filters } = useQualityState();
@@ -46,6 +47,20 @@ export function DashboardFilters() {
       <button type="button" data-testid="qol-reset" onClick={() => qualityStore.resetFilters()}>
         Restablecer
       </button>
+      {/* Set from the explorer's "filter by folder"; without this it hides repos unseen. */}
+      {filters.repo !== ALL_REPOS && (
+        <div className="dashboard-filter dashboard-filter--repo">
+          <span>Proyecto</span>
+          <button
+            type="button"
+            data-testid="qol-repo"
+            aria-label={`Quitar el filtro del proyecto ${busStore.displayName(filters.repo)}`}
+            onClick={() => qualityStore.setFilters({ repo: ALL_REPOS })}
+          >
+            {busStore.displayName(filters.repo)} ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }
