@@ -914,6 +914,7 @@ fn run_tool(
                 .filter_map(|path| path.as_str().map(str::to_string))
                 .collect();
             // A restack's old base, as the coordinator corrects it.
+            let mut restack_before = None;
             if let Some(from) = args.get("restack_from").and_then(Value::as_str) {
                 if rung != DeliveryRung::Sync {
                     return Err(DeliveryError::new(
@@ -928,8 +929,10 @@ fn run_tool(
                         "ya hay un sync pedido para esta tarea: retíralo con withdraw_approval antes de pedirlo con otro restack_from",
                     ));
                 }
+                restack_before = Some(service.task(&task_id)?.restack_from);
                 service.set_restack_from(&task_id, from)?;
             }
+            let asked_for = task_id.clone();
             let approval = service.request_approval(NewApproval {
                 task_id,
                 rung,
@@ -950,7 +953,16 @@ fn run_tool(
                 resolve_thread: args["resolve_thread"].as_bool().unwrap_or(false),
                 interim: args["interim"].as_bool().unwrap_or(false),
                 record: args["record"].as_bool().unwrap_or(false),
-            })?;
+            });
+            // A refused sync leaves the task's old base as it was.
+            if let (Err(_), Some(before)) = (&approval, restack_before) {
+                let store = service.store()?;
+                if let Some(mut task) = store.task(&asked_for)? {
+                    task.restack_from = before;
+                    store.put_task(&task)?;
+                }
+            }
+            let approval = approval?;
             attended(&approval.task_id, to_json(&approval)?)
         }
         "read_approval" => to_json(&service.approval(&text("approval_id")?)?),

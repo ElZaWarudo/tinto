@@ -288,6 +288,8 @@ fn run(mut command: Command, timeout: Duration) -> (bool, String) {
             Ok(Some(status)) => break Some(status),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
+                // What it started (a docker client, a shell's children) too.
+                let _ = crate::agent_console::pty::kill_process_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;

@@ -1002,6 +1002,41 @@ impl DeliveryService {
         Ok(approval)
     }
 
+    /// Whether a split issue's Jira step for `stage` only links the PR:
+    /// another package already moved the issue. The step after the merge
+    /// closes it, never only a link.
+    fn jira_link_only(
+        &self,
+        task: &DeliveryTask,
+        stage: Option<&str>,
+    ) -> Result<bool, DeliveryError> {
+        if task.package.is_none() || stage == Some(JIRA_AFTER_MERGE) {
+            return Ok(false);
+        }
+        for other in self.packages_of(task)? {
+            if self.jira_done(&other.id)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether Tinto can ask a task's Jira step for `stage` without the
+    /// coordinator's statuses: the repo has them for that moment, or the
+    /// step only links the PR. Otherwise the step is the coordinator's.
+    fn jira_step_settable(&self, task: &DeliveryTask, stage: &str) -> Result<bool, DeliveryError> {
+        let jira = self
+            .store()?
+            .repo_settings(&task.repo)?
+            .jira
+            .unwrap_or_default();
+        let statuses = match stage {
+            JIRA_AFTER_MERGE => jira.after_merge,
+            _ => jira.after_pr,
+        };
+        Ok(!statuses.is_empty() || self.jira_link_only(task, Some(stage))?)
+    }
+
     /// Checks a requested step and saves it; says whether Tinto takes it on
     /// its own now.
     fn save_requested(
@@ -1101,9 +1136,7 @@ impl DeliveryService {
                     ));
                 }
             } else {
-                for other in &packages {
-                    link_only |= self.jira_done(&other.id)?;
-                }
+                link_only = self.jira_link_only(&task, stage.as_deref())?;
             }
         }
         // With the repo's Jira set in Tinto, Tinto runs the step: the
@@ -1585,6 +1618,10 @@ impl DeliveryService {
         approve: bool,
         note: Option<String>,
     ) -> Result<DeliveryApproval, DeliveryError> {
+        // Claimed until it is saved: a second decision (a reject, the
+        // phone's approve) waits for this one and finds it decided.
+        let lock = super::service::keyed_lock(&self.inner.deciding, approval_id);
+        let _deciding = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut approval = self.approval(approval_id)?;
         if approval.status != DeliveryApprovalStatus::Pending {
             return Err(DeliveryError::new(
@@ -1888,6 +1925,8 @@ impl DeliveryService {
     /// The coordinator takes back a request the user has not answered, to
     /// ask it again with other text. The reason stays in the log.
     pub fn withdraw_approval(&self, approval_id: &str, reason: &str) -> Result<(), DeliveryError> {
+        let lock = super::service::keyed_lock(&self.inner.deciding, approval_id);
+        let _deciding = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let approval = self.approval(approval_id)?;
         // A reply held for its fix posted nothing yet: it can still go.
         let held = approval.rung == DeliveryRung::PrReply
@@ -2296,7 +2335,9 @@ impl DeliveryService {
                 ),
                 _ => match super::phase::next_step(task, &approvals) {
                     Some((DeliveryRung::Jira, Some(stage)))
-                        if autonomy.jira && self.jira_site(&task.repo)?.is_some() =>
+                        if autonomy.jira
+                            && self.jira_site(&task.repo)?.is_some()
+                            && self.jira_step_settable(task, stage)? =>
                     {
                         (
                             DeliveryRung::Jira,
@@ -3216,7 +3257,9 @@ impl DeliveryService {
         .lines()
         .map(str::to_string)
         .collect();
-        let mut done = task.clone();
+        // Read now: the task may have changed while the rebase ran (its
+        // state, checks or setup), and only its old base is cleared.
+        let mut done = self.task(&task.id)?;
         done.restack_from = None;
         done.updated_at_ms = now_ms();
         self.store()?.put_task(&done)?;
@@ -3764,8 +3807,15 @@ impl DeliveryService {
         // pointed at the merge target first (`delete_merged_branch`).
         let stacked = !self.stacked_prs(&task)?.is_empty();
         self.set_progress(&approval.id, "Fusionando en GitHub")?;
-        self.github_client()
-            .merge(&pr.url, method, &approval.title, &approval.body, !stacked)?;
+        // Pinned to the head just checked: a push since is not merged.
+        self.github_client().merge(
+            &pr.url,
+            method,
+            &approval.title,
+            &approval.body,
+            !stacked,
+            pr.head.as_deref(),
+        )?;
         let mut outcome = match stacked {
             false => format!(
                 "PR #{} fusionado ({method}) y rama {} borrada en GitHub",

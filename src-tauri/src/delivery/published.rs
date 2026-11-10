@@ -200,17 +200,27 @@ impl DeliveryService {
         live: &serde_json::Value,
     ) -> Result<(), DeliveryError> {
         let live_head = live["headRefOid"].as_str().unwrap_or_default();
-        let held: Vec<DeliveryApproval> = self
+        let is_held = |approval: &DeliveryApproval| {
+            approval.task_id == task_id
+                && approval.rung == DeliveryRung::PrReply
+                && approval.status == DeliveryApprovalStatus::Approved
+        };
+        let held: Vec<String> = self
             .store()?
             .approvals()?
             .into_iter()
-            .filter(|approval| {
-                approval.task_id == task_id
-                    && approval.rung == DeliveryRung::PrReply
-                    && approval.status == DeliveryApprovalStatus::Approved
-            })
+            .filter(is_held)
+            .map(|approval| approval.id)
             .collect();
-        for mut approval in held {
+        for id in held {
+            // The step's claim, as a decision takes it: read again under it,
+            // so a reply being posted from the user's approve, or withdrawn
+            // meanwhile, is not posted here as well.
+            let lock = super::service::keyed_lock(&self.inner.deciding, &id);
+            let _deciding = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let Some(mut approval) = self.store()?.approval(&id)?.filter(is_held) else {
+                continue;
+            };
             let before = approval.clone();
             self.post_reply_once_published(&mut approval, Some(live_head))?;
             if approval != before {
