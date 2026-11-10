@@ -254,6 +254,22 @@ impl DeliveryService {
             ));
         }
         let mut task = self.task(task_id)?;
+        // A note blocks on something outside Tinto. What waits on the user
+        // Tinto already shows as theirs (a decision, a step to approve, QA
+        // problems to decide): a note on top would show it as blocked.
+        if blockers
+            .iter()
+            .any(|blocker| matches!(blocker, NewBlocker::Note { .. }))
+        {
+            if let Some(phase) = self.overview()?.phases.get(task_id) {
+                if phase.waits_on == super::phase::Waiter::User {
+                    return Err(DeliveryError::new(
+                        "waits_on_user",
+                        "la tarea ya espera al usuario en Tinto (una decisión, un paso que aprobar o problemas de QA que decidir), y Tinto la muestra así: no la bloquees con una nota. Si necesitas algo más de él, pregúntalo con request_decisions",
+                    ));
+                }
+            }
+        }
         let blockers = blockers
             .into_iter()
             .map(|blocker| self.new_blocker(&task, blocker))

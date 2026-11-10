@@ -361,6 +361,8 @@ fn task_phase(phase: &DeliveryTaskPhase) -> TaskPhase {
     let label = match &phase.phase {
         Phase::Decisions { count: 1 } => "Una decisión pendiente".to_string(),
         Phase::Decisions { count } => format!("{count} decisiones pendientes"),
+        Phase::QaProblems { count: 1 } => "Un problema de QA por decidir".to_string(),
+        Phase::QaProblems { count } => format!("{count} problemas de QA por decidir"),
         Phase::Approval { rung, stage } => format!("Aprobar {}", step(*rung, stage.as_deref())),
         Phase::StepRunning { rung, .. } => format!("En curso: {}", step(*rung, None)),
         Phase::Record { rung, stage } => {

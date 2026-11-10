@@ -16,8 +16,9 @@ use super::model::SCOPE_ROLE;
 use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
     DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJob, DeliveryJobStatus,
-    DeliveryLease, DeliveryLeaseState, DeliveryQueueWait, DeliveryResultState, DeliveryRound,
-    DeliveryRun, DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
+    DeliveryLease, DeliveryLeaseState, DeliveryQaProblem, DeliveryQaProblemStatus,
+    DeliveryQueueWait, DeliveryResultState, DeliveryRound, DeliveryRun, DeliveryRung,
+    DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
 use super::prs::{CiState, DeliveryPr};
 use super::reviews::ReviewState;
@@ -60,6 +61,10 @@ pub enum Waiter {
 pub enum Phase {
     /// The user answers its decisions.
     Decisions {
+        count: usize,
+    },
+    /// The user decides the problems its QA found: fix or dismiss each.
+    QaProblems {
         count: usize,
     },
     /// The user approves a delivery step.
@@ -293,6 +298,8 @@ pub struct Facts<'a> {
     pub leases: &'a [DeliveryLease],
     pub approvals: &'a [DeliveryApproval],
     pub decisions: &'a [DeliveryDecision],
+    /// QA problems of the live tasks.
+    pub qa_problems: &'a [DeliveryQaProblem],
     pub settings_proposals: &'a [DeliverySettingsProposal],
     pub prs: &'a [DeliveryPr],
     pub rounds: &'a [DeliveryRound],
@@ -1138,9 +1145,28 @@ fn phase_in_round(
         .iter()
         .find_map(|job| facts.queued.get(&job.id)?.warning.clone());
     let failing = failing_checks(&task.checks, &jobs);
+    // Replies to reviewers waiting for the user's approval hold no stage,
+    // but a push or the PR step is refused until every thread has one: a
+    // task whose next step is one of those waits on the user.
+    let replies: Vec<Option<&str>> = facts
+        .approvals
+        .iter()
+        .filter(|approval| {
+            approval.task_id == task.id
+                && approval.rung == DeliveryRung::PrReply
+                && approval.status == DeliveryApprovalStatus::Pending
+        })
+        .map(|approval| approval.reply_to())
+        .collect();
     let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
+        waits_on: match &phase {
+            Phase::NextStep {
+                rung: DeliveryRung::Push | DeliveryRung::Pr,
+                ..
+            } if !replies.is_empty() => Waiter::User,
+            _ => waits_on,
+        },
         phase,
-        waits_on,
         next_stage: next.clone(),
         steps: steps.clone(),
         round: None,
@@ -1171,6 +1197,20 @@ fn phase_in_round(
             Waiter::User,
         );
     }
+    // What Tinto itself waits on the user for comes before any blocker: the
+    // QA problems the user decides, and replies to reviewers (a push to the
+    // PR waits for them) waiting for approval.
+    let problems = facts
+        .qa_problems
+        .iter()
+        .filter(|problem| {
+            problem.task_id == task.id && problem.status == DeliveryQaProblemStatus::Open
+        })
+        .count();
+    if problems > 0 {
+        return phase(Phase::QaProblems { count: problems }, Waiter::User);
+    }
+
     // Approved, or done and still cleaning up after it (its branch).
     if let Some((step, progress)) = approvals.iter().find_map(|approval| {
         matches!(
@@ -1482,16 +1522,6 @@ fn phase_in_round(
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         // Replies to reviewers are outside the ladder, but waiting for the
         // user's approval they are what the PR waits on.
-        let replies: Vec<Option<&str>> = facts
-            .approvals
-            .iter()
-            .filter(|approval| {
-                approval.task_id == task.id
-                    && approval.rung == DeliveryRung::PrReply
-                    && approval.status == DeliveryApprovalStatus::Pending
-            })
-            .map(|approval| approval.reply_to())
-            .collect();
         let wait = pr_wait(pr, &replies, facts.review_optional.contains(&task.id));
         let waits_on = wait.waiter(unattended);
         return phase(
@@ -1591,6 +1621,8 @@ mod tests {
         no_qa: HashSet<String>,
         scope_always: HashSet<String>,
         checks: Vec<String>,
+        qa_problems: Vec<DeliveryQaProblem>,
+        blockers: Vec<DeliveryBlocker>,
     }
 
     impl World {
@@ -1610,12 +1642,15 @@ mod tests {
                 no_qa: HashSet::new(),
                 scope_always: HashSet::new(),
                 checks: Vec::new(),
+                qa_problems: Vec::new(),
+                blockers: Vec::new(),
             }
         }
 
         fn phase(&self) -> DeliveryTaskPhase {
             let mut task = sample_task();
             task.checks = self.checks.clone();
+            task.blockers = self.blockers.clone();
             task_phase(
                 &task,
                 &Facts {
@@ -1624,6 +1659,7 @@ mod tests {
                     leases: &self.leases,
                     approvals: &self.approvals,
                     decisions: &self.decisions,
+                    qa_problems: &self.qa_problems,
                     settings_proposals: &self.proposals,
                     prs: &self.prs,
                     rounds: &self.rounds,
@@ -1640,6 +1676,34 @@ mod tests {
     }
 
     use DeliveryJobStatus::{Finished, Paused, Queued, Started};
+
+    #[test]
+    fn what_tinto_waits_on_the_user_for_is_theirs_even_under_a_note() {
+        // Coordinators blocked such tasks with notes ("waiting for you to
+        // decide the QA problems", "the push waits for the replies"), which
+        // showed them as blocked instead of waiting on the user.
+        let note: DeliveryBlocker = serde_json::from_value(serde_json::json!({
+            "id": "b1", "type": "note", "text": "Waiting for you", "status": ""
+        }))
+        .unwrap();
+        let problem = |status: &str| -> DeliveryQaProblem {
+            serde_json::from_value(serde_json::json!({
+                "id": format!("q-{status}"), "task_id": "t1", "job_id": null, "number": 1,
+                "text": "Cut off", "status": status, "created_at_ms": 1, "updated_at_ms": 1
+            }))
+            .unwrap()
+        };
+        let mut world = World::new(Vec::new());
+        world.blockers = vec![note];
+        world.qa_problems = vec![problem("open"), problem("dismissed")];
+        let phase = world.phase();
+        assert_eq!(phase.phase, Phase::QaProblems { count: 1 });
+        assert_eq!(phase.waits_on, Waiter::User);
+
+        // With nothing of Tinto's left, the note blocks it.
+        world.qa_problems = vec![problem("sent")];
+        assert!(matches!(world.phase().phase, Phase::Blocked { open: 1 }));
+    }
 
     #[test]
     fn a_new_task_waits_on_the_coordinator_for_its_tests() {
@@ -1749,6 +1813,11 @@ mod tests {
                 stage: None
             }
         );
+        assert_eq!(phase.waits_on, Waiter::Coordinator);
+        // A push is refused until the replies waiting for the user's
+        // approval are posted: then the user holds it, not the coordinator.
+        world.approvals.push(step("pr_reply", "pending", None));
+        assert_eq!(world.phase().waits_on, Waiter::User);
     }
 
     #[test]
@@ -1773,6 +1842,7 @@ mod tests {
             leases: &[],
             approvals: &[],
             decisions: &[],
+            qa_problems: &[],
             settings_proposals: &[],
             prs: &[],
             rounds: &[],
