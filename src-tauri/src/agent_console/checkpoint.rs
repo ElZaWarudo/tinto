@@ -944,6 +944,9 @@ fn scan_dirty_git_snapshot_changes(
 const SHADOW_STORE_DIR: &str = "store.git";
 const SHADOW_INDEX: &str = "index";
 const SHADOW_LATEST_INDEX: &str = "latest.index";
+/// Untracked files the snapshot could not read (a locked database), NUL
+/// separated: they existed before the session, so undo must not delete them.
+const SHADOW_SKIPPED: &str = "skipped";
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const INHERITED_GIT_ENV: &[&str] = &[
     "GIT_DIR",
@@ -980,6 +983,7 @@ struct ShadowGit {
 
 struct ShadowCheckpoint {
     git: ShadowGit,
+    skipped: Vec<PathBuf>,
 }
 
 impl ShadowGit {
@@ -1188,6 +1192,10 @@ fn shadow_snapshot(
         Err(error) => return Err(error),
     };
     git.run(&["update-ref", &shadow_ref(checkpoint_name), &tree])?;
+    let skipped = git.run(&["ls-files", "--others", "--exclude-standard", "-z"])?;
+    if !skipped.is_empty() {
+        fs::write(checkpoint_dir.join(SHADOW_SKIPPED), &skipped).map_err(io_error)?;
+    }
 
     let head = repository
         .and_then(|repository| repository.head().ok())
@@ -1241,7 +1249,10 @@ fn shadow_of(record: &CheckpointRecord) -> Result<Option<ShadowCheckpoint>, Agen
     if !git.index.is_file() {
         git.run(&["read-tree", &tree])?;
     }
-    Ok(Some(ShadowCheckpoint { git }))
+    let skipped = fs::read(record.checkpoint_dir.join(SHADOW_SKIPPED))
+        .map(|paths| nul_separated_paths(&paths))
+        .unwrap_or_default();
+    Ok(Some(ShadowCheckpoint { git, skipped }))
 }
 
 fn scan_shadow_changes(
@@ -1277,8 +1288,9 @@ fn scan_shadow_changes(
     }
     let created = git.run(&["ls-files", "--others", "--exclude-standard", "-z"])?;
     for path in nul_separated_paths(&created) {
-        // A nested repository shows up as "dir/"; it is not ours to track.
-        if !path.to_string_lossy().ends_with('/') {
+        // A nested repository shows up as "dir/"; it is not ours to track,
+        // nor is a file that was there but unreadable at snapshot time.
+        if !path.to_string_lossy().ends_with('/') && !shadow.skipped.contains(&path) {
             changes.push(change(&path, AgentSessionChangeKind::Created, timestamp_ms));
         }
     }
@@ -1320,6 +1332,11 @@ fn revert_shadow_file(
     if in_snapshot {
         prepare_restore_target(&record.repo, rel)?;
         restore_from_shadow(&shadow.git, &[rel.to_path_buf()])
+    } else if shadow.skipped.iter().any(|path| path == rel) {
+        Err(AgentConsoleError::new(
+            "checkpoint_file_unreadable",
+            "este archivo ya existía pero no se pudo leer al crear el checkpoint",
+        ))
     } else {
         remove_created_file(&record.repo, rel)
     }
@@ -1774,6 +1791,44 @@ mod tests {
         assert!(record.checkpoint_dir.join(SHADOW_INDEX).is_file());
         let repo_dir = record.checkpoint_dir.parent().unwrap();
         assert!(repo_dir.join(SHADOW_STORE_DIR).join("HEAD").is_file());
+    }
+
+    // Windows locks files against reading (a running dev server's sqlite).
+    #[cfg(windows)]
+    #[test]
+    fn undo_keeps_a_file_that_was_unreadable_at_snapshot_time() {
+        use std::os::windows::fs::OpenOptionsExt;
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "dirty\n");
+        repo.write("dev.sqlite", "data\n");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(repo.path().join("dev.sqlite"))
+            .unwrap();
+        let record =
+            create_checkpoint(repo.path(), "sess-locked", 1, &CheckpointConfig::default()).unwrap();
+        drop(lock);
+        assert!(
+            !record
+                .contract
+                .snapshot_files
+                .contains(&PathBuf::from("dev.sqlite")),
+            "the lock kept it out of the snapshot"
+        );
+        repo.write("created.txt", "by the agent\n");
+
+        revert_checkpoint(&record).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(repo.path().join("dev.sqlite")).unwrap(),
+            "data\n"
+        );
+        assert!(!repo.path().join("created.txt").exists());
     }
 
     #[test]
