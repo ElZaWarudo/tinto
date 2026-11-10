@@ -330,10 +330,18 @@ function ProposalCard({ proposal }: { proposal: DeliverySettingsProposal }) {
 }
 
 /** The settings changes waiting for the user on a task's repo. */
-export function PendingSettingsProposals({ proposals }: { proposals: DeliverySettingsProposal[] }) {
+export function PendingSettingsProposals({
+  id,
+  proposals,
+}: {
+  id: string;
+  proposals: DeliverySettingsProposal[];
+}) {
   if (proposals.length === 0) return null;
   return (
     <section
+      id={id}
+      tabIndex={-1}
       className="delivery-banner delivery-decisions"
       aria-label="Cambios de ajustes por aprobar"
     >

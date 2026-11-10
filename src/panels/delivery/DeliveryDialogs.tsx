@@ -1609,6 +1609,7 @@ export function SettingsPage({
   repos,
   repo,
   section,
+  focusProposal,
   onBack,
   ...wide
 }: {
@@ -1616,6 +1617,8 @@ export function SettingsPage({
   repo: RepoChoice;
   /** The repo's section to open on. */
   section?: string;
+  /** Open on the guide rules proposed, focused. */
+  focusProposal?: boolean;
   onBack: () => void;
 } & DeliveryWideProps) {
   const [scope, setScope] = useState<SettingsScope>("repo");
@@ -1683,7 +1686,9 @@ export function SettingsPage({
       onBack={onBack}
       tabs={tabs}
       section={chosen.path === repo.path ? section : undefined}
-      after={<GuidesSection repo={chosen} />}
+      after={
+        <GuidesSection repo={chosen} focusProposal={focusProposal && chosen.path === repo.path} />
+      }
     />
   );
 }

@@ -133,7 +133,12 @@ import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
 import { CoordinatorDock } from "./DeliveryCoordinator";
 import { Overlay } from "./DeliveryOverlay";
 import { useOneOverlay } from "./useOneOverlay";
-import { coordinatorStalls, type CoordinatorStall } from "./DeliveryNotifications";
+import {
+  coordinatorStalls,
+  guideProposals,
+  type CoordinatorStall,
+  type GuideProposalWait,
+} from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
@@ -276,18 +281,32 @@ function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }
   );
 }
 
+/** Arrow keys move between a menu's entries, round from the last to the first. */
+function moveAmongEntries(event: ReactKeyboardEvent<HTMLElement>) {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const entries = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'),
+  ];
+  const at = entries.indexOf(document.activeElement as HTMLElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  entries[(at + step + entries.length) % entries.length]?.focus();
+}
+
 /** A button that opens a short list of actions in an overlay, pressed while
  *  it is open. */
 function Menu({
   label,
   trigger,
   disabled,
+  className,
   listClassName,
   children,
 }: {
   label?: string;
   trigger: ReactNode;
   disabled?: boolean;
+  className?: string;
   listClassName?: string;
   children: (close: () => void) => ReactNode;
 }) {
@@ -298,6 +317,7 @@ function Menu({
     <span className="delivery-menu">
       <button
         type="button"
+        className={className}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={from !== null}
@@ -312,6 +332,7 @@ function Menu({
           role="menu"
           className={`delivery-menu__list${listClassName ? ` ${listClassName}` : ""}`}
           onClose={close}
+          onKeyDown={moveAmongEntries}
         >
           {children(close)}
         </Overlay>
@@ -371,14 +392,7 @@ function ContextMenu({
       onClose();
       return;
     }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    event.preventDefault();
-    const entries = [
-      ...(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []),
-    ];
-    const at = entries.indexOf(document.activeElement as HTMLElement);
-    const step = event.key === "ArrowDown" ? 1 : -1;
-    entries[(at + step + entries.length) % entries.length]?.focus();
+    moveAmongEntries(event);
   };
   // Separators only between entries: none first, last or twice in a row.
   const shown: (ContextItem | null)[] = [];
@@ -584,7 +598,18 @@ interface DeliveryShared {
   /** Coordinators that stopped with changes unread, minus the ones the user hid. */
   stalls: CoordinatorStall[];
   hideStall: (stall: CoordinatorStall) => void;
+  /** The repos with guide rules proposed and not decided. */
+  guides: GuideProposalWait[];
+  /** What the user chose from «te necesita», until the view that holds it opens it. */
+  asked: Asked | null;
+  settleAsked: () => void;
 }
+
+/** One thing that waits on the user, as «te necesita» goes to it. */
+type Asked =
+  | { kind: "task"; taskId: string }
+  | { kind: "stall"; runId: string }
+  | { kind: "guides"; repo: string };
 
 const DeliveryContext = createContext<DeliveryShared | null>(null);
 
@@ -679,13 +704,18 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     }
   }, [listView]);
 
+  const [guides, setGuides] = useState<GuideProposalWait[]>([]);
+  const [asked, setAsked] = useState<Asked | null>(null);
+  const settleAsked = useCallback(() => setAsked(null), []);
+  // The overview, then the guides of its batches' repos.
+  const show = useCallback((next: DeliveryOverview) => {
+    setOverview(next);
+    void guideProposals(next).then(setGuides);
+  }, []);
+
   const refresh = useCallback(
-    () =>
-      getDeliveryOverview().then(
-        (next) => setOverview(next),
-        (cause: unknown) => setError(errorText(cause)),
-      ),
-    [],
+    () => getDeliveryOverview().then(show, (cause: unknown) => setError(errorText(cause))),
+    [show],
   );
 
   useEffect(() => {
@@ -706,7 +736,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     let pending: ReturnType<typeof setTimeout> | null = null;
     getDeliveryOverview().then(
       (next) => {
-        if (active) setOverview(next);
+        if (active) show(next);
       },
       (cause: unknown) => {
         if (active) setError(errorText(cause));
@@ -750,7 +780,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
       if (pending) clearTimeout(pending);
       clearInterval(fallback);
     };
-  }, [refresh]);
+  }, [refresh, show]);
 
   // Every second redraws the whole panel: only while a job's clock runs.
   const ticking =
@@ -936,17 +966,64 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
       // Hidden until Tinto closes.
     }
   };
-  const needsCount = needYou.length + stalls.length;
-  const needsLabel = [
+  // Goes to what waits on the user, in the view that holds it; a repo in a
+  // window of its own only comes forward.
+  const goTo = (repo: string, what: Asked) => {
+    if (!(repoKey(repo) in detached)) setAsked(what);
+  };
+  // Everything that waits on the user, each with where it is and what it needs.
+  const asks = [
+    ...needYou.map((task) => ({
+      key: task.id,
+      title: taskLabel(task),
+      need: statuses.get(task.id)!.label,
+      go: () => {
+        reveal(task);
+        goTo(task.repo, { kind: "task", taskId: task.id });
+      },
+    })),
+    ...stalls.map((stall) => ({
+      key: `stall:${stall.run.id}`,
+      title: batchName(stall.run.title || stall.run.id),
+      need: `Coordinador parado · ${stall.unread === 1 ? "1 cambio" : `${stall.unread} cambios`} sin leer`,
+      go: () => {
+        showRepo(stall.run.repo);
+        goTo(stall.run.repo, { kind: "stall", runId: stall.run.id });
+      },
+    })),
+    ...guides.map((guide) => ({
+      key: `guides:${guide.repo}`,
+      title: busStore.displayName(guide.repo),
+      need: "Reglas propuestas de las guías",
+      go: () => {
+        showRepo(guide.repo);
+        goTo(guide.repo, { kind: "guides", repo: guide.repo });
+      },
+    })),
+  ];
+  const needsParts = [
     needYou.length === 1 ? "1 tarea" : needYou.length > 1 ? `${needYou.length} tareas` : "",
     stalls.length === 1
       ? "1 coordinador"
       : stalls.length > 1
         ? `${stalls.length} coordinadores`
         : "",
-  ]
-    .filter(Boolean)
-    .join(" y ");
+    guides.length === 1
+      ? "1 propuesta de reglas"
+      : guides.length > 1
+        ? `${guides.length} propuestas de reglas`
+        : "",
+  ].filter(Boolean);
+  const needsLabel =
+    needsParts.length > 1
+      ? `${needsParts.slice(0, -1).join(", ")} y ${needsParts.at(-1)}`
+      : needsParts.join("");
+  const needsTrigger = (
+    <>
+      <Icon name="flag" />
+      {needsLabel} {asks.length === 1 ? "te necesita" : "te necesitan"}
+    </>
+  );
 
   // For what is not a button (a select, a menu item): its error goes to the
   // panel's banner. Buttons are ActionButtons and say it themselves.
@@ -1010,6 +1087,9 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     openRepo,
     stalls,
     hideStall,
+    guides,
+    asked,
+    settleAsked,
   };
 
   return (
@@ -1020,17 +1100,35 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             <h1>Delivery</h1>
             {only && <span className="delivery-muted">{busStore.displayName(only)}</span>}
             <span className="delivery-panel__spacer" />
-            {needsCount > 0 && (
-              <button
-                type="button"
-                className="delivery-attention"
-                onClick={() =>
-                  needYou.length > 0 ? reveal(needYou[0]) : showRepo(stalls[0].run.repo)
-                }
-              >
-                <Icon name="flag" />
-                {needsLabel} {needsCount === 1 ? "te necesita" : "te necesitan"}
+            {/* One thing waiting: straight to it; several: the list of them. */}
+            {asks.length === 1 && (
+              <button type="button" className="delivery-attention" onClick={asks[0].go}>
+                {needsTrigger}
               </button>
+            )}
+            {asks.length > 1 && (
+              <Menu
+                className="delivery-attention"
+                listClassName="delivery-needs"
+                trigger={needsTrigger}
+              >
+                {(close) =>
+                  asks.map((ask) => (
+                    <button
+                      key={ask.key}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        ask.go();
+                      }}
+                    >
+                      <span className="delivery-needs__title">{ask.title}</span>
+                      <small>{ask.need}</small>
+                    </button>
+                  ))
+                }
+              </Menu>
             )}
             <span className="delivery-load">
               Agentes
@@ -1290,14 +1388,15 @@ const deliveryDockComponents = {
 /** A repo's tab: its name, how many tasks it has and whether one needs you.
  *  A repo with no tasks left can be closed. */
 function DeliveryRepoTab({ params, api }: IDockviewPanelHeaderProps<{ repo: string }>) {
-  const { overview, now, stalls } = useDelivery();
+  const { overview, now, stalls, guides } = useDelivery();
   const tasks = (overview?.tasks ?? []).filter(
     (task) => repoKey(task.repo) === repoKey(params.repo),
   );
   const needs =
     (overview !== null &&
       tasks.some((task) => taskStatus(task, overview, now).group === "attention")) ||
-    stalls.some((stall) => repoKey(stall.run.repo) === repoKey(params.repo));
+    stalls.some((stall) => repoKey(stall.run.repo) === repoKey(params.repo)) ||
+    guides.some((guide) => repoKey(guide.repo) === repoKey(params.repo));
   return (
     <span className="delivery-repo-tab" title={params.repo}>
       {busStore.displayName(params.repo)}
@@ -1342,6 +1441,7 @@ function CoordinatorStallChip({
   const message = `Sigue con wait_run de Tinto Delivery: tienes ${changes} sin leer desde las ${at}. Si las herramientas de Delivery fallan, reconéctalas.`;
   return (
     <span
+      id={`delivery-ask-stall-${run.id}`}
       className="delivery-stall"
       title={`${named ? `${batch}: c` : "C"}oordinador parado, ${changes} sin leer desde las ${at}`}
     >
@@ -1508,11 +1608,35 @@ function EnvironmentStatus({ repo, distro }: { repo: string; distro: string | nu
 function DeliveryRepoView({ repo }: { repo: string }) {
   const shared = useDelivery();
   const { overview, now, repos, listView, setListView, selected, select, reveal, run } = shared;
-  // Settings in place of the tasks, opened on a section or at the top.
+  // Settings in place of the tasks, opened on a section or at the top;
+  // "proposal": the guides, on the rules proposed.
   const [settingsAt, setSettingsAt] = useState<string | null>(null);
   const settingsOpen = settingsAt !== null;
-  const guidesOpen = settingsAt === "guides";
+  const guidesOpen = settingsAt === "guides" || settingsAt === "proposal";
   const key = repoKey(repo);
+  const { asked, settleAsked } = shared;
+  const guidesWait = shared.guides.some((guide) => repoKey(guide.repo) === key);
+  // «te necesita» chose this repo's proposed rules: the guides open on them.
+  const askedGuides = asked?.kind === "guides" && repoKey(asked.repo) === key ? asked : null;
+  const [seenAsk, setSeenAsk] = useState<Asked | null>(null);
+  if (askedGuides && askedGuides !== seenAsk) {
+    setSeenAsk(askedGuides);
+    setSettingsAt("proposal");
+  }
+  // Or one of its stopped coordinators: its chip gets the focus.
+  const askedStall =
+    asked?.kind === "stall" &&
+    shared.stalls.some((stall) => stall.run.id === asked.runId && repoKey(stall.run.repo) === key)
+      ? asked
+      : null;
+  useEffect(() => {
+    if (askedGuides) settleAsked();
+    if (!askedStall) return;
+    settleAsked();
+    const chip = document.getElementById(`delivery-ask-stall-${askedStall.runId}`);
+    chip?.scrollIntoView?.({ block: "nearest" });
+    chip?.querySelector("button")?.focus();
+  }, [askedGuides, askedStall, settleAsked]);
   const choice = repos.find((candidate) => repoKey(candidate.path) === key) ?? {
     path: repo,
     distro: null,
@@ -1801,6 +1925,10 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     );
   };
   const toggleGuides = () => setSettingsAt(guidesOpen ? null : "guides");
+  // Rules proposed and not decided: marked as a repo's tab marks what needs the user.
+  const guidesMark = guidesWait && (
+    <span className="delivery-repo-tab__needs" aria-label="reglas propuestas" />
+  );
   const toggleSettings = () => setSettingsAt(settingsOpen && !guidesOpen ? null : "");
 
   const toggleIssue = (id: string) =>
@@ -1937,10 +2065,11 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           <button
             type="button"
             aria-pressed={guidesOpen}
-            title={`Guías de ${choice.label}: reglas que salen de sus revisores`}
+            title={`Guías de ${choice.label}: reglas que salen de sus revisores${guidesWait ? ". Hay reglas propuestas por aprobar" : ""}`}
             onClick={toggleGuides}
           >
             Guías
+            {guidesMark}
           </button>
           <button
             type="button"
@@ -1954,7 +2083,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           </button>
         </span>
         <span className="delivery-repo__narrow">
-          <Menu label={`Más de ${choice.label}`} trigger="⋯">
+          <Menu label={`Más de ${choice.label}`} trigger={<>⋯{guidesMark}</>}>
             {(close) => (
               <>
                 <button
@@ -1966,6 +2095,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                   }}
                 >
                   Guías
+                  {guidesMark}
                 </button>
                 <button
                   type="button"
@@ -1988,7 +2118,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           key={settingsAt}
           repos={repos}
           repo={choice}
-          section={settingsAt || undefined}
+          section={settingsAt === "proposal" ? undefined : settingsAt || undefined}
+          focusProposal={settingsAt === "proposal"}
           onBack={() => setSettingsAt(null)}
           settings={overview?.settings ?? { capacity: 0, quota_stop_percent: QUOTA_STOP_PERCENT }}
           endpoint={overview?.coordinator ?? null}
@@ -2345,6 +2476,41 @@ function TaskDetail({
   const needsYou =
     blocked || openApprovals.some((approval) => approval.status === "pending") || broken !== null;
   const rejected = rejectedStep(approvals);
+  const settingsProposals = pendingSettingsProposals(overview, task);
+
+  // What «te necesita» goes to here, in the order the task's status names it:
+  // the card that holds it, opened with its own control (`-open`) and focused.
+  const askId = (what: string) => `delivery-ask-${task.id}-${what}`;
+  const pendingApproval = openApprovals.find(
+    (approval) => approval.status === "pending" && approval.rung !== "pr_reply",
+  );
+  const askTarget = blocked
+    ? "decisions"
+    : pendingApproval
+      ? pendingApproval.id
+      : replies.length > 0
+        ? "replies"
+        : qaProblemsToDecide > 0
+          ? "qa"
+          : settingsProposals.length > 0
+            ? "settings"
+            : broken
+              ? "broken"
+              : "now";
+  const { asked, settleAsked } = useDelivery();
+  const askedHere = asked?.kind === "task" && asked.taskId === task.id ? asked : null;
+  useEffect(() => {
+    if (!askedHere) return;
+    settleAsked();
+    const opener = document.getElementById(`${askId(askTarget)}-open`);
+    const card = document.getElementById(askId(askTarget)) ?? opener;
+    card?.scrollIntoView?.({ block: "nearest" });
+    card?.focus();
+    // Pressed as the user would; a card that opens on top takes the focus itself.
+    if (opener?.getAttribute("aria-expanded") === "false") opener.click();
+    // Once per choice; askId only depends on the task.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askedHere]);
   // The coordinator's label stops at the stages; the delivery is Tinto's to know.
   const delivered = isDelivered(approvals, ladder);
   const stateLabel = delivered ? "Entregada" : (TASK_STATE_LABEL[task.state] ?? task.state);
@@ -2617,6 +2783,7 @@ function TaskDetail({
               {qaProblems.length > 0 && (
                 <button
                   type="button"
+                  id={`${askId("qa")}-open`}
                   className={`delivery-link-chip delivery-link-chip--problems${qaProblemsToDecide > 0 ? " delivery-link-chip--pending" : ""}`}
                   aria-expanded={float === "qa"}
                   aria-label={
@@ -2660,7 +2827,13 @@ function TaskDetail({
             )}
           </p>
           {/* What happens now, and in which round: one line. */}
-          <div className="delivery-task__now" role="group" aria-label="Ahora">
+          <div
+            className="delivery-task__now"
+            role="group"
+            aria-label="Ahora"
+            id={askId("now")}
+            tabIndex={-1}
+          >
             <p>
               <span className="delivery-task__now-label">Ahora</span>
               <span>
@@ -2773,7 +2946,7 @@ function TaskDetail({
 
       {/* One line in the task; the cards open on top only when asked for. */}
       {blocked && (
-        <div className="delivery-pending-bar" role="status">
+        <div className="delivery-pending-bar" role="status" id={askId("decisions")} tabIndex={-1}>
           <span>
             <strong>
               {pendingDecisions.length === 1
@@ -2784,6 +2957,7 @@ function TaskDetail({
           </span>
           <button
             type="button"
+            id={`${askId("decisions")}-open`}
             className="delivery-button--primary"
             aria-expanded={float === "decisions"}
             onClick={(event) => setFloat("decisions", event.currentTarget)}
@@ -2839,13 +3013,14 @@ function TaskDetail({
         </TaskFloat>
       )}
 
-      <PendingSettingsProposals proposals={pendingSettingsProposals(overview, task)} />
+      <PendingSettingsProposals id={askId("settings")} proposals={settingsProposals} />
 
       {openApprovals
         .filter((approval) => approval.rung !== "pr_reply")
         .map((approval) => (
           <ApprovalBar
             key={approval.id}
+            id={askId(approval.id)}
             approval={approval}
             pr={pr}
             open={expanded === approval.id}
@@ -2861,6 +3036,7 @@ function TaskDetail({
       {failedMerge && pr && <MergeFailed approval={failedMerge} pr={pr} />}
       {replies.length > 0 && (
         <StepBar
+          id={askId("replies")}
           title={
             replies.length === 1
               ? "Aprobar la respuesta al revisor"
@@ -2883,6 +3059,7 @@ function TaskDetail({
       {broken && (
         <BrokenStage
           key={broken.id}
+          id={askId("broken")}
           job={broken}
           undoable={latestUndoable?.id === broken.id}
           onContinue={() => onContinueJob(broken)}
@@ -3068,11 +3245,13 @@ const BROKEN_WHY_CHARS = 240;
  *  what to do about it. When its work got done another way, the user settles
  *  it with a note instead of running it again. */
 function BrokenStage({
+  id,
   job,
   undoable,
   onContinue,
   onUndo,
 }: {
+  id: string;
   job: DeliveryJob;
   undoable: boolean;
   onContinue: () => Promise<unknown>;
@@ -3089,6 +3268,8 @@ function BrokenStage({
   const long = why.join(" ").length > BROKEN_WHY_CHARS || why.some((text) => text.includes("\n"));
   return (
     <div
+      id={id}
+      tabIndex={-1}
       className="delivery-banner delivery-banner--danger delivery-broken"
       role="group"
       aria-label="Etapa fallida"
@@ -3838,12 +4019,14 @@ function RejectedStep({
 
 /** An open step as one line in the task; its text and buttons open in place. */
 function ApprovalBar({
+  id,
   approval,
   pr,
   open,
   onToggle,
   children,
 }: {
+  id: string;
   approval: DeliveryApproval;
   pr: DeliveryPr | null | undefined;
   open: boolean;
@@ -3860,6 +4043,7 @@ function ApprovalBar({
       : approval.title;
   return (
     <StepBar
+      id={id}
       title={pending ? `Aprobar ${name}` : (running ?? `Esperando al coordinador: ${name}`)}
       summary={summary}
       button={pending ? "Revisar" : "Ver"}
@@ -3875,6 +4059,7 @@ function ApprovalBar({
 
 /** A step's line, which opens into its card below it; the chevron folds it. */
 function StepBar({
+  id,
   title,
   summary,
   button,
@@ -3884,6 +4069,8 @@ function StepBar({
   onToggle,
   children,
 }: {
+  /** Its card's id, focused by «te necesita»; its button's is `${id}-open`. */
+  id: string;
   title: string;
   summary?: string;
   button: string;
@@ -3894,7 +4081,7 @@ function StepBar({
   children: ReactNode;
 }) {
   return (
-    <div className={`delivery-step${open ? " delivery-step--open" : ""}`}>
+    <div id={id} tabIndex={-1} className={`delivery-step${open ? " delivery-step--open" : ""}`}>
       <div className="delivery-pending-bar delivery-pending-bar--step" role="status">
         <span className="delivery-pending-bar__text">
           <strong>{title}</strong>
@@ -3902,6 +4089,7 @@ function StepBar({
         </span>
         <button
           type="button"
+          id={`${id}-open`}
           className={primary && !open ? "delivery-button--primary" : undefined}
           aria-label={buttonLabel}
           aria-expanded={open}

@@ -2374,6 +2374,24 @@
   color: var(--fg-muted);
   font-size: 11px;
 }
+/* «te necesita» with several things waiting: one row each, where and what. */
+.delivery-panel .delivery-needs button {
+  gap: 24px;
+}
+.delivery-needs__title {
+  font-weight: 600;
+}
+/* The card «te necesita» went to, while it holds the focus. */
+.delivery-panel
+  :is(
+    .delivery-step,
+    .delivery-pending-bar,
+    .delivery-banner,
+    .delivery-task__now
+  )[tabindex="-1"]:focus {
+  outline: 1px solid var(--accent-fg);
+  outline-offset: 2px;
+}
 .delivery-repo-tab__needs {
   width: 7px;
   height: 7px;

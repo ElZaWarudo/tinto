@@ -1874,6 +1874,158 @@ describe("DeliveryPanel", () => {
     ]);
   });
 
+  it("lists everything that waits on the user and goes to the exact thing asked", async () => {
+    const user = userEvent.setup();
+    localStorage.removeItem("tinto:delivery-hidden-stalls");
+    const decision = {
+      id: "d1",
+      task_id: "t1",
+      kind: "text",
+      question: "¿Texto del aviso?",
+      detail: "",
+      options: [],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    } as unknown as DeliveryDecision;
+    const approval: DeliveryApproval = {
+      id: "a2",
+      task_id: "t2",
+      rung: "commit",
+      title: "AGOS-502: Other",
+      body: "",
+      status: "pending",
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: null,
+      executed_at_ms: null,
+      outcome: null,
+    };
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task(), task({ id: "t2", key: "AGOS-502", title: "Other" })],
+        jobs: [],
+        decisions: [decision],
+        approvals: [approval],
+        phases: {
+          t1: phase({ kind: "decisions", count: 1 }),
+          t2: phase({ kind: "approval", rung: "commit", stage: null }),
+        },
+        runs: [
+          {
+            id: "r1",
+            repo: REPO,
+            title: "Lote A",
+            status: "active",
+            generation: 1,
+            owner: "claude-coord-1",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        ],
+        coordinators: [
+          { run_id: "r1", waiting: false, unread: 2, unread_since_ms: Date.now() - 600_000 },
+        ],
+      }),
+    );
+    renderPanel();
+    const needs = await screen.findByRole("button", {
+      name: "2 tareas y 1 coordinador te necesitan",
+    });
+
+    // A list of them, by keyboard: the first row has the focus, arrows move, Escape closes.
+    await user.click(needs);
+    const rows = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "AGOS-5011 decisión pendiente",
+      "AGOS-502Aprobar commit",
+      "Lote ACoordinador parado · 2 cambios sin leer",
+    ]);
+    expect(rows[0]).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(rows[1]).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    // An approval: its task, the step opened and its card focused.
+    await user.click(needs);
+    await user.keyboard("{ArrowDown}{Enter}");
+    const step = await screen.findByRole("group", { name: "Aprobación commit" });
+    expect(screen.getByRole("article", { name: "Tarea AGOS-502" })).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toContainElement(step));
+
+    // Decisions: they open on top, with the focus.
+    await user.click(needs);
+    await user.click(screen.getByRole("menuitem", { name: /AGOS-501/ }));
+    const decisions = await screen.findByRole("dialog", { name: "Responder decisiones" });
+    expect(screen.getByRole("article", { name: "Tarea AGOS-501" })).toBeInTheDocument();
+    await waitFor(() => expect(decisions).toContainElement(document.activeElement as HTMLElement));
+
+    // A stopped coordinator: its chip.
+    await user.click(needs);
+    await user.click(screen.getByRole("menuitem", { name: /Coordinador parado/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Coordinador parado, 2 cambios sin leer" }),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("counts guide rules proposed, marks the guides and opens them on the proposal", async () => {
+    const user = userEvent.setup();
+    const empty = await client.getDeliveryGuide();
+    client.getDeliveryGuide.mockResolvedValue({
+      ...empty,
+      proposal: {
+        rules: [],
+        through: 0,
+        note: "",
+        requested_by: "claude-coord-1",
+        requested_at_ms: 5,
+      },
+    } as never);
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        runs: [
+          {
+            id: "r1",
+            repo: REPO,
+            title: "Lote A",
+            status: "active",
+            generation: 1,
+            owner: "claude-coord-1",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        ],
+      }),
+    );
+    try {
+      renderPanel();
+      // Alone, the button goes straight there.
+      const needs = await screen.findByRole("button", {
+        name: "1 propuesta de reglas te necesita",
+      });
+      expect(
+        within(await screen.findByRole("button", { name: /^Guías/ })).getByLabelText(
+          "reglas propuestas",
+        ),
+      ).toBeInTheDocument();
+      await user.click(needs);
+      expect(screen.queryByRole("menu")).toBeNull();
+      const proposal = await screen.findByRole("group", { name: "Reglas propuestas" });
+      await waitFor(() => expect(proposal).toHaveFocus());
+    } finally {
+      client.getDeliveryGuide.mockResolvedValue(empty);
+    }
+  });
+
   it("shows one batch inline and several behind a single button", async () => {
     const user = userEvent.setup();
     const batch = (id: string, title: string) => ({

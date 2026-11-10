@@ -82,6 +82,16 @@ describe("Delivery notifications", () => {
     ]);
   });
 
+  it("names a repo whose guide rules wait, once per proposal", () => {
+    expect(deliveryNeeds(overview([]), 0, [{ repo: "C:\\work\\agentos", at: 5 }])).toEqual([
+      {
+        keys: ["C:\\work\\agentos:guide:5"],
+        title: "Tinto: agentos",
+        body: "Reglas propuestas de las guías por aprobar",
+      },
+    ]);
+  });
+
   it("says when a batch's coordinator stopped waiting with changes it has not read", () => {
     const now = 10 * 60_000;
     const run = {
