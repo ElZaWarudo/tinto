@@ -18,7 +18,7 @@ use crate::wsl_agent::{
 
 use super::{
     checkpoint::{
-        create_checkpoint, create_ephemeral_checkpoint, load_session_checkpoint,
+        create_ephemeral_checkpoint, create_turn_checkpoint, load_session_checkpoint,
         remove_ephemeral_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
         CheckpointConfig, CheckpointRecord,
     },
@@ -1325,9 +1325,13 @@ impl AgentSessionRecord {
     ) -> Result<CheckpointRecord, AgentConsoleError> {
         let checkpoint_id = format!("{}-turn-{index}-after", self.id);
         match self.checkpoint_backend {
-            CheckpointBackend::Local => {
-                create_checkpoint(&self.repo, &checkpoint_id, now_ms, &self.checkpoint_config)
-            }
+            CheckpointBackend::Local => create_turn_checkpoint(
+                &self.repo,
+                &self.id,
+                &checkpoint_id,
+                now_ms,
+                &self.checkpoint_config,
+            ),
             CheckpointBackend::Wsl => create_wsl_checkpoint(
                 self.wsl_distro.as_deref(),
                 &self.repo,
@@ -2109,6 +2113,7 @@ fn plan_mode_input(plan_mode: Option<&AgentSessionPlanMode>, input: &[u8]) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_console::checkpoint::create_checkpoint;
     use crate::bus::contract::{
         AgentSessionCheckpoint, AgentSessionCheckpointType, AgentSessionTimelineKind,
         AgentSubagentActivity, AgentSubagentCapabilities, AgentSubagentThread,
