@@ -58,16 +58,17 @@ pub(crate) fn safe_join(repo: &Path, rel: &Path) -> Result<PathBuf, CommandError
     // Normaliza separadores y normaliza `..` relativos sin tocar el FS.
     let joined = repo_canon.join(rel);
 
-    // Si `joined` no existe todavía (destino de copia), canonicalize falla.
-    // Fallamos a join canonical del parent si existe, o a `joined` literal.
-    let canon = joined.canonicalize().unwrap_or_else(|_| {
-        // Canonicaliza parent y re-une el componente final.
-        let parent = joined.parent().unwrap_or(&joined);
-        match parent.canonicalize() {
-            Ok(parent_canon) => parent_canon.join(joined.file_name().unwrap_or_default()),
-            Err(_) => joined.clone(),
-        }
-    });
+    // Se canonicaliza el padre y se re-une el último componente sin
+    // resolverlo: un symlink se opera como link (borrar o mover el link, no
+    // su destino) y un link que apunta fuera del repo no es un escape. El
+    // padre puede no existir aún (destino de copia): `joined` literal.
+    let canon = match (joined.parent(), joined.file_name()) {
+        (Some(parent), Some(name)) => parent
+            .canonicalize()
+            .map(|parent_canon| parent_canon.join(name))
+            .unwrap_or_else(|_| joined.clone()),
+        _ => joined.canonicalize().unwrap_or_else(|_| joined.clone()),
+    };
 
     if !canon.starts_with(&repo_canon) {
         return Err(CommandError::new(

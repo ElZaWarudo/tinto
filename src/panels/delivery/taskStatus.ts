@@ -563,13 +563,11 @@ export function pendingDecisions(overview: DeliveryOverview, taskId: string): nu
   ).length;
 }
 
-/** The task's QA problems that wait on the user: new ones, and fixes that
- *  did not hold. */
+/** The task's QA problems that wait on the user: the new ones. One that
+ *  still fails has nothing for the user: QA reports it again as a new one. */
 export function qaProblemsToDecide(overview: DeliveryOverview, taskId: string): number {
   return (overview.qa_problems ?? []).filter(
-    (problem) =>
-      problem.task_id === taskId &&
-      (problem.status === "open" || problem.status === "still_failing"),
+    (problem) => problem.task_id === taskId && problem.status === "open",
   ).length;
 }
 
@@ -947,7 +945,6 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
         stepsOf(overview, task.id),
       );
       const then = next ? ` · siguiente: ${lower(next.label)}` : "";
-      if (pr.state === "merged") return idle(`PR fusionado${then}`);
       // Tinto says what the PR waits on and who acts; this only words it,
       // and only what waits on the user asks for them.
       const wait = phase.wait;
@@ -1012,8 +1009,14 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
     }
     case "next_stage":
       return idle(`Siguiente: ${lower(stageLabel(phase.role))}`);
-    case "next_step":
-      return idle(`Siguiente: ${lower(phaseStep(phase.rung, phase.stage).label)}`);
+    case "next_step": {
+      const label = lower(phaseStep(phase.rung, phase.stage).label);
+      // Merged is not finished while a step of the ladder is left.
+      const merged = (overview.prs ?? []).some(
+        (pr) => pr.task_id === task.id && pr.state === "merged",
+      );
+      return idle(merged ? `PR fusionado · falta ${label}` : `Siguiente: ${label}`);
+    }
   }
 }
 
@@ -1059,6 +1062,20 @@ export function waitsOnLabel(overview: DeliveryOverview, taskId: string): string
     default:
       return null;
   }
+}
+
+/** "te espera", "espera al coordinador" (`a` + `el` contract); `null` when
+ *  the row's `label` already says it. */
+export function waitsOnPhrase(who: string, label = ""): string | null {
+  const phrase =
+    who === "ti"
+      ? "te espera"
+      : who === "su turno"
+        ? "espera su turno"
+        : who.startsWith("el ")
+          ? `espera al ${who.slice(3)}`
+          : `espera a ${who}`;
+  return label.includes(phrase) ? null : phrase;
 }
 
 /** One line for the state of a followed PR, from most to least urgent. */

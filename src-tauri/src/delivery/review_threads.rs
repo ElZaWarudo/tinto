@@ -1,8 +1,9 @@
 //! The review threads of a task's PR and whether each has a reply. Every
 //! thread a reviewer opens must have one from the PR's author before the PR
 //! goes back to review: a short interim reply is enough while its fix takes
-//! more rounds. Tinto only follows and blocks; replies still go through
-//! pr_reply.
+//! more rounds. They never hold a push: the fix goes out before the reply
+//! that describes it (`published.rs`). Tinto only follows and blocks;
+//! replies still go through pr_reply.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,7 +46,7 @@ pub struct ReviewThread {
 
 impl ReviewThread {
     /// "https://…#discussion_r1 (ana en src/a.rs:12)".
-    fn label(&self) -> String {
+    pub fn label(&self) -> String {
         let at = match self.line {
             Some(line) => format!("{}:{line}", self.path),
             None => self.path.clone(),
@@ -189,7 +190,7 @@ impl DeliveryPr {
         Some(DeliveryError::new(
             "threads_unanswered",
             format!(
-                "{what}, y {} hilo(s) de revisión siguen sin respuesta: {}. Responde cada uno con pr_reply antes (sin resolve_thread mientras su arreglo no esté publicado)",
+                "{what}, y {} hilo(s) de revisión siguen sin respuesta: {}. Responde cada uno con pr_reply antes (con interim mientras su corrección no esté publicada)",
                 open.len(),
                 open.join("; ")
             ),

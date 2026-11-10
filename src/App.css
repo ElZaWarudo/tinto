@@ -751,6 +751,10 @@ select option:checked {
   position: relative;
 }
 
+.app-shell__dock {
+  height: 100%;
+}
+
 .panel-placeholder {
   padding: 16px;
   color: var(--fg-muted);
@@ -3432,6 +3436,10 @@ select option:checked {
   display: grid;
   min-width: 0;
   gap: 2px;
+}
+.dashboard-filter--repo {
+  grid-column: 1 / -1;
+  justify-items: start;
 }
 .dashboard-filter > span {
   color: var(--fg-muted);

@@ -1,10 +1,11 @@
 // A system notification when a Delivery task starts needing the user: a
-// decision, an approval, a failed stage or a quarantined resource. It works
-// with the Delivery view closed and follows the same switch as Tinto's other
-// notifications.
+// decision, an approval, a failed stage or a quarantined resource; also a
+// stopped coordinator and guide rules to approve. It works with the Delivery
+// view closed and follows the same switch as Tinto's other notifications.
 
 import { useEffect, useRef } from "react";
-import { getDeliveryOverview, onDeliveryChanged } from "../../delivery/client";
+import { busStore } from "../../bus/store";
+import { getDeliveryGuide, getDeliveryOverview, onDeliveryChanged } from "../../delivery/client";
 import type { DeliveryOverview, DeliveryRun } from "../../delivery/types";
 import { tauriNotificationAdapter, type NotificationAdapter } from "../../qol/notifications";
 import { useQualityState } from "../../qol/state";
@@ -38,35 +39,65 @@ export function coordinatorStalls(overview: DeliveryOverview, now: number): Coor
   });
 }
 
-/** The tasks that need the user, each with what it needs, and the batches
- *  whose coordinator stopped. */
-export function deliveryNeeds(overview: DeliveryOverview, now: number): DeliveryNeed[] {
+/** A repo whose guide rules a coordinator proposed and the user has not decided. */
+export interface GuideProposalWait {
+  repo: string;
+  /** When it was proposed: a new proposal replaces the one waiting. */
+  at: number;
+}
+
+/** The repos of the batches with guide rules waiting for the user: only a
+ *  batch's coordinator proposes them. A repo whose guide cannot be read is left out. */
+export async function guideProposals(overview: DeliveryOverview): Promise<GuideProposalWait[]> {
+  const repos = [...new Set(overview.runs.map((run) => run.repo))];
+  const found = await Promise.all(
+    repos.map((repo) =>
+      getDeliveryGuide(repo).then(
+        (guide) => (guide.proposal ? [{ repo, at: guide.proposal.requested_at_ms }] : []),
+        () => [],
+      ),
+    ),
+  );
+  return found.flat();
+}
+
+/** The tasks that need the user, each with what it needs, the batches whose
+ *  coordinator stopped and the repos with guide rules to decide. */
+export function deliveryNeeds(
+  overview: DeliveryOverview,
+  now: number,
+  guides: GuideProposalWait[] = [],
+): DeliveryNeed[] {
   const stalls = coordinatorStalls(overview, now).map(({ run, unread, since }) => ({
     keys: [`${run.id}:coordinator:${since}`],
     title: `Tinto: ${run.title || run.id}`,
     body: `El coordinador no está esperando y tiene ${unread === 1 ? "1 cambio" : `${unread} cambios`} sin leer`,
   }));
-  return [...stalls, ...taskNeeds(overview, now)];
+  const rules = guides.map(({ repo, at }) => ({
+    keys: [`${repo}:guide:${at}`],
+    title: `Tinto: ${busStore.displayName(repo)}`,
+    body: "Reglas propuestas de las guías por aprobar",
+  }));
+  return [...stalls, ...taskNeeds(overview, now), ...rules];
 }
 
 function taskNeeds(overview: DeliveryOverview, now: number): DeliveryNeed[] {
   return overview.tasks.flatMap((task) => {
     const status = taskStatus(task, overview, now);
     if (status.group !== "attention") return [];
-    // The label counts pending decisions, so it changes as they are answered;
-    // their ids do not.
+    // The label counts pending decisions and QA problems, so it changes as
+    // the user settles them; their ids do not.
     const decisions = (overview.decisions ?? [])
       .filter((decision) => decision.task_id === task.id && decision.status === "pending")
       .map((decision) => decision.id);
     const approvals = overview.approvals
       .filter((approval) => approval.task_id === task.id && approval.status === "pending")
       .map((approval) => `${approval.id}:${approval.status}`);
-    const keys =
-      decisions.length > 0
-        ? decisions
-        : approvals.length > 0
-          ? approvals
-          : [`${task.id}:${status.label}`];
+    const problems = (overview.qa_problems ?? [])
+      .filter((problem) => problem.task_id === task.id && problem.status === "open")
+      .map((problem) => problem.id);
+    const ids = [...(decisions.length > 0 ? decisions : approvals), ...problems];
+    const keys = ids.length > 0 ? ids : [`${task.id}:${status.label}`];
     return [{ keys, title: `Tinto: ${taskLabel(task)}`, body: status.label }];
   });
 }
@@ -86,9 +117,10 @@ export function DeliveryNotificationWatcher({
     let pending: ReturnType<typeof setTimeout> | null = null;
     const check = () =>
       getDeliveryOverview().then(
-        (overview) => {
+        async (overview) => {
+          const guides = await guideProposals(overview);
           if (!active) return;
-          for (const need of deliveryNeeds(overview, Date.now())) {
+          for (const need of deliveryNeeds(overview, Date.now(), guides)) {
             const fresh = need.keys.some((key) => !seen.current.has(key));
             for (const key of need.keys) seen.current.add(key);
             if (!fresh) continue;

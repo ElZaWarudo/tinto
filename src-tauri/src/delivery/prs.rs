@@ -40,6 +40,35 @@ const PR_READ_EVERY: Duration = Duration::from_secs(2 * 60);
 /// How a PR step's notice starts when its reviewers could not be asked.
 const REVIEW_NOT_ASKED: &str = "No se pudo pedir la revisión a";
 
+/// How many independent GitHub writes of a batch go at once: more trips
+/// GitHub's secondary rate limit, which wants one user's writes few at a time.
+const GITHUB_AT_ONCE: usize = 4;
+
+/// Runs `work` on every item, up to [`GITHUB_AT_ONCE`] at a time, and
+/// returns what each gave, in the items' order.
+pub(super) fn at_once<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let work = &work;
+    items
+        .chunks(GITHUB_AT_ONCE)
+        .flat_map(|chunk| {
+            std::thread::scope(|scope| {
+                let running: Vec<_> = chunk
+                    .iter()
+                    .map(|item| scope.spawn(move || work(item)))
+                    .collect();
+                running
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect()
+}
+
 /// `owner/name` of the task's `origin`, when it is on GitHub.
 pub(super) fn task_github_repo(task: &DeliveryTask) -> Option<String> {
     let place = Place::of(task.distro.as_deref());
@@ -291,6 +320,13 @@ pub struct DeliveryPr {
     /// has waited: what blocks sending it back to review.
     #[serde(default)]
     pub unanswered_threads: Vec<super::review_threads::ReviewThread>,
+    /// Reviewers the user asked to review again, held until GitHub's PR
+    /// head has the fixes, their replies are posted and its CI passed.
+    #[serde(default)]
+    pub review_again: Vec<String>,
+    /// Why `review_again` still waits, as last checked.
+    #[serde(default)]
+    pub review_again_blocker: Option<String>,
 }
 
 impl DeliveryPr {
@@ -332,6 +368,8 @@ impl DeliveryPr {
             review_states: Vec::new(),
             review_threads: Vec::new(),
             unanswered_threads: Vec::new(),
+            review_again: Vec::new(),
+            review_again_blocker: None,
         }
     }
 
@@ -717,7 +755,7 @@ fn check_state(check: &Value) -> &'static str {
 /// The checks on the head of a `gh pr view --json` answer. With the base's
 /// required checks (`requiredChecks`, which `GhCli::pr` adds), only they
 /// count, and one with no run on the head never started.
-fn head_checks(snapshot: &Value) -> PrChecks {
+pub(super) fn head_checks(snapshot: &Value) -> PrChecks {
     let required: Vec<String> = snapshot["requiredChecks"]
         .as_array()
         .into_iter()
@@ -1106,7 +1144,8 @@ pub trait GitHub: Send + Sync {
     }
     /// Merges the PR and, with `delete_branch`, deletes its branch on
     /// GitHub. `subject` and `body` are the merge commit's message
-    /// (`rebase` has none).
+    /// (`rebase` has none). With `head`, GitHub merges only while the PR
+    /// is still at that commit, the one Tinto checked.
     fn merge(
         &self,
         url: &str,
@@ -1114,6 +1153,7 @@ pub trait GitHub: Send + Sync {
         subject: &str,
         body: &str,
         delete_branch: bool,
+        head: Option<&str>,
     ) -> Result<(), DeliveryError>;
     /// Opens a PR from `head` into `base` (`None`: the repo's default
     /// branch) in `repo` (`owner/name`) and returns its URL.
@@ -1329,6 +1369,7 @@ impl GitHub for Offline {
         _subject: &str,
         _body: &str,
         _delete_branch: bool,
+        _head: Option<&str>,
     ) -> Result<(), DeliveryError> {
         self.pr("").map(|_| ())
     }
@@ -1625,6 +1666,31 @@ impl GhCli {
     }
 }
 
+/// `gh pr merge`'s arguments; `flag` is the method's (`--squash`).
+fn merge_args<'a>(
+    url: &'a str,
+    flag: &'a str,
+    subject: &'a str,
+    body: &'a str,
+    delete_branch: bool,
+    head: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut args = vec!["pr", "merge", url, flag];
+    if delete_branch {
+        args.push("--delete-branch");
+    }
+    if let Some(head) = head.filter(|head| !head.is_empty()) {
+        args.extend(["--match-head-commit", head]);
+    }
+    if flag != "--rebase" {
+        if !subject.trim().is_empty() {
+            args.extend(["--subject", subject]);
+        }
+        args.extend(["--body", body]);
+    }
+    args
+}
+
 impl GitHub for GhCli {
     fn pr(&self, url: &str) -> Result<Value, DeliveryError> {
         let mut snapshot = Self::json(&["pr", "view", url, "--json", PR_FIELDS])?;
@@ -1807,18 +1873,10 @@ impl GitHub for GhCli {
         subject: &str,
         body: &str,
         delete_branch: bool,
+        head: Option<&str>,
     ) -> Result<(), DeliveryError> {
         let flag = format!("--{method}");
-        let mut args = vec!["pr", "merge", url, flag.as_str()];
-        if delete_branch {
-            args.push("--delete-branch");
-        }
-        if method != "rebase" {
-            if !subject.trim().is_empty() {
-                args.extend(["--subject", subject]);
-            }
-            args.extend(["--body", body]);
-        }
+        let args = merge_args(url, &flag, subject, body, delete_branch, head);
         let output = Self::run(&args)?;
         if output.status.success() {
             return Ok(());
@@ -2382,6 +2440,7 @@ impl DeliveryService {
         let read = github
             .pr(&pr.url)
             .and_then(|snapshot| Ok((snapshot, self.github_login(&*github)?)));
+        let live = read.as_ref().ok().map(|(snapshot, _)| snapshot.clone());
         // GitHub's answer goes onto the PR as it is now: while it was asked,
         // the user may have seen its news (a stage started on the task).
         let (before, pr) = {
@@ -2438,6 +2497,12 @@ impl DeliveryService {
         let done = |pr: &DeliveryPr| pr.state == "merged" || pr.state == "closed";
         if done(&pr) && !done(&before) && before.checked_at_ms.is_some() {
             self.drop_evidence(&self.task(task_id)?);
+        }
+        // What waited for this revision on GitHub goes out now, in order:
+        // the replies, then the review asked again.
+        if let Some(live) = live.filter(|_| pr.is_open()) {
+            self.publish_held(task_id, &live)?;
+            return self.task_pr(task_id);
         }
         Ok(Some(pr))
     }
@@ -2634,15 +2699,30 @@ impl DeliveryService {
             Err(_) => {}
         }
         let now = now_ms();
+        // Replies approved and waiting for their fix on GitHub.
+        let held: Vec<String> = self
+            .store()
+            .and_then(|store| store.approvals())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|approval| {
+                approval.rung == DeliveryRung::PrReply
+                    && approval.status == DeliveryApprovalStatus::Approved
+            })
+            .map(|approval| approval.task_id)
+            .collect();
         for pr in open {
             let key = format!("{}#{}", pr.repo, pr.number);
             // What can change any moment is read on every pass: CI running,
-            // red (it may be running again), not run yet, conflicts.
+            // red (it may be running again), not run yet, conflicts, and
+            // what waits for the PR's head to have its fix.
             let hot = pr.state == "unknown"
                 || pr.checks.pending > 0
                 || pr.checks.failing > 0
                 || pr.ci == Some(CiState::NotRun)
-                || pr.conflicts;
+                || pr.conflicts
+                || !pr.review_again.is_empty()
+                || held.contains(&pr.task_id);
             let stale = pr
                 .checked_at_ms
                 .is_none_or(|at| now.saturating_sub(at) >= PR_READ_EVERY.as_millis() as u64);
@@ -2868,8 +2948,10 @@ impl DeliveryService {
     }
 
     /// Changes who reviews the task's open PR: `request` are asked for a
-    /// review (again, when they already gave one), `remove` lose their
-    /// pending request. Returns the PR as GitHub has it afterwards.
+    /// review, `remove` lose their pending request. One who already
+    /// reviewed is asked again only once GitHub has what answers them (see
+    /// [`Self::request_held_reviews`]): until then the request is held on
+    /// the PR. Returns the PR as GitHub has it afterwards.
     pub fn change_pr_reviewers(
         &self,
         task_id: &str,
@@ -2891,9 +2973,16 @@ impl DeliveryService {
                 .collect()
         };
         let (request, remove) = (clean(request), clean(remove));
-        if !request.is_empty() {
-            self.check_threads_answered(task_id, "volver a pedir la revisión")?;
-        }
+        // Someone who reviewed: a verdict or comments Tinto followed, or a
+        // review thread of theirs.
+        let reviewed = |login: &String| {
+            let same = |other: &str| other.eq_ignore_ascii_case(login);
+            pr.review_states.iter().any(|state| {
+                same(&state.login) && state.state != super::reviews::ReviewState::Asked
+            }) || pr.changes_requested_by.iter().any(|other| same(other))
+                || pr.review_threads.iter().any(|thread| same(&thread.author))
+        };
+        let (again, request): (Vec<String>, Vec<String>) = request.into_iter().partition(reviewed);
         let github = self.github();
         if !remove.is_empty() {
             github.remove_reviewers(&pr.url, &remove)?;
@@ -2910,10 +2999,21 @@ impl DeliveryService {
                 stored.reviewers.retain(|login| !gone(login));
                 stored.asked_on_github.retain(|login| !gone(login));
                 stored.removed_in_tinto.extend(remove.iter().cloned());
+                stored.review_again.retain(|login| !gone(login));
                 stored.add_reviewers(&request);
+                for login in again {
+                    if !stored
+                        .review_again
+                        .iter()
+                        .any(|held| held.eq_ignore_ascii_case(&login))
+                    {
+                        stored.review_again.push(login);
+                    }
+                }
                 store.put_pr(&stored)?;
             }
         }
+        // Reading it asks those held, when GitHub has what answers them.
         self.refresh_pr(task_id, Duration::ZERO)
     }
 
@@ -2940,10 +3040,12 @@ impl DeliveryService {
     }
 
     /// Approves the task's replies with the user's texts and returns once
-    /// they are saved; a background thread then posts them one after
-    /// another, as GitHub wants one user's writes, and asks `rerequest` to
-    /// review again after the last. Each reply shows as posted or failed when
-    /// its turn ends; one Tinto closes before posting stays pending.
+    /// they are saved; a background thread then posts them, a few at a time
+    /// (see [`at_once`]), and asks `rerequest` to review again after the
+    /// last. Each reply shows as posted or failed on its own; one Tinto
+    /// closes before posting stays pending. A reply whose fix GitHub does
+    /// not have yet, and the review asked again, wait for it (see
+    /// `published.rs`).
     pub fn approve_replies(
         &self,
         replies: Vec<ApprovedReply>,
@@ -2957,14 +3059,11 @@ impl DeliveryService {
         }
         let service = self.clone();
         std::thread::spawn(move || {
-            for reply in replies {
+            at_once(&replies, |reply| {
                 if let Err(error) = service.decide_approval(&reply.approval_id, true, None) {
-                    eprintln!(
-                        "tinto: no se pudo responder {}: {}",
-                        reply.approval_id, error.message
-                    );
+                    service.note_unposted(&reply.approval_id, &error);
                 }
-            }
+            });
             if let Some(task_id) = task_id.filter(|_| !rerequest.is_empty()) {
                 if let Err(error) = service.change_pr_reviewers(&task_id, rerequest, Vec::new()) {
                     eprintln!(
@@ -2975,6 +3074,24 @@ impl DeliveryService {
             }
         });
         Ok(())
+    }
+
+    /// A reply of a batch that could not even be approved stays pending and
+    /// says why, so the others going out does not hide it.
+    fn note_unposted(&self, approval_id: &str, error: &DeliveryError) {
+        let noted = self.approval(approval_id).and_then(|mut approval| {
+            if approval.status != DeliveryApprovalStatus::Pending {
+                return Ok(());
+            }
+            approval.notice = Some(format!("No se publicó: {}", error.message));
+            self.save_approval(&approval, "pr_reply_failed")
+        });
+        if let Err(noting) = noted {
+            eprintln!(
+                "tinto: no se pudo responder {approval_id}: {} ({})",
+                error.message, noting.message
+            );
+        }
     }
 
     /// The reply as the user edited it before approving: the text posted.
@@ -3144,47 +3261,6 @@ impl DeliveryService {
                 subject: subject.to_string(),
             })
             .collect()
-    }
-
-    /// A review thread is resolved once its fix is on GitHub: no commit of
-    /// the branch that changes the commented file is missing from
-    /// `origin/<branch>`, and the file has nothing uncommitted. Without a
-    /// path, the whole branch is checked.
-    pub(super) fn check_fix_pushed(
-        &self,
-        task: &DeliveryTask,
-        path: &str,
-    ) -> Result<(), DeliveryError> {
-        let place = Place::of(task.distro.as_deref());
-        let remote = format!("origin/{}", task.branch);
-        let unpushed = |why: String| {
-            DeliveryError::new(
-                "fix_unpushed",
-                format!("{why}: resolve_thread espera a que el arreglo esté publicado; pide el push y vuelve a pedir la respuesta, o pídela sin resolve_thread"),
-            )
-        };
-        let git = |args: &[&str]| tasks::git(place, &task.worktree, args);
-        if git(&["rev-parse", "--verify", "--quiet", &remote]).is_err() {
-            return Err(unpushed(format!(
-                "la rama {} no está publicada",
-                task.branch
-            )));
-        }
-        let range = format!("{remote}..HEAD");
-        let (only, what) = match path {
-            "" => (Vec::new(), "la rama"),
-            path => (vec!["--", path], path),
-        };
-        let commits = git(&[&["log", "--format=%h", &range][..], &only].concat())?;
-        if let Some(commit) = commits.lines().next() {
-            return Err(unpushed(format!(
-                "el commit {commit}, que cambia {what}, no está en {remote}"
-            )));
-        }
-        if !git(&[&["status", "--porcelain"][..], &only].concat())?.is_empty() {
-            return Err(unpushed(format!("{what} tiene cambios sin commit")));
-        }
-        Ok(())
     }
 
     /// Asks the PR step's reviewers on GitHub once its PR is linked, once.
@@ -3431,6 +3507,39 @@ fn pr_changed(before: &DeliveryPr, after: &DeliveryPr) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_merge_is_pinned_to_the_head_tinto_checked() {
+        let url = "https://github.com/o/r/pull/1";
+        let args = merge_args(url, "--squash", "feat: x", "", true, Some("abc123"));
+        let at = args
+            .iter()
+            .position(|arg| *arg == "--match-head-commit")
+            .expect("pinned");
+        assert_eq!(args[at + 1], "abc123");
+        assert!(!merge_args(url, "--squash", "", "", true, None).contains(&"--match-head-commit"));
+    }
+
+    #[test]
+    fn a_batch_runs_a_few_at_a_time_and_keeps_its_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (running, most) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let items: Vec<usize> = (0..10).collect();
+        let doubled = at_once(&items, |item| {
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(now, Ordering::SeqCst);
+            // Each waits until a full set runs at once, or gives up: run one
+            // after another, the most at once stays 1.
+            let until = Instant::now() + Duration::from_secs(5);
+            while most.load(Ordering::SeqCst) < GITHUB_AT_ONCE && Instant::now() < until {
+                std::thread::yield_now();
+            }
+            running.fetch_sub(1, Ordering::SeqCst);
+            item * 2
+        });
+        assert_eq!(doubled, (0..10).map(|item| item * 2).collect::<Vec<_>>());
+        assert_eq!(most.load(Ordering::SeqCst), GITHUB_AT_ONCE);
+    }
 
     #[test]
     fn a_command_past_its_time_is_stopped() {

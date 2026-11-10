@@ -691,6 +691,49 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("line 599")).toBeInTheDocument();
   });
 
+  it("opens the log of a stage launched while the task is open", async () => {
+    let changed = () => {};
+    client.onDeliveryChanged.mockImplementation((...args: unknown[]) => {
+      changed = args[0] as () => void;
+      return Promise.resolve(() => {});
+    });
+    client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [job()] }));
+    renderPanel();
+    const tests = await screen.findByRole("button", { name: /^Tests\s*· intento 1/ });
+    await waitFor(() => expect(tests).toHaveAttribute("aria-expanded", "true"));
+    const review = job({ id: "j2", role: "review", status: "started", result: null });
+    client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [job(), review] }));
+    act(() => changed());
+    const started = await screen.findByRole(
+      "button",
+      { name: /^Revisión\s*· intento 1/ },
+      { timeout: 3000 },
+    );
+    expect(started).toHaveAttribute("aria-expanded", "true");
+    expect(tests).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("says what could not be read, until a later read works", async () => {
+    let changed = () => {};
+    client.onDeliveryChanged.mockImplementation((...args: unknown[]) => {
+      changed = args[0] as () => void;
+      return Promise.resolve(() => {});
+    });
+    client.getDeliveryOverview.mockRejectedValueOnce({ message: "store ocupado" });
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.checkDeliveryTask.mockRejectedValue({ message: "gh no responde" });
+    renderPanel();
+    expect(await screen.findByText("store ocupado")).toBeInTheDocument();
+    act(() => changed());
+    await waitFor(() => expect(screen.queryByText("store ocupado")).toBeNull(), {
+      timeout: 3000,
+    });
+    // Checking the open task against GitHub failed: it says so.
+    expect(
+      await screen.findByText("No se pudo comprobar la tarea en GitHub: gh no responde"),
+    ).toBeInTheDocument();
+  });
+
   it("resumes a paused stage and pauses the batch", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(
@@ -1348,7 +1391,7 @@ describe("DeliveryPanel", () => {
     );
     client.decideDeliveryApproval.mockResolvedValue({ ...approval, status: "executed" });
     renderPanel();
-    const group = await openStep("Revisar commit", "commit");
+    let group = await openStep("Revisar commit", "commit");
     expect(within(group).getByRole("textbox", { name: "Cuerpo" })).toHaveValue(
       "Parser now rejects empty input.",
     );
@@ -1361,6 +1404,14 @@ describe("DeliveryPanel", () => {
     const title = within(group).getByRole("textbox", { name: "Título" });
     await user.clear(title);
     await user.type(title, "AGOS-501: Reject empty input");
+    // Hidden and opened again, the step keeps the edited text.
+    await user.click(screen.getByRole("button", { name: "Revisar commit" }));
+    expect(screen.queryByRole("group", { name: "Aprobación commit" })).toBeNull();
+    await openStep("Revisar commit", "commit");
+    group = screen.getByRole("group", { name: "Aprobación commit" });
+    expect(within(group).getByRole("textbox", { name: "Título" })).toHaveValue(
+      "AGOS-501: Reject empty input",
+    );
     await user.click(within(group).getByRole("button", { name: "Aprobar y hacer commit" }));
     await waitFor(() =>
       expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
@@ -1872,6 +1923,158 @@ describe("DeliveryPanel", () => {
     expect(JSON.parse(localStorage.getItem("tinto:delivery-hidden-stalls") ?? "[]")).toEqual([
       `r1:${since}`,
     ]);
+  });
+
+  it("lists everything that waits on the user and goes to the exact thing asked", async () => {
+    const user = userEvent.setup();
+    localStorage.removeItem("tinto:delivery-hidden-stalls");
+    const decision = {
+      id: "d1",
+      task_id: "t1",
+      kind: "text",
+      question: "¿Texto del aviso?",
+      detail: "",
+      options: [],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    } as unknown as DeliveryDecision;
+    const approval: DeliveryApproval = {
+      id: "a2",
+      task_id: "t2",
+      rung: "commit",
+      title: "AGOS-502: Other",
+      body: "",
+      status: "pending",
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: null,
+      executed_at_ms: null,
+      outcome: null,
+    };
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task(), task({ id: "t2", key: "AGOS-502", title: "Other" })],
+        jobs: [],
+        decisions: [decision],
+        approvals: [approval],
+        phases: {
+          t1: phase({ kind: "decisions", count: 1 }),
+          t2: phase({ kind: "approval", rung: "commit", stage: null }),
+        },
+        runs: [
+          {
+            id: "r1",
+            repo: REPO,
+            title: "Lote A",
+            status: "active",
+            generation: 1,
+            owner: "claude-coord-1",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        ],
+        coordinators: [
+          { run_id: "r1", waiting: false, unread: 2, unread_since_ms: Date.now() - 600_000 },
+        ],
+      }),
+    );
+    renderPanel();
+    const needs = await screen.findByRole("button", {
+      name: "2 tareas y 1 coordinador te necesitan",
+    });
+
+    // A list of them, by keyboard: the first row has the focus, arrows move, Escape closes.
+    await user.click(needs);
+    const rows = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "AGOS-5011 decisión pendiente",
+      "AGOS-502Aprobar commit",
+      "Lote ACoordinador parado · 2 cambios sin leer",
+    ]);
+    expect(rows[0]).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(rows[1]).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    // An approval: its task, the step opened and its card focused.
+    await user.click(needs);
+    await user.keyboard("{ArrowDown}{Enter}");
+    const step = await screen.findByRole("group", { name: "Aprobación commit" });
+    expect(screen.getByRole("article", { name: "Tarea AGOS-502" })).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toContainElement(step));
+
+    // Decisions: they open on top, with the focus.
+    await user.click(needs);
+    await user.click(screen.getByRole("menuitem", { name: /AGOS-501/ }));
+    const decisions = await screen.findByRole("dialog", { name: "Responder decisiones" });
+    expect(screen.getByRole("article", { name: "Tarea AGOS-501" })).toBeInTheDocument();
+    await waitFor(() => expect(decisions).toContainElement(document.activeElement as HTMLElement));
+
+    // A stopped coordinator: its chip.
+    await user.click(needs);
+    await user.click(screen.getByRole("menuitem", { name: /Coordinador parado/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Coordinador parado, 2 cambios sin leer" }),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("counts guide rules proposed, marks the guides and opens them on the proposal", async () => {
+    const user = userEvent.setup();
+    const empty = await client.getDeliveryGuide();
+    client.getDeliveryGuide.mockResolvedValue({
+      ...empty,
+      proposal: {
+        rules: [],
+        through: 0,
+        note: "",
+        requested_by: "claude-coord-1",
+        requested_at_ms: 5,
+      },
+    } as never);
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        runs: [
+          {
+            id: "r1",
+            repo: REPO,
+            title: "Lote A",
+            status: "active",
+            generation: 1,
+            owner: "claude-coord-1",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        ],
+      }),
+    );
+    try {
+      renderPanel();
+      // Alone, the button goes straight there.
+      const needs = await screen.findByRole("button", {
+        name: "1 propuesta de reglas te necesita",
+      });
+      expect(
+        within(await screen.findByRole("button", { name: /^Guías/ })).getByLabelText(
+          "reglas propuestas",
+        ),
+      ).toBeInTheDocument();
+      await user.click(needs);
+      expect(screen.queryByRole("menu")).toBeNull();
+      const proposal = await screen.findByRole("group", { name: "Reglas propuestas" });
+      await waitFor(() => expect(proposal).toHaveFocus());
+    } finally {
+      client.getDeliveryGuide.mockResolvedValue(empty);
+    }
   });
 
   it("shows one batch inline and several behind a single button", async () => {
@@ -2478,17 +2681,18 @@ describe("DeliveryPanel", () => {
       within(batches).getByRole("button", { name: "Tomar el control del lote Lote A" }),
     ).toBeInTheDocument();
 
-    // What applies to every repo is a dialog over the tasks.
+    // What applies to every repo opens as the settings page, on its Delivery tab.
     await user.click(screen.getByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    const settings = await screen.findByRole("region", { name: "Ajustes de Delivery" });
+    expect(screen.getByRole("tab", { name: "Delivery" })).toHaveAttribute("aria-selected", "true");
     expect(settings).not.toHaveTextContent("secret");
     await user.click(
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),
     );
     expect(await navigator.clipboard.readText()).toContain("Bearer secret");
     expect(within(settings).getByText("Copiado, con el token.")).toBeInTheDocument();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: "Ajustes de Delivery" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "← Volver" }));
+    expect(screen.queryByRole("region", { name: "Ajustes de Delivery" })).toBeNull();
 
     // New tasks go to the repo's most recent active batch by default.
     await user.click(screen.getByRole("button", { name: "Nueva tarea" }));
@@ -2667,7 +2871,7 @@ describe("DeliveryPanel", () => {
     expect(screen.getByRole("region", { name: "Guías de agentos" })).toBeInTheDocument();
     // What applies to all of Delivery and to Tinto itself, each in its tab.
     await user.click(screen.getByRole("tab", { name: "Delivery" }));
-    expect(screen.getByRole("combobox", { name: /Agentes en paralelo/ })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /Cuántos a la vez/ })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Ajustes de agentos" })).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Tinto" }));
     expect(screen.getByRole("combobox", { name: "Tema" })).toBeInTheDocument();
@@ -2720,6 +2924,52 @@ describe("DeliveryPanel", () => {
         }),
       ),
     );
+  });
+
+  it("saves the repo settings over what was saved elsewhere, and says when it failed", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    const opened = { worktree_root: null, bootstrap: null, default_base: null };
+    client.getDeliveryRepoSettings.mockResolvedValue(opened);
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Ajustes de agentos" }));
+    const settings = screen.getByRole("region", { name: "Ajustes de agentos" });
+    const save = await screen.findByRole("button", { name: "Guardar" });
+    await waitFor(() => expect(save).toBeEnabled());
+    // Guides and a stage's agent are saved by other paths while it is open.
+    const review = { agent: "codex" as const, model: null, reasoning: null };
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      ...opened,
+      guides: [{ login: "ana", kinds: ["technical"] }],
+      stages: { review },
+    });
+    await user.type(within(settings).getByRole("textbox", { name: /Entorno de QA/ }), "Windows");
+    // With a Jira host and no statuses, it says who moves the issue then.
+    await user.type(
+      within(settings).getByRole("textbox", { name: /^Host de Jira/ }),
+      "https://jira.example.com",
+    );
+    expect(within(settings).getByText(/^Vacío: al abrir el PR, Tinto no mueve/)).toBeVisible();
+    expect(within(settings).getByText(/^Vacío: al fusionar el PR, Tinto no mueve/)).toBeVisible();
+    client.setDeliveryRepoSettings.mockRejectedValueOnce({ message: "disco lleno" });
+    await user.click(save);
+    expect(await screen.findByText("disco lleno")).toHaveAttribute("role", "alert");
+    expect(screen.queryByText(/^Guardado para/)).toBeNull();
+
+    client.setDeliveryRepoSettings.mockImplementation((_repo, saved) => Promise.resolve(saved));
+    await user.click(save);
+    await waitFor(() =>
+      expect(client.setDeliveryRepoSettings).toHaveBeenLastCalledWith(
+        REPO,
+        expect.objectContaining({
+          qa_environment: "Windows",
+          jira: expect.objectContaining({ host: "https://jira.example.com", after_pr: [] }),
+          guides: [{ login: "ana", kinds: ["technical"] }],
+          stages: { review },
+        }),
+      ),
+    );
+    expect(await screen.findByText(/^Guardado para/)).toBeInTheDocument();
   });
 
   it("picks the model and reasoning from selectors, Sol 6.1 at medium by default", async () => {
@@ -3230,7 +3480,8 @@ describe("DeliveryPanel", () => {
         jobs: [job({ id: "qa-1", role: "qa", visual_record: "C:/jobs/qa-1/qa/AGOS-501.html" })],
         qa_problems: [
           problem("a", "open"),
-          problem("b", "still_failing"),
+          problem("b", "open"),
+          problem("e", "still_failing"),
           problem("c", "sent"),
           problem("d", "verified"),
         ],
@@ -3759,6 +4010,15 @@ describe("DeliveryPanel", () => {
             executed_at_ms: 2,
             outcome: "https://github.com/o/r/pull/299#discussion_r9003",
           }),
+          // Approved before its fix reached GitHub: it says what it waits for.
+          reply({
+            id: "r3",
+            title: "Respuesta a eva",
+            status: "approved",
+            comment_url: "https://github.com/o/r/pull/299#discussion_r2110",
+            notice:
+              "Respuesta aprobada · espera a que se publique la corrección: el PR en GitHub está en f5a41bb y la corrección en 4f54085",
+          }),
         ],
       }),
     );
@@ -3770,6 +4030,10 @@ describe("DeliveryPanel", () => {
     ]);
     renderPanel();
     expect(await screen.findByText("Aprobar 2 respuestas a los revisores")).toBeTruthy();
+    const held = screen.getByRole("list", { name: "Respuestas aprobadas sin publicar" });
+    expect(
+      within(held).getByText(/espera a que se publique la corrección: .* f5a41bb/),
+    ).toBeTruthy();
     const banner = await openStep("Revisar las respuestas a los revisores", "pr_reply");
     expect(within(banner).getByText("The leave dialog now says why. Tests cover it.")).toBeTruthy();
     const first = within(banner).getByRole("region", { name: "Respuesta a Sn4pe" });
@@ -4016,7 +4280,7 @@ describe("DeliveryPanel", () => {
     );
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    const settings = await screen.findByRole("region", { name: "Ajustes de Delivery" });
     expect(settings).not.toHaveTextContent("secret");
     await user.click(
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),

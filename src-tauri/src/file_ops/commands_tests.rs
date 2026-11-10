@@ -306,6 +306,54 @@ fn delete_batch_restores_every_source_and_discards_its_failed_token() {
     assert_no_transaction_artifacts(&repo);
 }
 
+/// Un link dentro del repo se opera como link: no se rechaza aunque apunte
+/// fuera, se copia como link y borrarlo no toca su destino.
+#[test]
+fn symlinks_are_handled_as_links_not_followed() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let outside = temp.path().join("outside");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&outside).expect("outside");
+    fs::create_dir_all(&repo).expect("repo");
+    fs::write(outside.join("keep.txt"), "keep").expect("target file");
+    let link = repo.join("link");
+    #[cfg(unix)]
+    let created = std::os::unix::fs::symlink(&outside, &link);
+    #[cfg(windows)]
+    let created = std::os::windows::fs::symlink_dir(&outside, &link);
+    if created.is_err() {
+        eprintln!("sin permiso para crear symlinks: prueba omitida");
+        return;
+    }
+    let repo = repo.canonicalize().expect("canonical repo");
+
+    assert_eq!(
+        crate::file_ops::safe_join(&repo, Path::new("link")).expect("link inside repo"),
+        repo.join("link")
+    );
+    copy_recursive(&repo.join("link"), &repo.join("copy")).expect("copy link");
+    assert!(fs::symlink_metadata(repo.join("copy"))
+        .expect("copy")
+        .file_type()
+        .is_symlink());
+    remove_path(&repo.join("link")).expect("remove link");
+    assert!(fs::symlink_metadata(repo.join("link")).is_err());
+    assert!(outside.join("keep.txt").exists());
+}
+
+#[test]
+fn stale_delete_tokens_are_purged_and_recent_ones_kept() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    fs::create_dir_all(temp.path().join("token/objects")).expect("token");
+    fs::write(temp.path().join("token/objects/0"), "x").expect("object");
+
+    purge_entries_older_than(temp.path(), std::time::Duration::from_secs(3600));
+    assert!(temp.path().join("token").exists());
+
+    purge_entries_older_than(temp.path(), std::time::Duration::ZERO);
+    assert!(!temp.path().join("token").exists());
+}
+
 #[test]
 fn restore_batch_keeps_the_token_retriable_after_a_failure() {
     let temp = tempfile::tempdir().expect("temp dir");

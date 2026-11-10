@@ -51,6 +51,7 @@ import {
 } from "../../workspace/recentAgentLaunches";
 import { AgentMcpPanel, TerminalPanel, type TerminalPanelParams } from "./TerminalPanel";
 import { AgentConversationTab } from "./AgentConversationTab";
+import { confirm } from "../../workbench/confirmDialog";
 import { detachTerminalFromConsoleDrop, detachTerminalPanel } from "./detachTerminalPanel";
 import { agentAvailabilityKey, checkAgentAvailabilityForRepo } from "../agentAvailability";
 
@@ -539,19 +540,25 @@ export function ConsoleDockPanel({
     });
   }, []);
 
-  const deleteJournalConversation = () => {
+  const deleteJournalConversation = async () => {
     const contextMenu = journalContextMenu;
     if (!contextMenu || deletingJournalId) return;
     const { session } = contextMenu;
-    const confirmed = window.confirm(
+    setJournalContextMenu(null);
+    const confirmed = await confirm(
       `¿Eliminar la conversación guardada de ${busStore.displayName(session.repo)}?\n\nEsta acción no se puede deshacer.`,
+      {
+        title: "Eliminar conversación",
+        kind: "warning",
+        okLabel: "Eliminar",
+        cancelLabel: "Cancelar",
+      },
     );
     if (!confirmed) {
-      closeJournalContextMenu(true);
+      contextMenu.trigger.focus();
       return;
     }
 
-    setJournalContextMenu(null);
     setDeletingJournalId(session.id);
     setLaunchError(null);
     void deleteAgentJournalSession(session.id, true)
@@ -810,7 +817,7 @@ export function ConsoleDockPanel({
         <JournalContextMenu
           menu={journalContextMenu}
           deleting={deletingJournalId === journalContextMenu.session.id}
-          onDelete={deleteJournalConversation}
+          onDelete={() => void deleteJournalConversation()}
           onClose={closeJournalContextMenu}
         />
       )}

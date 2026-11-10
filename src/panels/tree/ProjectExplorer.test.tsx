@@ -805,10 +805,15 @@ describe("ProjectExplorer", () => {
     act(() => busStore.loadSnapshot([delta()], { available: true }));
     render(<ProjectExplorer repo={REPO} />);
     await screen.findByTestId(`project-explorer-${REPO}`);
+    vi.mocked(document.elementFromPoint).mockReturnValue(
+      screen.getByTestId(`project-explorer-body-${REPO}`),
+    );
     await waitFor(() => expect(tauriDrag.handler).not.toBeNull());
 
     act(() => {
-      tauriDrag.handler?.({ payload: { type: "drop", paths: ["C:/tmp/README.md"] } });
+      tauriDrag.handler?.({
+        payload: { type: "drop", paths: ["C:/tmp/README.md"], position: { x: 10, y: 10 } },
+      });
     });
     fireEvent.click(await screen.findByTestId("overwrite-confirm-ok"));
 
@@ -818,6 +823,29 @@ describe("ProjectExplorer", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("overwrite-confirm-modal")).not.toBeInTheDocument(),
     );
+  });
+
+  it("ignores an OS drop outside its own tree", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    await screen.findByRole("treeitem", { name: "src" });
+    vi.mocked(document.elementFromPoint).mockReturnValue(document.body);
+    await waitFor(() => expect(tauriDrag.handler).not.toBeNull());
+
+    act(() => {
+      tauriDrag.handler?.({
+        payload: { type: "enter", paths: ["C:/tmp/x.txt"], position: { x: 10, y: 10 } },
+      });
+    });
+    expect(screen.queryByTestId(`project-explorer-drop-overlay-${REPO}`)).not.toBeInTheDocument();
+    act(() => {
+      tauriDrag.handler?.({
+        payload: { type: "drop", paths: ["C:/tmp/x.txt"], position: { x: 10, y: 10 } },
+      });
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(copyToRepoMock).not.toHaveBeenCalled();
   });
 
   it("drops OS files into the folder under the physical pointer and refreshes immediately", async () => {

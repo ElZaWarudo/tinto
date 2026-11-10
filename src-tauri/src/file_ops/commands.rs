@@ -20,9 +20,25 @@ use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION};
 
 use super::{safe_join, FileConflict, FileConflictKind};
 
-/// Recursively copia un archivo o directorio a `dest`.
+/// Recursively copia un archivo o directorio a `dest`. Los symlinks se copian
+/// como links: seguirlos copiaría su destino (o no terminaría, con un ciclo).
 pub(crate) fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
-    if src.is_dir() {
+    let meta = fs::symlink_metadata(src)?;
+    if meta.file_type().is_symlink() {
+        let target = fs::read_link(src)?;
+        #[cfg(unix)]
+        return std::os::unix::fs::symlink(target, dest);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileTypeExt;
+            return if meta.file_type().is_symlink_dir() {
+                std::os::windows::fs::symlink_dir(target, dest)
+            } else {
+                std::os::windows::fs::symlink_file(target, dest)
+            };
+        }
+    }
+    if meta.is_dir() {
         fs::create_dir_all(dest)?;
         for entry in fs::read_dir(src)? {
             let entry = entry?;
@@ -95,7 +111,8 @@ enum ResolveOutcome {
 
 /// Decide qué hacer con un par (src, dest). Nunca toca FS.
 fn classify(src: &Path, dest: &Path, overwrite: bool) -> ResolveOutcome {
-    if !src.exists() {
+    // `symlink_metadata`: un link roto sigue siendo una fuente válida.
+    if fs::symlink_metadata(src).is_err() {
         return ResolveOutcome::SourceMissing;
     }
     if dest.exists() {
@@ -326,7 +343,7 @@ pub async fn export_from_repo(
     let mut srcs = Vec::with_capacity(sources.len());
     for src_rel in &sources {
         let src_abs = safe_join(&repo_abs, src_rel)?;
-        if !src_abs.exists() {
+        if fs::symlink_metadata(&src_abs).is_err() {
             return Err(CommandError::new(
                 "source-missing",
                 format!("no existe {} en el repo", src_rel.display()),
@@ -378,7 +395,7 @@ pub async fn delete_from_repo(
                 "no se puede eliminar el root del repo",
             ));
         }
-        if !src_abs.exists() {
+        if fs::symlink_metadata(&src_abs).is_err() {
             return Err(CommandError::new(
                 "source-missing",
                 format!("no existe {} en el repo", src_rel.display()),
@@ -1012,11 +1029,19 @@ fn neighbor_path(path: &Path, role: &str) -> io::Result<PathBuf> {
     Ok(parent.join(candidate))
 }
 
+/// Borra `path` sin seguir symlinks: un link se borra como link.
 fn remove_path(path: &Path) -> io::Result<()> {
-    if !path.exists() {
+    let Ok(meta) = fs::symlink_metadata(path) else {
         return Ok(());
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if meta.file_type().is_symlink_dir() {
+            return fs::remove_dir(path);
+        }
     }
-    if path.is_dir() {
+    if meta.is_dir() {
         fs::remove_dir_all(path)
     } else {
         fs::remove_file(path)
@@ -1102,11 +1127,21 @@ pub(crate) fn run_move_batch_with_hook(
     let mut destinations = Vec::with_capacity(to_move.len());
 
     for (index, (src, dest)) in to_move.into_iter().enumerate() {
-        let mut replacement_hook = |_| Ok(());
-        let mut stage_copy = copy_recursive;
-        let moved = match install_move(&src, &dest, &mut replacement_hook, &mut stage_copy) {
-            Ok(moved) => moved,
-            Err(error) => return Err(rollback_move_batch(error, installed)),
+        // Sin destino que reemplazar, un rename (mismo volumen) es el
+        // movimiento entero: atómico y sin copiar. Si falla (otro volumen,
+        // archivo bloqueado), se cae a la copia transaccional.
+        let moved = if !dest.exists() && fs::rename(&src, &dest).is_ok() {
+            BatchMove::Renamed {
+                src,
+                dest: dest.clone(),
+            }
+        } else {
+            let mut replacement_hook = |_| Ok(());
+            let mut stage_copy = copy_recursive;
+            match install_move(&src, &dest, &mut replacement_hook, &mut stage_copy) {
+                Ok(moved) => BatchMove::Copied(moved),
+                Err(error) => return Err(rollback_move_batch(error, installed)),
+            }
         };
         destinations.push(dest);
         installed.push(moved);
@@ -1132,7 +1167,28 @@ fn rollback_copy_batch(primary: io::Error, installed: Vec<InstalledReplacement>)
     })
 }
 
-fn rollback_move_batch(primary: io::Error, installed: Vec<InstalledMove>) -> io::Error {
+enum BatchMove {
+    Renamed { src: PathBuf, dest: PathBuf },
+    Copied(InstalledMove),
+}
+
+impl BatchMove {
+    fn commit(self) -> Vec<String> {
+        match self {
+            BatchMove::Renamed { .. } => Vec::new(),
+            BatchMove::Copied(moved) => moved.commit(),
+        }
+    }
+
+    fn rollback(self) -> io::Result<()> {
+        match self {
+            BatchMove::Renamed { src, dest } => fs::rename(dest, src),
+            BatchMove::Copied(moved) => moved.rollback(),
+        }
+    }
+}
+
+fn rollback_move_batch(primary: io::Error, installed: Vec<BatchMove>) -> io::Error {
     installed.into_iter().rev().fold(primary, |error, item| {
         combine_io_errors(error, item.rollback(), "fallo el rollback del lote")
     })
@@ -1361,6 +1417,36 @@ pub(crate) fn undo_backup_root(token: &str) -> Result<PathBuf, CommandError> {
     Uuid::parse_str(token)
         .map_err(|_| CommandError::new("invalid-undo-token", "token inválido"))?;
     Ok(std::env::temp_dir().join("tinto-delete-undo").join(token))
+}
+
+/// Los tokens de deshacer viven solo en la memoria del frontend: tras un
+/// reinicio nadie los usa. El margen conserva la copia de un borrado
+/// interrumpido por un cierre inesperado por si hay que recuperarla a mano.
+const DELETE_UNDO_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Purga los respaldos de borrado viejos. Se llama al arrancar.
+pub fn purge_stale_delete_undo() {
+    purge_entries_older_than(
+        &std::env::temp_dir().join("tinto-delete-undo"),
+        DELETE_UNDO_MAX_AGE,
+    );
+}
+
+fn purge_entries_older_than(dir: &Path, max_age: std::time::Duration) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= max_age);
+        if stale {
+            let _ = remove_path(&entry.path());
+        }
+    }
 }
 
 pub(crate) fn write_delete_manifest(

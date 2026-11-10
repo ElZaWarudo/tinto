@@ -68,6 +68,8 @@ const USAGE_LIMIT_WAIT: Duration = if cfg!(test) {
 } else {
     Duration::from_secs(60 * 60)
 };
+/// What a job its usage limit stopped says while its retry is armed.
+const USAGE_RETRY_NOTE: &str = "Tinto lo reintenta en";
 
 /// A resolution's note in one line, up to 300 characters.
 fn resolve_note(note: &str) -> Result<String, DeliveryError> {
@@ -234,6 +236,9 @@ pub(super) struct Inner {
     /// One lock per task, held while a step runs git in its worktree: two
     /// at once collide on its index.lock.
     pub(super) git_work: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// One lock per step, held while it is decided and run, withdrawn, or
+    /// its held reply posted: one decision at a time acts on it.
+    pub(super) deciding: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Jobs being stopped to be paused rather than cancelled.
     pausing: Mutex<HashSet<String>>,
@@ -396,6 +401,25 @@ impl EventsTail {
 
 impl DeliveryService {
     pub fn open_default() -> Result<Self, DeliveryError> {
+        // Before anything is read: a second Tinto would take the first
+        // one's running jobs for interrupted ones. A restart (an update)
+        // starts the new Tinto while the old one is still closing: it is
+        // given a few seconds to let go.
+        static INSTANCE: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
+        let dir = super::store::default_dir()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let held = loop {
+            match DeliveryStore::lock_instance(&dir) {
+                Err(error)
+                    if error.category == super::store::INSTANCE_RUNNING
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                other => break other?,
+            }
+        };
+        let _ = INSTANCE.set(held);
         let claude_distro = std::sync::OnceLock::<Option<String>>::new();
         let claude_distro = Arc::new(claude_distro);
         let launcher: Launcher = Arc::new(move |job, task, paths| {
@@ -453,18 +477,22 @@ impl DeliveryService {
         }
         let mut results = check(repo, distro, &settings);
         // A failing environment the repo knows how to start is started, at
-        // most once every few minutes, and checked again.
-        let started_at_ms = self
-            .inner
-            .environment
-            .lock()
-            .ok()
-            .and_then(|repos| repos.get(repo).and_then(|state| state.started_at_ms));
-        let due = started_at_ms
-            .is_none_or(|at| now_ms().saturating_sub(at) >= ENVIRONMENT_START_EVERY_MS);
-        let mut started = started_at_ms;
-        if results.iter().any(|result| !result.ok) && !settings.environment_up.is_empty() && due {
-            started = Some(now_ms());
+        // most once every few minutes, and checked again. The start is
+        // claimed before it runs: two checks at once start it once.
+        let failing = results.iter().any(|result| !result.ok);
+        let start_now = failing
+            && !settings.environment_up.is_empty()
+            && self.inner.environment.lock().is_ok_and(|mut repos| {
+                let state = repos.entry(repo.to_path_buf()).or_default();
+                let due = state
+                    .started_at_ms
+                    .is_none_or(|at| now_ms().saturating_sub(at) >= ENVIRONMENT_START_EVERY_MS);
+                if due {
+                    state.started_at_ms = Some(now_ms());
+                }
+                due
+            });
+        if start_now {
             let start = environment::start(repo, distro, &settings.environment_up);
             results = check(repo, distro, &settings);
             results.extend(start.into_iter().filter(|step| !step.ok));
@@ -475,15 +503,10 @@ impl DeliveryService {
             .map(|result| format!("{}: {}", result.name, result.output))
             .collect();
         if let Ok(mut repos) = self.inner.environment.lock() {
-            repos.insert(
-                repo.to_path_buf(),
-                RepoEnvironment {
-                    problem: (!failed.is_empty()).then(|| failed.join("\n")),
-                    checked_at_ms: Some(now_ms()),
-                    checking: false,
-                    started_at_ms: started,
-                },
-            );
+            let state = repos.entry(repo.to_path_buf()).or_default();
+            state.problem = (!failed.is_empty()).then(|| failed.join("\n"));
+            state.checked_at_ms = Some(now_ms());
+            state.checking = false;
         }
         // The jobs waiting on it start, or say why they wait.
         self.tick();
@@ -584,6 +607,7 @@ impl DeliveryService {
                 pr_reads: Mutex::new(HashMap::new()),
                 asking: Mutex::new(HashMap::new()),
                 git_work: Mutex::new(HashMap::new()),
+                deciding: Mutex::new(HashMap::new()),
                 cancels: Mutex::new(HashMap::new()),
                 pausing: Mutex::new(HashSet::new()),
                 restart_retries: Mutex::new(Vec::new()),
@@ -779,6 +803,9 @@ impl DeliveryService {
         // A merge Tinto was running when it closed did not finish here.
         if let Err(error) = self.fail_interrupted_merges() {
             eprintln!("tinto: delivery interrupted merges: {}", error.message);
+        }
+        if let Err(error) = self.rearm_usage_retries() {
+            eprintln!("tinto: delivery usage-limit retries: {}", error.message);
         }
         let adopted = self
             .inner
@@ -1354,6 +1381,14 @@ impl DeliveryService {
             return Err(DeliveryError::new(
                 "task_busy",
                 "la tarea tiene trabajos en cola o en marcha; cancélalos antes de eliminarla",
+            ));
+        }
+        // A pause keeps its resource for the job that resumes it: removed,
+        // nothing would resume it or free the resource.
+        if self.paused_job(task_id)?.is_some() {
+            return Err(DeliveryError::new(
+                "task_busy",
+                "la tarea tiene un trabajo en pausa; cancélalo antes de eliminarla",
             ));
         }
         let place = Place::of(task.distro.as_deref());
@@ -3180,7 +3215,7 @@ impl DeliveryService {
         }
         // In a group of its own, so stopping the job reaches what it starts:
         // `codex` installed with npm is a Node script that runs the binary.
-        let process = JobProcess::spawn(&mut command, &job.id).map_err(|error| {
+        let mut process = JobProcess::spawn(&mut command, &job.id).map_err(|error| {
             DeliveryError::new(
                 "spawn_failed",
                 format!("no se pudo iniciar {}: {error}", launch.program.display()),
@@ -3192,7 +3227,7 @@ impl DeliveryService {
             }
         }
 
-        {
+        let recorded = (|| -> Result<DeliveryJob, DeliveryError> {
             let store = self.store()?;
             let mut current = store
                 .job(&job.id)?
@@ -3219,8 +3254,20 @@ impl DeliveryService {
                 Some(&job.id),
                 "",
             )?;
-            job = current;
-        }
+            Ok(current)
+        })();
+        // Not recorded as started, nothing would follow or stop it: it is
+        // stopped here and the job fails as one that did not start.
+        job = match recorded {
+            Ok(current) => current,
+            Err(error) => {
+                process.kill_tree();
+                if let Some(wsl_job) = &launch.wsl_job {
+                    adapters::stop_wsl_job(wsl_job, "KILL");
+                }
+                return Err(error);
+            }
+        };
         self.notify();
         self.follow(job, task, paths, start, process, launch.wsl_job, false)
     }
@@ -4344,17 +4391,27 @@ impl DeliveryService {
         let store = self.store()?;
         let mut stopped = job.clone();
         stopped.error = Some(format!(
-            "{error} — Tinto lo reintenta en {} minutos, cuando el límite puede haberse renovado.",
+            "{error} — {USAGE_RETRY_NOTE} {} minutos, cuando el límite puede haberse renovado.",
             USAGE_LIMIT_WAIT.as_secs() / 60
         ));
         store.put_job(&stopped)?;
         drop(store);
         self.notify();
+        self.arm_usage_retry(&job.id, USAGE_LIMIT_WAIT);
+        Ok(())
+    }
+
+    /// Retries a job its usage limit stopped once `wait` is over, unless
+    /// that stage moved on meanwhile (see [`Self::usage_retry_due`]).
+    fn arm_usage_retry(&self, job_id: &str, wait: Duration) {
         let service = self.clone();
-        let job_id = job.id.clone();
+        let job_id = job_id.to_string();
         std::thread::spawn(move || {
-            std::thread::sleep(USAGE_LIMIT_WAIT);
+            std::thread::sleep(wait);
             if service.inner.closed.load(Ordering::SeqCst) {
+                return;
+            }
+            if !service.usage_retry_due(&job_id).unwrap_or(false) {
                 return;
             }
             if let Err(error) = service.retry_after_restart(&job_id, "tras el límite de uso") {
@@ -4363,6 +4420,51 @@ impl DeliveryService {
                 );
             }
         });
+    }
+
+    /// Whether a job its usage limit stopped still waits for its retry: it
+    /// was not retried yet, its task is still there, and no later attempt
+    /// of its stage was dispatched (on another agent, say).
+    fn usage_retry_due(&self, job_id: &str) -> Result<bool, DeliveryError> {
+        let job = self.job(job_id)?;
+        let store = self.store()?;
+        if store
+            .task(&job.task_id)?
+            .is_none_or(|task| task.removed_at_ms.is_some())
+        {
+            return Ok(false);
+        }
+        let moved_on = store.task_jobs(&job.task_id)?.iter().any(|other| {
+            other.id != job.id
+                && (other.retry_of.as_deref() == Some(job.id.as_str())
+                    || (other.role == job.role && other.created_at_ms > job.created_at_ms))
+        });
+        Ok(!moved_on)
+    }
+
+    /// On startup, the usage-limit retries the last Tinto had armed: each is
+    /// armed again for what was left of its wait.
+    fn rearm_usage_retries(&self) -> Result<(), DeliveryError> {
+        let waiting: Vec<DeliveryJob> = self
+            .store()?
+            .jobs()?
+            .into_iter()
+            .filter(|job| {
+                job.status == DeliveryJobStatus::Failed
+                    && job
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| error.contains(USAGE_RETRY_NOTE))
+            })
+            .collect();
+        for job in waiting {
+            if !self.usage_retry_due(&job.id)? {
+                continue;
+            }
+            let ended = job.ended_at_ms.unwrap_or(job.created_at_ms);
+            let due = ended + USAGE_LIMIT_WAIT.as_millis() as u64;
+            self.arm_usage_retry(&job.id, Duration::from_millis(due.saturating_sub(now_ms())));
+        }
         Ok(())
     }
 

@@ -216,23 +216,20 @@ impl DeliveryService {
         let mut settled = false;
         loop {
             let seen = self.inner.changes.0.lock().map(|count| *count).unwrap_or(0);
-            let mut next = match cursor {
-                Some(cursor) => cursor,
-                None => self.store()?.last_event_seq()?,
-            };
+            // One end for every run's read: an event saved between two runs'
+            // reads would be below the cursor of the reply and not in it.
+            let upto = self.store()?.last_event_seq()?;
+            let next = cursor.map_or(upto, |cursor| cursor.max(upto));
             let mut events = Vec::new();
             let mut idle = Vec::new();
             for run_id in run_ids {
                 match cursor {
-                    Some(cursor) => {
-                        let (run_events, run_next) = self.coordinator_events(run_id, cursor)?;
-                        events.extend(run_events);
-                        next = next.max(run_next);
-                    }
+                    Some(cursor) => events.extend(self.coordinator_events(run_id, cursor)?.0),
                     None => events.extend(self.unacknowledged(run_id)?),
                 }
                 idle.extend(self.idle_tasks(run_id)?);
             }
+            events.retain(|event| event["seq"].as_u64().is_some_and(|seq| seq <= upto));
             events.sort_by_key(|event| event["seq"].as_u64());
             let nudge = first_look && !idle_ok && !idle.is_empty();
             let expired = Instant::now() >= deadline;

@@ -946,11 +946,25 @@ impl DeliveryService {
             .into_iter()
             .filter(|decision| decision.status == DeliveryDecisionStatus::Pending)
             .collect();
+        // One that fails does not stop the others; the error names each one
+        // that failed, once the rest are answered.
         let mut answered = Vec::new();
+        let mut failed = Vec::new();
         for decision in pending {
             if let Some(answer) = recommended_answer(&decision, &takes) {
-                answered.push(self.answer_decision(&decision.id, &answer, decided_by)?);
+                match self.answer_decision(&decision.id, &answer, decided_by) {
+                    Ok(done) => answered.push(done),
+                    Err(error) => {
+                        failed.push(format!("«{}»: {}", decision.question, error.message))
+                    }
+                }
             }
+        }
+        if !failed.is_empty() {
+            return Err(DeliveryError::new(
+                "decisions_failed",
+                format!("No se pudieron responder {}", failed.join("; ")),
+            ));
         }
         Ok(answered)
     }

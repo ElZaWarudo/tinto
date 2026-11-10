@@ -51,7 +51,7 @@ import type { WorkbenchConfig } from "./bus/contract";
 import { GlanceMode } from "./qol/GlanceMode";
 import { NotificationWatcher } from "./qol/notifications";
 import { DeliveryNotificationWatcher } from "./panels/delivery/DeliveryNotifications";
-import { useQualityState } from "./qol/state";
+import { qualityStore, useQualityState } from "./qol/state";
 import { installZoomKeybindings, zoomStore } from "./qol/zoom";
 import { installShortcuts } from "./qol/shortcuts";
 import "./App.css";
@@ -128,6 +128,7 @@ function NativeApp() {
     () => ({
       openRepo: (path) => {
         if (apiRef.current) {
+          qualityStore.setGlanceMode(false);
           openRepoPanel(apiRef.current, path, busStore.displayName(path));
         }
       },
@@ -362,9 +363,9 @@ function NativeApp() {
           />
         )}
         <div className="app-shell__body">
-          {glanceMode ? (
-            <GlanceMode />
-          ) : (
+          {glanceMode && <GlanceMode />}
+          {/* Hidden, not unmounted: unmounting stops every running agent. */}
+          <div className="app-shell__dock" hidden={glanceMode}>
             <DockWorkspace
               components={components}
               tabComponents={tabComponents}
@@ -388,7 +389,7 @@ function NativeApp() {
                 closeInactiveRepoPanels(api, busStore.getState().config);
               }}
             />
-          )}
+          </div>
         </div>
       </div>
     </WorkspaceActionsContext.Provider>

@@ -21,11 +21,33 @@ impl<'a> Place<'a> {
     }
 }
 
+/// The git commands that reach the remote: a remote that never answers
+/// must not hold the task's git lock for good.
+const NETWORK_COMMANDS: [&str; 3] = ["push", "fetch", "ls-remote"];
+const NETWORK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// Runs `git -C <dir> <args>` and returns trimmed stdout.
 pub fn git(place: Place<'_>, dir: &Path, args: &[&str]) -> Result<String, DeliveryError> {
-    let output = git_command(place, dir, args).output().map_err(|error| {
+    let failed = |error: std::io::Error| {
         DeliveryError::new("git_failed", format!("no se pudo ejecutar git: {error}"))
-    })?;
+    };
+    let mut command = git_command(place, dir, args);
+    let output = match args.first() {
+        Some(name) if NETWORK_COMMANDS.contains(name) => {
+            super::prs::output_within(&mut command, NETWORK_TIMEOUT)
+                .map_err(failed)?
+                .ok_or_else(|| {
+                    DeliveryError::new(
+                        "git_failed",
+                        format!(
+                            "git {name}: el remoto no respondió en {} minutos",
+                            NETWORK_TIMEOUT.as_secs() / 60
+                        ),
+                    )
+                })?
+        }
+        _ => command.output().map_err(failed)?,
+    };
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
@@ -745,7 +767,7 @@ pub fn restack(
     let mut args = REBASE_CONFIG.to_vec();
     // A commit whose changes the base already has is dropped, not kept empty.
     args.extend(["rebase", "--quiet", "--empty=drop", "--onto", onto, from]);
-    rebase_step(place, worktree, &args)
+    rebase_step(place, worktree, &args, true)
 }
 
 /// Git settings every restack runs with, whatever the user's config says:
@@ -766,12 +788,14 @@ const REBASE_CONFIG: [&str; 10] = [
 
 /// Runs a rebase command. It finishes (`Ok(Ok)`), stops on conflicts and
 /// stays paused for them to be resolved (`Ok(Err(files))`), or fails for
-/// another reason (a hook, a lock): then the rebase is abandoned so the
-/// branch is as it was, and the error says why.
+/// another reason (a hook, a lock). A failed start (`abort`) is abandoned
+/// so the branch is as it was; a failed continue stays paused, keeping the
+/// conflicts resolved so far. The error says why.
 fn rebase_step(
     place: Place<'_>,
     worktree: &Path,
     args: &[&str],
+    abort: bool,
 ) -> Result<Result<(), Vec<String>>, DeliveryError> {
     let Err(error) = git(place, worktree, args) else {
         return Ok(Ok(()));
@@ -783,6 +807,12 @@ fn rebase_step(
         .collect();
     if !conflicts.is_empty() && rebase_head(place, worktree).is_some() {
         return Ok(Err(conflicts));
+    }
+    if !abort {
+        return Err(DeliveryError::new(
+            "restack_failed",
+            format!("el rebase no pudo seguir: {}", error.message),
+        ));
     }
     if rebase_head(place, worktree).is_some() {
         git(place, worktree, &["rebase", "--abort"])?;
@@ -820,8 +850,8 @@ pub fn sync_in_progress(place: Place<'_>, worktree: &Path) -> bool {
 
 /// Goes on with a paused restack once its conflicts are resolved: stages
 /// exactly the files that were conflicted (deleted ones too) and continues.
-/// The rebase finishes, stops on the next conflicts, or fails as in
-/// [`rebase_step`].
+/// The rebase finishes, stops on the next conflicts, or fails and stays
+/// paused (see [`rebase_step`]).
 pub fn continue_restack(
     place: Place<'_>,
     worktree: &Path,
@@ -836,7 +866,7 @@ pub fn continue_restack(
     git(place, worktree, &add)?;
     let mut args = REBASE_CONFIG.to_vec();
     args.extend(["rebase", "--continue"]);
-    rebase_step(place, worktree, &args)
+    rebase_step(place, worktree, &args, false)
 }
 
 /// Abandons a paused restack: the branch goes back to where it was. What
@@ -1117,6 +1147,36 @@ mod tests {
             "delivery/k-2"
         );
         remove_worktree(Place::Native, repo.path(), &worktree, true).unwrap();
+    }
+
+    #[test]
+    fn a_continue_that_git_refuses_leaves_the_restack_paused_with_its_resolution() {
+        let repo = repo_with_commit();
+        let dir = repo.path();
+        std::fs::write(dir.join("other.txt"), "other\n").unwrap();
+        run_git(dir, &["add", "."]);
+        run_git(dir, &["commit", "-q", "-m", "other"]);
+        run_git(dir, &["checkout", "-q", "-b", "task"]);
+        std::fs::write(dir.join("README.md"), "task\n").unwrap();
+        run_git(dir, &["commit", "-q", "-am", "task"]);
+        run_git(dir, &["checkout", "-q", "main"]);
+        std::fs::write(dir.join("README.md"), "main\n").unwrap();
+        run_git(dir, &["commit", "-q", "-am", "main"]);
+        run_git(dir, &["checkout", "-q", "task"]);
+
+        let stopped = restack(Place::Native, dir, "main", "main~1").unwrap();
+        assert_eq!(stopped, Err(vec!["README.md".to_string()]));
+        // The resolution, plus an edit to a file that was not conflicted:
+        // git refuses to continue on that unstaged change.
+        std::fs::write(dir.join("README.md"), "resolved\n").unwrap();
+        std::fs::write(dir.join("other.txt"), "edited\n").unwrap();
+        let error = continue_restack(Place::Native, dir, &["README.md".to_string()]).unwrap_err();
+        assert_eq!(error.category, "restack_failed");
+        assert!(rebase_head(Place::Native, dir).is_some());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("README.md")).unwrap(),
+            "resolved\n"
+        );
     }
 
     #[test]

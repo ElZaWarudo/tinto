@@ -6,14 +6,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
+  applyLayout,
   safeParseLayout,
   isUsableLayout,
-  layoutReferencesEphemeralConsoles,
   layoutReferencesTree,
   loadUiState,
   saveUiState,
 } from "./layout";
-import type { SerializedDockview } from "dockview-react";
+import type { DockviewApi, SerializedDockview } from "dockview-react";
 
 // Loose test fixtures; the runtime helpers only read `.panels`.
 const asLayout = (o: object) => o as unknown as SerializedDockview;
@@ -51,19 +51,35 @@ describe("layout persistence helpers", () => {
     );
   });
 
-  it("layoutReferencesEphemeralConsoles detects saved agent console panels", () => {
-    expect(layoutReferencesEphemeralConsoles(null)).toBe(false);
-    expect(layoutReferencesEphemeralConsoles(asLayout({ panels: { dashboard: {} } }))).toBe(false);
-    expect(
-      layoutReferencesEphemeralConsoles(
-        asLayout({ panels: { "agent-consoles": { contentComponent: "agent-consoles" } } }),
-      ),
-    ).toBe(true);
-    expect(
-      layoutReferencesEphemeralConsoles(
-        asLayout({ panels: { "agent-terminal:sess-1": { contentComponent: "agent-terminal" } } }),
-      ),
-    ).toBe(true);
+  it("applyLayout keeps the saved layout and drops only the agent consoles", () => {
+    const layout = asLayout({
+      panels: {
+        dashboard: { contentComponent: "dashboard" },
+        "repo:/r/a": { contentComponent: "repo" },
+        "agent-consoles": { contentComponent: "agent-consoles" },
+        "agent-terminal:sess-1": { contentComponent: "agent-terminal" },
+      },
+    });
+    let open: string[] = [];
+    const api = {
+      get panels() {
+        return open.map((id) => ({ id }));
+      },
+      fromJSON: () => {
+        open = Object.keys(layout.panels);
+      },
+      getPanel: (id: string) => (open.includes(id) ? { id } : undefined),
+      removePanel: (panel: { id: string }) => {
+        open = open.filter((id) => id !== panel.id);
+      },
+      clear: vi.fn(),
+      addPanel: vi.fn(),
+    } as unknown as DockviewApi;
+
+    applyLayout(api, layout);
+
+    expect(open).toEqual(["dashboard", "repo:/r/a"]);
+    expect(api.addPanel).not.toHaveBeenCalled();
   });
 
   it("loadUiState parses the backend string, tolerating errors", async () => {

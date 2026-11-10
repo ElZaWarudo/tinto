@@ -73,10 +73,12 @@ const EXPLORER_MAX_WIDTH = 520;
 function dropDirectoryAtPhysicalPosition(
   position: { x: number; y: number } | undefined,
   treeRoot: HTMLElement | null,
-): string {
-  if (!position || !treeRoot || typeof document.elementFromPoint !== "function") return "";
+): string | null {
+  // The drag-drop event is window-wide: a point outside this tree belongs to
+  // another explorer or panel, so it is not a drop target here.
+  if (!position) return null;
   const scale = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
-  return dropDirectoryAtClientPosition(position.x / scale, position.y / scale, treeRoot) ?? "";
+  return dropDirectoryAtClientPosition(position.x / scale, position.y / scale, treeRoot);
 }
 
 function dropDirectoryAtClientPosition(
@@ -341,8 +343,9 @@ export function ProjectExplorer({
       .onDragDropEvent((event) => {
         const payload = event.payload;
         if (payload.type === "enter" || payload.type === "over") {
-          setOsDraggingOver(true);
-          setTreeDropTarget(dropDirectoryAtPhysicalPosition(payload.position, treeRef.current));
+          const target = dropDirectoryAtPhysicalPosition(payload.position, treeRef.current);
+          setOsDraggingOver(target !== null);
+          setTreeDropTarget(target);
           if (payload.type === "enter") {
             setOsDraggedFiles(payload.paths);
           }
@@ -352,7 +355,7 @@ export function ProjectExplorer({
           const targetPath = dropDirectoryAtPhysicalPosition(payload.position, treeRef.current);
           setOsDraggedFiles(paths);
           setTreeDropTarget(null);
-          handleOsDropRef.current?.(paths, targetPath);
+          if (targetPath !== null) handleOsDropRef.current?.(paths, targetPath);
         } else if (payload.type === "leave") {
           setOsDraggingOver(false);
           setOsDraggedFiles(null);

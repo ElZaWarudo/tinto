@@ -90,6 +90,9 @@ class Session {
   String? _peerSid;
   int _peerSeq = 0;
 
+  /// The other side's earlier sessions: a hello from one is a replay.
+  final _retired = <String>{};
+
   bool get knowsPeer => _peerSid != null;
 
   List<int> wrap(String type, Map<String, dynamic> body) {
@@ -130,12 +133,14 @@ class Session {
     final fresh = _peerSid != sid || seq > _peerSeq;
     final bool answerHello;
     if (type == 'hello') {
-      if (!fresh) return null;
+      if (!fresh || _retired.contains(sid)) return null;
       answerHello = peer != this.sid;
     } else {
       if (_peerSid != sid || peer != this.sid || !fresh) return null;
       answerHello = false;
     }
+    final old = _peerSid;
+    if (old != null && old != sid) _retired.add(old);
     _peerSid = sid;
     _peerSeq = seq;
     for (final field in ['v', 'from', 'type', 'sid', 'peer', 'seq']) {

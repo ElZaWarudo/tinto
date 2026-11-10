@@ -120,7 +120,6 @@ import {
   CorrectResultDialog,
   NewTaskDialog,
   ReleaseLeaseDialog,
-  DeliverySettingsDialog,
   SettingsPage,
   StageAgentRow,
   type CorrectableStep,
@@ -133,7 +132,12 @@ import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
 import { CoordinatorDock } from "./DeliveryCoordinator";
 import { Overlay } from "./DeliveryOverlay";
 import { useOneOverlay } from "./useOneOverlay";
-import { coordinatorStalls, type CoordinatorStall } from "./DeliveryNotifications";
+import {
+  coordinatorStalls,
+  guideProposals,
+  type CoordinatorStall,
+  type GuideProposalWait,
+} from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
@@ -167,6 +171,7 @@ import {
   prSummary,
   ciLine,
   waitsOnLabel,
+  waitsOnPhrase,
   quietFor,
   rolesOf,
   stepKey,
@@ -212,7 +217,6 @@ type Dialog =
   | { kind: "dispatch"; task: DeliveryTask; role: string; prompt: string; source: string | null }
   | { kind: "release"; name: string; note: string | null }
   | { kind: "archived" }
-  | { kind: "settings" }
   | null;
 
 /** What the task list shows: one batch (null: all of them), the children
@@ -266,14 +270,29 @@ const TONE_ICON: Record<Tone, StatusIcon> = {
 /** The task's state; `who` it waits on follows it, unless the state already
  *  asks the user or an agent is at work. */
 function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }) {
-  const shown = who && status.group !== "attention" && status.group !== "running";
+  const shown =
+    status.group !== "attention" && status.group !== "running" && who
+      ? waitsOnPhrase(who, status.label)
+      : null;
   return (
     <span className={`delivery-status-line delivery-tone--${status.tone}`}>
       <StatusMark icon={status.icon} />
       {status.label}
-      {shown && <small className="delivery-status-line__who">espera a {who}</small>}
+      {shown && <small className="delivery-status-line__who">{shown}</small>}
     </span>
   );
+}
+
+/** Arrow keys move between a menu's entries, round from the last to the first. */
+function moveAmongEntries(event: ReactKeyboardEvent<HTMLElement>) {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const entries = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'),
+  ];
+  const at = entries.indexOf(document.activeElement as HTMLElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  entries[(at + step + entries.length) % entries.length]?.focus();
 }
 
 /** A button that opens a short list of actions in an overlay, pressed while
@@ -282,12 +301,14 @@ function Menu({
   label,
   trigger,
   disabled,
+  className,
   listClassName,
   children,
 }: {
   label?: string;
   trigger: ReactNode;
   disabled?: boolean;
+  className?: string;
   listClassName?: string;
   children: (close: () => void) => ReactNode;
 }) {
@@ -298,6 +319,7 @@ function Menu({
     <span className="delivery-menu">
       <button
         type="button"
+        className={className}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={from !== null}
@@ -312,6 +334,7 @@ function Menu({
           role="menu"
           className={`delivery-menu__list${listClassName ? ` ${listClassName}` : ""}`}
           onClose={close}
+          onKeyDown={moveAmongEntries}
         >
           {children(close)}
         </Overlay>
@@ -371,14 +394,7 @@ function ContextMenu({
       onClose();
       return;
     }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    event.preventDefault();
-    const entries = [
-      ...(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []),
-    ];
-    const at = entries.indexOf(document.activeElement as HTMLElement);
-    const step = event.key === "ArrowDown" ? 1 : -1;
-    entries[(at + step + entries.length) % entries.length]?.focus();
+    moveAmongEntries(event);
   };
   // Separators only between entries: none first, last or twice in a row.
   const shown: (ContextItem | null)[] = [];
@@ -584,7 +600,20 @@ interface DeliveryShared {
   /** Coordinators that stopped with changes unread, minus the ones the user hid. */
   stalls: CoordinatorStall[];
   hideStall: (stall: CoordinatorStall) => void;
+  /** The repos with guide rules proposed and not decided. */
+  guides: GuideProposalWait[];
+  /** What the user chose from «te necesita», until the view that holds it opens it. */
+  asked: Asked | null;
+  settleAsked: () => void;
 }
+
+/** One thing that waits on the user, as «te necesita» goes to it. */
+type Asked =
+  | { kind: "task"; taskId: string }
+  | { kind: "stall"; runId: string }
+  | { kind: "guides"; repo: string }
+  /** The header's gear: the settings page, on its Delivery tab. */
+  | { kind: "delivery-settings"; repo: string };
 
 const DeliveryContext = createContext<DeliveryShared | null>(null);
 
@@ -634,6 +663,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [dialog, setDialog] = useState<Dialog>(null);
   const [error, setError] = useState<string | null>(null);
+  // Why the overview could not be read: the next good read clears it.
+  const [readError, setReadError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [repoSettings, setRepoSettings] = useState<DeliveryRepoSettings | null>(null);
   const [listView, setListView] = useState(savedListView);
@@ -679,13 +710,19 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     }
   }, [listView]);
 
+  const [guides, setGuides] = useState<GuideProposalWait[]>([]);
+  const [asked, setAsked] = useState<Asked | null>(null);
+  const settleAsked = useCallback(() => setAsked(null), []);
+  // The overview, then the guides of its batches' repos.
+  const show = useCallback((next: DeliveryOverview) => {
+    setOverview(next);
+    setReadError(null);
+    void guideProposals(next).then(setGuides);
+  }, []);
+
   const refresh = useCallback(
-    () =>
-      getDeliveryOverview().then(
-        (next) => setOverview(next),
-        (cause: unknown) => setError(errorText(cause)),
-      ),
-    [],
+    () => getDeliveryOverview().then(show, (cause: unknown) => setReadError(errorText(cause))),
+    [show],
   );
 
   useEffect(() => {
@@ -706,10 +743,10 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     let pending: ReturnType<typeof setTimeout> | null = null;
     getDeliveryOverview().then(
       (next) => {
-        if (active) setOverview(next);
+        if (active) show(next);
       },
       (cause: unknown) => {
-        if (active) setError(errorText(cause));
+        if (active) setReadError(errorText(cause));
       },
     );
     // Running agents change things several times a second: read the
@@ -750,7 +787,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
       if (pending) clearTimeout(pending);
       clearInterval(fallback);
     };
-  }, [refresh]);
+  }, [refresh, show]);
 
   // Every second redraws the whole panel: only while a job's clock runs.
   const ticking =
@@ -817,6 +854,19 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     if (!api) return;
     addRepoPanel(api, repo);
     api.getPanel(repoPanelId(repo))?.api.setActive();
+  };
+
+  // Delivery's settings open in the repo in front (else the first one), on
+  // its settings page's Delivery tab.
+  const hasSettingsRepo = Boolean(only) || repos.length > 0;
+  const openDeliverySettings = () => {
+    const settingsRepo =
+      only ??
+      (dockRef.current?.activePanel?.params as { repo?: string } | undefined)?.repo ??
+      repos[0]?.path;
+    if (!settingsRepo) return;
+    if (!only) openRepo(settingsRepo);
+    setAsked({ kind: "delivery-settings", repo: settingsRepo });
   };
 
   // Brings the repo forward: its tab, or its window when it has one.
@@ -936,17 +986,64 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
       // Hidden until Tinto closes.
     }
   };
-  const needsCount = needYou.length + stalls.length;
-  const needsLabel = [
+  // Goes to what waits on the user, in the view that holds it; a repo in a
+  // window of its own only comes forward.
+  const goTo = (repo: string, what: Asked) => {
+    if (!(repoKey(repo) in detached)) setAsked(what);
+  };
+  // Everything that waits on the user, each with where it is and what it needs.
+  const asks = [
+    ...needYou.map((task) => ({
+      key: task.id,
+      title: taskLabel(task),
+      need: statuses.get(task.id)!.label,
+      go: () => {
+        reveal(task);
+        goTo(task.repo, { kind: "task", taskId: task.id });
+      },
+    })),
+    ...stalls.map((stall) => ({
+      key: `stall:${stall.run.id}`,
+      title: batchName(stall.run.title || stall.run.id),
+      need: `Coordinador parado · ${stall.unread === 1 ? "1 cambio" : `${stall.unread} cambios`} sin leer`,
+      go: () => {
+        showRepo(stall.run.repo);
+        goTo(stall.run.repo, { kind: "stall", runId: stall.run.id });
+      },
+    })),
+    ...guides.map((guide) => ({
+      key: `guides:${guide.repo}`,
+      title: busStore.displayName(guide.repo),
+      need: "Reglas propuestas de las guías",
+      go: () => {
+        showRepo(guide.repo);
+        goTo(guide.repo, { kind: "guides", repo: guide.repo });
+      },
+    })),
+  ];
+  const needsParts = [
     needYou.length === 1 ? "1 tarea" : needYou.length > 1 ? `${needYou.length} tareas` : "",
     stalls.length === 1
       ? "1 coordinador"
       : stalls.length > 1
         ? `${stalls.length} coordinadores`
         : "",
-  ]
-    .filter(Boolean)
-    .join(" y ");
+    guides.length === 1
+      ? "1 propuesta de reglas"
+      : guides.length > 1
+        ? `${guides.length} propuestas de reglas`
+        : "",
+  ].filter(Boolean);
+  const needsLabel =
+    needsParts.length > 1
+      ? `${needsParts.slice(0, -1).join(", ")} y ${needsParts.at(-1)}`
+      : needsParts.join("");
+  const needsTrigger = (
+    <>
+      <Icon name="flag" />
+      {needsLabel} {asks.length === 1 ? "te necesita" : "te necesitan"}
+    </>
+  );
 
   // For what is not a button (a select, a menu item): its error goes to the
   // panel's banner. Buttons are ActionButtons and say it themselves.
@@ -1010,6 +1107,9 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     openRepo,
     stalls,
     hideStall,
+    guides,
+    asked,
+    settleAsked,
   };
 
   return (
@@ -1020,17 +1120,35 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             <h1>Delivery</h1>
             {only && <span className="delivery-muted">{busStore.displayName(only)}</span>}
             <span className="delivery-panel__spacer" />
-            {needsCount > 0 && (
-              <button
-                type="button"
-                className="delivery-attention"
-                onClick={() =>
-                  needYou.length > 0 ? reveal(needYou[0]) : showRepo(stalls[0].run.repo)
-                }
-              >
-                <Icon name="flag" />
-                {needsLabel} {needsCount === 1 ? "te necesita" : "te necesitan"}
+            {/* One thing waiting: straight to it; several: the list of them. */}
+            {asks.length === 1 && (
+              <button type="button" className="delivery-attention" onClick={asks[0].go}>
+                {needsTrigger}
               </button>
+            )}
+            {asks.length > 1 && (
+              <Menu
+                className="delivery-attention"
+                listClassName="delivery-needs"
+                trigger={needsTrigger}
+              >
+                {(close) =>
+                  asks.map((ask) => (
+                    <button
+                      key={ask.key}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        ask.go();
+                      }}
+                    >
+                      <span className="delivery-needs__title">{ask.title}</span>
+                      <small>{ask.need}</small>
+                    </button>
+                  ))
+                }
+              </Menu>
             )}
             <span className="delivery-load">
               Agentes
@@ -1094,7 +1212,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
               className="delivery-icon-button"
               aria-label="Ajustes de Delivery"
               title="Agentes en paralelo y conexión de coordinadores"
-              onClick={() => setDialog({ kind: "settings" })}
+              disabled={!hasSettingsRepo}
+              onClick={openDeliverySettings}
             >
               <Icon name="gear" />
             </button>
@@ -1108,10 +1227,17 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             </button>
           </header>
 
-          {error && (
+          {(error ?? readError) && (
             <div className="delivery-panel__error" role="alert">
-              <span>{error}</span>
-              <button type="button" aria-label="Descartar error" onClick={() => setError(null)}>
+              <span>{error ?? readError}</span>
+              <button
+                type="button"
+                aria-label="Descartar error"
+                onClick={() => {
+                  setError(null);
+                  setReadError(null);
+                }}
+              >
                 ×
               </button>
             </div>
@@ -1156,14 +1282,6 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             </div>
           )}
 
-          {dialog?.kind === "settings" && (
-            <DeliverySettingsDialog
-              settings={wideSettings}
-              endpoint={overview?.coordinator ?? null}
-              onSettings={(value) => void run(() => updateDeliverySettings(value))}
-              onClose={() => setDialog(null)}
-            />
-          )}
           {dialog?.kind === "new-task" && (
             <NewTaskDialog
               repos={repos}
@@ -1290,14 +1408,15 @@ const deliveryDockComponents = {
 /** A repo's tab: its name, how many tasks it has and whether one needs you.
  *  A repo with no tasks left can be closed. */
 function DeliveryRepoTab({ params, api }: IDockviewPanelHeaderProps<{ repo: string }>) {
-  const { overview, now, stalls } = useDelivery();
+  const { overview, now, stalls, guides } = useDelivery();
   const tasks = (overview?.tasks ?? []).filter(
     (task) => repoKey(task.repo) === repoKey(params.repo),
   );
   const needs =
     (overview !== null &&
       tasks.some((task) => taskStatus(task, overview, now).group === "attention")) ||
-    stalls.some((stall) => repoKey(stall.run.repo) === repoKey(params.repo));
+    stalls.some((stall) => repoKey(stall.run.repo) === repoKey(params.repo)) ||
+    guides.some((guide) => repoKey(guide.repo) === repoKey(params.repo));
   return (
     <span className="delivery-repo-tab" title={params.repo}>
       {busStore.displayName(params.repo)}
@@ -1342,6 +1461,7 @@ function CoordinatorStallChip({
   const message = `Sigue con wait_run de Tinto Delivery: tienes ${changes} sin leer desde las ${at}. Si las herramientas de Delivery fallan, reconéctalas.`;
   return (
     <span
+      id={`delivery-ask-stall-${run.id}`}
       className="delivery-stall"
       title={`${named ? `${batch}: c` : "C"}oordinador parado, ${changes} sin leer desde las ${at}`}
     >
@@ -1508,11 +1628,39 @@ function EnvironmentStatus({ repo, distro }: { repo: string; distro: string | nu
 function DeliveryRepoView({ repo }: { repo: string }) {
   const shared = useDelivery();
   const { overview, now, repos, listView, setListView, selected, select, reveal, run } = shared;
-  // Settings in place of the tasks, opened on a section or at the top.
+  // Settings in place of the tasks, opened on a section or at the top;
+  // "proposal": the guides, on the rules proposed; "delivery": its Delivery tab.
   const [settingsAt, setSettingsAt] = useState<string | null>(null);
   const settingsOpen = settingsAt !== null;
-  const guidesOpen = settingsAt === "guides";
+  const guidesOpen = settingsAt === "guides" || settingsAt === "proposal";
   const key = repoKey(repo);
+  const { asked, settleAsked } = shared;
+  const guidesWait = shared.guides.some((guide) => repoKey(guide.repo) === key);
+  // «te necesita» chose this repo's proposed rules: the guides open on them.
+  // The header's gear: the settings, on the Delivery tab.
+  const askedGuides =
+    (asked?.kind === "guides" || asked?.kind === "delivery-settings") && repoKey(asked.repo) === key
+      ? asked
+      : null;
+  const [seenAsk, setSeenAsk] = useState<Asked | null>(null);
+  if (askedGuides && askedGuides !== seenAsk) {
+    setSeenAsk(askedGuides);
+    setSettingsAt(askedGuides.kind === "guides" ? "proposal" : "delivery");
+  }
+  // Or one of its stopped coordinators: its chip gets the focus.
+  const askedStall =
+    asked?.kind === "stall" &&
+    shared.stalls.some((stall) => stall.run.id === asked.runId && repoKey(stall.run.repo) === key)
+      ? asked
+      : null;
+  useEffect(() => {
+    if (askedGuides) settleAsked();
+    if (!askedStall) return;
+    settleAsked();
+    const chip = document.getElementById(`delivery-ask-stall-${askedStall.runId}`);
+    chip?.scrollIntoView?.({ block: "nearest" });
+    chip?.querySelector("button")?.focus();
+  }, [askedGuides, askedStall, settleAsked]);
   const choice = repos.find((candidate) => repoKey(candidate.path) === key) ?? {
     path: repo,
     distro: null,
@@ -1582,14 +1730,24 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     if (next && selectedTask && selectedTask.run_id !== next) select(repo, null);
   };
   // The delivered tasks the list shows go to "Archivadas…", as one by one.
+  // One after another, as they remove worktrees and branches of the same
+  // repository; one that fails does not stop the rest, and the error names it.
   const archiveDelivered = async (delivered: DeliveryTask[]) => {
     const ok = await confirm(
       `${delivered.length === 1 ? "Se archiva 1 tarea entregada" : `Se archivan ${delivered.length} tareas entregadas`}: se borran sus worktrees y ramas locales, todo está en GitHub. Puedes recuperarlas en "Archivadas…".`,
       { title: "Archivar entregadas", okLabel: "Archivar" },
     );
     if (!ok) return false;
-    for (const task of delivered) await archiveDeliveryTask(task.id);
+    const failed: string[] = [];
+    for (const task of delivered) {
+      try {
+        await archiveDeliveryTask(task.id);
+      } catch (cause) {
+        failed.push(`${task.key}: ${errorText(cause)}`);
+      }
+    }
     if (selectedTask && delivered.includes(selectedTask)) select(repo, null);
+    if (failed.length > 0) throw new Error(`No se archivaron ${failed.join("; ")}`);
   };
   const toggleGroup = (group: StatusGroup) => {
     const folding = !listView.folded.includes(group);
@@ -1801,6 +1959,10 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     );
   };
   const toggleGuides = () => setSettingsAt(guidesOpen ? null : "guides");
+  // Rules proposed and not decided: marked as a repo's tab marks what needs the user.
+  const guidesMark = guidesWait && (
+    <span className="delivery-repo-tab__needs" aria-label="reglas propuestas" />
+  );
   const toggleSettings = () => setSettingsAt(settingsOpen && !guidesOpen ? null : "");
 
   const toggleIssue = (id: string) =>
@@ -1937,10 +2099,11 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           <button
             type="button"
             aria-pressed={guidesOpen}
-            title={`Guías de ${choice.label}: reglas que salen de sus revisores`}
+            title={`Guías de ${choice.label}: reglas que salen de sus revisores${guidesWait ? ". Hay reglas propuestas por aprobar" : ""}`}
             onClick={toggleGuides}
           >
             Guías
+            {guidesMark}
           </button>
           <button
             type="button"
@@ -1954,7 +2117,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           </button>
         </span>
         <span className="delivery-repo__narrow">
-          <Menu label={`Más de ${choice.label}`} trigger="⋯">
+          <Menu label={`Más de ${choice.label}`} trigger={<>⋯{guidesMark}</>}>
             {(close) => (
               <>
                 <button
@@ -1966,6 +2129,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                   }}
                 >
                   Guías
+                  {guidesMark}
                 </button>
                 <button
                   type="button"
@@ -1988,7 +2152,13 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           key={settingsAt}
           repos={repos}
           repo={choice}
-          section={settingsAt || undefined}
+          section={
+            settingsAt === "proposal" || settingsAt === "delivery"
+              ? undefined
+              : settingsAt || undefined
+          }
+          focusProposal={settingsAt === "proposal"}
+          scope={settingsAt === "delivery" ? "delivery" : undefined}
           onBack={() => setSettingsAt(null)}
           settings={overview?.settings ?? { capacity: 0, quota_stop_percent: QUOTA_STOP_PERCENT }}
           endpoint={overview?.coordinator ?? null}
@@ -2253,6 +2423,13 @@ function TaskDetail({
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
   const taskRun = overview.runs.find((candidate) => candidate.id === task.run_id);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(newestFirst[0]?.id ?? null);
+  // A stage launched while the task is open shows its log as it runs.
+  const newestStage = newestFirst.find((job) => job.agent !== "shell")?.id ?? null;
+  const [seenStage, setSeenStage] = useState(newestStage);
+  if (newestStage !== seenStage) {
+    setSeenStage(newestStage);
+    if (newestStage) setExpandedJobId(newestStage);
+  }
   const latestUndoable = newestFirst.find(
     (job) => job.agent !== "shell" && !job.undone_at_ms && job.changes.length > 0,
   );
@@ -2292,6 +2469,10 @@ function TaskDetail({
   // Replies to reviewers are answered together, in one place.
   const replies = openApprovals.filter(
     (approval) => approval.rung === "pr_reply" && approval.status === "pending",
+  );
+  // Approved replies Tinto posts once GitHub has their fix.
+  const heldReplies = openApprovals.filter(
+    (approval) => approval.rung === "pr_reply" && approval.status === "approved",
   );
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
@@ -2333,8 +2514,17 @@ function TaskDetail({
   const failedMerge = lastMerge?.status === "failed" && pr?.state === "open" ? lastMerge : null;
   // Opening the task checks its steps against GitHub: the PR is found by its
   // branch if needed and read, unless it was read moments ago.
+  // A check that failed says so: what the task shows may be out of date.
+  const [checkFailed, setCheckFailed] = useState<{ taskId: string; why: string } | null>(null);
   useEffect(() => {
-    void checkDeliveryTask(task.id).catch(() => {});
+    let live = true;
+    checkDeliveryTask(task.id).then(
+      () => live && setCheckFailed(null),
+      (cause) => live && setCheckFailed({ taskId: task.id, why: errorText(cause) }),
+    );
+    return () => {
+      live = false;
+    };
   }, [task.id]);
   const taskDecisions = (overview.decisions ?? []).filter(
     (decision) => decision.task_id === task.id,
@@ -2345,6 +2535,41 @@ function TaskDetail({
   const needsYou =
     blocked || openApprovals.some((approval) => approval.status === "pending") || broken !== null;
   const rejected = rejectedStep(approvals);
+  const settingsProposals = pendingSettingsProposals(overview, task);
+
+  // What «te necesita» goes to here, in the order the task's status names it:
+  // the card that holds it, opened with its own control (`-open`) and focused.
+  const askId = (what: string) => `delivery-ask-${task.id}-${what}`;
+  const pendingApproval = openApprovals.find(
+    (approval) => approval.status === "pending" && approval.rung !== "pr_reply",
+  );
+  const askTarget = blocked
+    ? "decisions"
+    : pendingApproval
+      ? pendingApproval.id
+      : replies.length > 0
+        ? "replies"
+        : qaProblemsToDecide > 0
+          ? "qa"
+          : settingsProposals.length > 0
+            ? "settings"
+            : broken
+              ? "broken"
+              : "now";
+  const { asked, settleAsked } = useDelivery();
+  const askedHere = asked?.kind === "task" && asked.taskId === task.id ? asked : null;
+  useEffect(() => {
+    if (!askedHere) return;
+    settleAsked();
+    const opener = document.getElementById(`${askId(askTarget)}-open`);
+    const card = document.getElementById(askId(askTarget)) ?? opener;
+    card?.scrollIntoView?.({ block: "nearest" });
+    card?.focus();
+    // Pressed as the user would; a card that opens on top takes the focus itself.
+    if (opener?.getAttribute("aria-expanded") === "false") opener.click();
+    // Once per choice; askId only depends on the task.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askedHere]);
   // The coordinator's label stops at the stages; the delivery is Tinto's to know.
   const delivered = isDelivered(approvals, ladder);
   const stateLabel = delivered ? "Entregada" : (TASK_STATE_LABEL[task.state] ?? task.state);
@@ -2617,6 +2842,7 @@ function TaskDetail({
               {qaProblems.length > 0 && (
                 <button
                   type="button"
+                  id={`${askId("qa")}-open`}
                   className={`delivery-link-chip delivery-link-chip--problems${qaProblemsToDecide > 0 ? " delivery-link-chip--pending" : ""}`}
                   aria-expanded={float === "qa"}
                   aria-label={
@@ -2660,7 +2886,13 @@ function TaskDetail({
             )}
           </p>
           {/* What happens now, and in which round: one line. */}
-          <div className="delivery-task__now" role="group" aria-label="Ahora">
+          <div
+            className="delivery-task__now"
+            role="group"
+            aria-label="Ahora"
+            id={askId("now")}
+            tabIndex={-1}
+          >
             <p>
               <span className="delivery-task__now-label">Ahora</span>
               <span>
@@ -2773,7 +3005,7 @@ function TaskDetail({
 
       {/* One line in the task; the cards open on top only when asked for. */}
       {blocked && (
-        <div className="delivery-pending-bar" role="status">
+        <div className="delivery-pending-bar" role="status" id={askId("decisions")} tabIndex={-1}>
           <span>
             <strong>
               {pendingDecisions.length === 1
@@ -2784,6 +3016,7 @@ function TaskDetail({
           </span>
           <button
             type="button"
+            id={`${askId("decisions")}-open`}
             className="delivery-button--primary"
             aria-expanded={float === "decisions"}
             onClick={(event) => setFloat("decisions", event.currentTarget)}
@@ -2839,13 +3072,14 @@ function TaskDetail({
         </TaskFloat>
       )}
 
-      <PendingSettingsProposals proposals={pendingSettingsProposals(overview, task)} />
+      <PendingSettingsProposals id={askId("settings")} proposals={settingsProposals} />
 
       {openApprovals
         .filter((approval) => approval.rung !== "pr_reply")
         .map((approval) => (
           <ApprovalBar
             key={approval.id}
+            id={askId(approval.id)}
             approval={approval}
             pr={pr}
             open={expanded === approval.id}
@@ -2859,8 +3093,14 @@ function TaskDetail({
           </ApprovalBar>
         ))}
       {failedMerge && pr && <MergeFailed approval={failedMerge} pr={pr} />}
+      {checkFailed?.taskId === task.id && (
+        <p className="delivery-job__note" role="status">
+          No se pudo comprobar la tarea en GitHub: {checkFailed.why}
+        </p>
+      )}
       {replies.length > 0 && (
         <StepBar
+          id={askId("replies")}
           title={
             replies.length === 1
               ? "Aprobar la respuesta al revisor"
@@ -2875,6 +3115,15 @@ function TaskDetail({
           <RepliesBanner replies={replies} />
         </StepBar>
       )}
+      {heldReplies.length > 0 && (
+        <ul className="delivery-pr__facts" aria-label="Respuestas aprobadas sin publicar">
+          {heldReplies.map((reply) => (
+            <li key={reply.id} role="status">
+              <strong>{reply.title}</strong>: {reply.notice ?? "Respuesta aprobada · publicándose"}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {rejected && openApprovals.length === 0 && (
         <RejectedStep task={task} approval={rejected} pr={pr} />
@@ -2883,6 +3132,7 @@ function TaskDetail({
       {broken && (
         <BrokenStage
           key={broken.id}
+          id={askId("broken")}
           job={broken}
           undoable={latestUndoable?.id === broken.id}
           onContinue={() => onContinueJob(broken)}
@@ -3068,11 +3318,13 @@ const BROKEN_WHY_CHARS = 240;
  *  what to do about it. When its work got done another way, the user settles
  *  it with a note instead of running it again. */
 function BrokenStage({
+  id,
   job,
   undoable,
   onContinue,
   onUndo,
 }: {
+  id: string;
   job: DeliveryJob;
   undoable: boolean;
   onContinue: () => Promise<unknown>;
@@ -3089,6 +3341,8 @@ function BrokenStage({
   const long = why.join(" ").length > BROKEN_WHY_CHARS || why.some((text) => text.includes("\n"));
   return (
     <div
+      id={id}
+      tabIndex={-1}
       className="delivery-banner delivery-banner--danger delivery-broken"
       role="group"
       aria-label="Etapa fallida"
@@ -3838,12 +4092,14 @@ function RejectedStep({
 
 /** An open step as one line in the task; its text and buttons open in place. */
 function ApprovalBar({
+  id,
   approval,
   pr,
   open,
   onToggle,
   children,
 }: {
+  id: string;
   approval: DeliveryApproval;
   pr: DeliveryPr | null | undefined;
   open: boolean;
@@ -3860,6 +4116,7 @@ function ApprovalBar({
       : approval.title;
   return (
     <StepBar
+      id={id}
       title={pending ? `Aprobar ${name}` : (running ?? `Esperando al coordinador: ${name}`)}
       summary={summary}
       button={pending ? "Revisar" : "Ver"}
@@ -3875,6 +4132,7 @@ function ApprovalBar({
 
 /** A step's line, which opens into its card below it; the chevron folds it. */
 function StepBar({
+  id,
   title,
   summary,
   button,
@@ -3884,6 +4142,8 @@ function StepBar({
   onToggle,
   children,
 }: {
+  /** Its card's id, focused by «te necesita»; its button's is `${id}-open`. */
+  id: string;
   title: string;
   summary?: string;
   button: string;
@@ -3894,7 +4154,7 @@ function StepBar({
   children: ReactNode;
 }) {
   return (
-    <div className={`delivery-step${open ? " delivery-step--open" : ""}`}>
+    <div id={id} tabIndex={-1} className={`delivery-step${open ? " delivery-step--open" : ""}`}>
       <div className="delivery-pending-bar delivery-pending-bar--step" role="status">
         <span className="delivery-pending-bar__text">
           <strong>{title}</strong>
@@ -3902,6 +4162,7 @@ function StepBar({
         </span>
         <button
           type="button"
+          id={`${id}-open`}
           className={primary && !open ? "delivery-button--primary" : undefined}
           aria-label={buttonLabel}
           aria-expanded={open}
@@ -4044,9 +4305,12 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
     );
     await askAgain([authorOf(reply)]);
   };
-  // Approved together, the replies are posted in the background: until
-  // each one is, it stays here without its buttons.
-  const [posting, setPosting] = useState(false);
+  // Approved together, the replies are posted in the background, a few at
+  // a time: until each one is, it stays here without its buttons. One that
+  // could not go out gets a new notice saying why, and its buttons back.
+  const [posting, setPosting] = useState<Record<string, string | null>>({});
+  const isPosting = (reply: DeliveryApproval) =>
+    reply.id in posting && posting[reply.id] === (reply.notice ?? null);
   const approveAll = async () => {
     await approveDeliveryReplies(
       replies.map((reply) => ({
@@ -4056,7 +4320,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
       })),
       authors.filter((login) => !skipped.includes(login)),
     );
-    setPosting(true);
+    setPosting(Object.fromEntries(replies.map((reply) => [reply.id, reply.notice ?? null])));
   };
   return (
     <div
@@ -4113,9 +4377,11 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
             <p className="delivery-muted">
               Al aprobar, Tinto la publica con tu cuenta de GitHub
               {reply.thread ? " en el hilo del comentario" : " como comentario del PR"}
-              {reply.resolve_thread ? " y resuelve el hilo" : ""}. Rechazar no publica nada.
+              {reply.resolve_thread ? " y resuelve el hilo" : ""}
+              {reply.interim ? "" : " en cuanto el PR en GitHub tenga la corrección"}. Rechazar no
+              publica nada.
             </p>
-            {posting ? (
+            {isPosting(reply) ? (
               <p className="delivery-muted" role="status">
                 Publicando en GitHub…
               </p>
@@ -4161,7 +4427,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
           ))}
         </fieldset>
       )}
-      {replies.length > 1 && !posting && (
+      {replies.length > 1 && !replies.some(isPosting) && (
         <ActionGroup>
           <div className="delivery-actions">
             <ActionButton
@@ -4177,6 +4443,10 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
     </div>
   );
 }
+
+/** The commit, PR or merge texts the user edited and has not approved yet,
+ *  by approval: hiding the step or opening another task does not lose them. */
+const stepDrafts = new Map<string, { title: string; body: string; messages?: string[] }>();
 
 function ApprovalBanner({
   task,
@@ -4207,10 +4477,10 @@ function ApprovalBanner({
   useEffect(() => {
     if (!choosesReviewers) return;
     let live = true;
-    setCandidatesError(null);
     getDeliveryPrReviewers(task.id).then(
       (logins) => {
         if (!live) return;
+        setCandidatesError(null);
         setCandidates(logins);
         setFresh(true);
         cacheReviewers(task.repo, logins);
@@ -4245,9 +4515,10 @@ function ApprovalBanner({
   const planned = approval.rung === "commit" && (approval.commits ?? []).length > 0;
   const editsText =
     pending && !approval.record && ["commit", "pr", "merge"].includes(approval.rung);
-  const [title, setTitle] = useState(approval.title);
-  const [body, setBody] = useState(approval.body);
-  const [messages, setMessages] = useState<string[] | undefined>(undefined);
+  const draft = stepDrafts.get(approval.id);
+  const [title, setTitle] = useState(draft?.title ?? approval.title);
+  const [body, setBody] = useState(draft?.body ?? approval.body);
+  const [messages, setMessages] = useState<string[] | undefined>(draft?.messages);
   const edited = !editsText
     ? undefined
     : planned
@@ -4255,6 +4526,10 @@ function ApprovalBanner({
       : title !== approval.title || body !== approval.body
         ? { title, body }
         : undefined;
+  useEffect(() => {
+    if (edited) stepDrafts.set(approval.id, { title, body, messages });
+    else stepDrafts.delete(approval.id);
+  });
   // The PR's description can show the task's QA screenshots.
   const [images, setImages] = useState<DeliveryReplyImage[]>(approval.images ?? []);
   const [shots, setShots] = useState<DeliveryQaScreenshot[]>([]);
@@ -4385,7 +4660,13 @@ function ApprovalBanner({
             <p className="delivery-job__note">
               No se pudo leer quién puede revisar: {candidatesError}.
               {candidates !== null && " Es la última lista leída."}{" "}
-              <button type="button" onClick={() => setAttempt((count) => count + 1)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCandidatesError(null);
+                  setAttempt((count) => count + 1);
+                }}
+              >
                 Reintentar
               </button>
             </p>

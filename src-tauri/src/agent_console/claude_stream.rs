@@ -396,9 +396,14 @@ impl AgentProcess for ClaudeStreamHandle {
         option_id: Option<&str>,
         deny: bool,
     ) -> Result<(), AgentConsoleError> {
-        let allow = !deny && option_id != Some(DENY);
-        self.shared.answer_permission(permission_id, allow)
+        self.shared
+            .answer_permission(permission_id, allows(option_id, deny))
     }
+}
+
+/// Only an explicit "Permitir" runs the tool: "Cancelar" sends no option.
+fn allows(option_id: Option<&str>, deny: bool) -> bool {
+    !deny && option_id == Some(ALLOW)
 }
 
 /// Claude Code's answer to `can_use_tool`.
@@ -889,6 +894,14 @@ mod tests {
                 "request_id": "p1", "response": {"behavior": "allow", "updatedInput": write}}})
             ]
         );
+    }
+
+    #[test]
+    fn only_the_allow_option_runs_the_tool() {
+        assert!(allows(Some(ALLOW), false));
+        for (option, deny) in [(None, false), (Some(DENY), false), (Some(ALLOW), true)] {
+            assert!(!allows(option, deny), "{option:?} deny={deny}");
+        }
     }
 
     #[test]

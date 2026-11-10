@@ -746,7 +746,6 @@ describe("ConsoleDockPanel detach drop", () => {
         last_event_at_ms: 4,
       },
     ]);
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const closeSpy = vi.spyOn(consoleDock, "closeTerminal");
 
     const { unmount } = render(<ConsoleDockPanel />);
@@ -757,9 +756,10 @@ describe("ConsoleDockPanel detach drop", () => {
     const menu = screen.getByRole("menu", { name: /acciones para la conversación de api/i });
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Eliminar conversación" }));
 
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringContaining("¿Eliminar la conversación guardada de api?"),
-    );
+    const dialog = await screen.findByRole("alertdialog", { name: "Eliminar conversación" });
+    expect(dialog).toHaveTextContent("¿Eliminar la conversación guardada de api?");
+    expect(clientMocks.deleteAgentJournalSession).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Eliminar" }));
     await waitFor(() =>
       expect(clientMocks.deleteAgentJournalSession).toHaveBeenCalledWith("sess-old", true),
     );
@@ -768,7 +768,6 @@ describe("ConsoleDockPanel detach drop", () => {
     expect(sessionStoreMocks.removeSession).toHaveBeenCalledWith("sess-old");
 
     closeSpy.mockRestore();
-    confirmSpy.mockRestore();
     unmount();
   });
 
@@ -815,7 +814,6 @@ describe("ConsoleDockPanel detach drop", () => {
     clientMocks.deleteAgentJournalSession.mockRejectedValueOnce(
       new Error("No se puede eliminar una sesión activa"),
     );
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
 
     const { unmount } = render(<ConsoleDockPanel />);
     const savedConversation = await screen.findByRole("button", {
@@ -823,6 +821,7 @@ describe("ConsoleDockPanel detach drop", () => {
     });
     fireEvent.contextMenu(savedConversation, { clientX: 120, clientY: 80 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Eliminar conversación" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Eliminar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "No se eliminó la conversación guardada. Sigue disponible; vuelve a intentarlo.",
@@ -830,7 +829,6 @@ describe("ConsoleDockPanel detach drop", () => {
     expect(savedConversation).toBeInTheDocument();
     expect(sessionStoreMocks.removeSession).not.toHaveBeenCalled();
 
-    confirmSpy.mockRestore();
     unmount();
   });
 

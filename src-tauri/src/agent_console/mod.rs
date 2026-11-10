@@ -944,6 +944,7 @@ impl AgentSessionRegistry {
                 "revert requires explicit user consent",
             ));
         }
+        self.ensure_no_other_session_working(session_id)?;
         let session = self
             .sessions
             .get_mut(session_id)
@@ -952,12 +953,31 @@ impl AgentSessionRegistry {
         Ok(session.to_contract())
     }
 
-    /// Undo a session that is no longer live (reopened from history), from
-    /// the start checkpoint it left on disk.
-    pub fn revert_saved_session(&mut self, saved: &AgentSession) -> Result<(), AgentConsoleError> {
+    /// Undo restores the repo's tree, so it must not run under another
+    /// session still working in the same repo. The session being undone
+    /// itself is left to its own rules.
+    fn ensure_no_other_session_working(
+        &mut self,
+        session_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        let repo = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?
+            .repo()
+            .to_path_buf();
+        self.ensure_repo_idle(&repo, Some(session_id))
+    }
+
+    fn ensure_repo_idle(
+        &mut self,
+        repo: &Path,
+        except: Option<&str>,
+    ) -> Result<(), AgentConsoleError> {
         self.refresh_session_statuses()?;
         let repo_busy = self.list_sessions().iter().any(|session| {
-            session.repo == saved.repo
+            Some(session.id.as_str()) != except
+                && session.repo == repo
                 && matches!(
                     session.status,
                     crate::bus::contract::AgentSessionStatus::Starting
@@ -967,9 +987,16 @@ impl AgentSessionRegistry {
         if repo_busy {
             return Err(AgentConsoleError::new(
                 "agent_session_active",
-                "detén las sesiones activas de este repo antes de revertir una sesión anterior",
+                "detén las sesiones activas de este repo antes de deshacer cambios de otra sesión",
             ));
         }
+        Ok(())
+    }
+
+    /// Undo a session that is no longer live (reopened from history), from
+    /// the start checkpoint it left on disk.
+    pub fn revert_saved_session(&mut self, saved: &AgentSession) -> Result<(), AgentConsoleError> {
+        self.ensure_repo_idle(&saved.repo, None)?;
         let backend = if saved.wsl_distro.is_some() {
             session::CheckpointBackend::Wsl
         } else {
@@ -1047,6 +1074,7 @@ impl AgentSessionRegistry {
                 "revert requires explicit user consent",
             ));
         }
+        self.ensure_no_other_session_working(session_id)?;
         let session = self
             .sessions
             .get_mut(session_id)
@@ -1067,6 +1095,7 @@ impl AgentSessionRegistry {
                 "restore requires explicit user consent",
             ));
         }
+        self.ensure_no_other_session_working(session_id)?;
         let session = self
             .sessions
             .get_mut(session_id)
@@ -1580,7 +1609,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_lifetime_timeout_marks_failed_and_releases_capacity() {
+    fn registry_idle_timeout_marks_failed_and_releases_capacity() {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry =
             AgentSessionRegistry::with_process_factory(factory).with_limits(AgentSessionLimits {
@@ -1790,6 +1819,46 @@ mod tests {
             "before\n"
         );
         assert!(!repo.path().join("created.txt").exists());
+    }
+
+    #[test]
+    fn undo_refuses_while_another_session_works_in_the_repo() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry =
+            AgentSessionRegistry::with_process_factory(factory).with_limits(AgentSessionLimits {
+                max_sessions: 5,
+                max_sessions_per_repo: 2,
+                max_lifetime_ms: 60_000,
+            });
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("base.txt"), "before\n").unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        let ended = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary.clone())
+            .unwrap();
+        std::fs::write(repo.path().join("base.txt"), "after\n").unwrap();
+        registry.stop_session(&ended).unwrap();
+        registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+
+        let errors = [
+            registry.revert_session(&ended, true).unwrap_err(),
+            registry.restore_turn(&ended, "turn", true).unwrap_err(),
+            registry
+                .revert_turn_file(&ended, "turn", Path::new("base.txt"), true)
+                .unwrap_err(),
+        ];
+
+        for error in errors {
+            assert_eq!(error.category, "agent_session_active");
+        }
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "after\n",
+            "the working session's tree is left alone"
+        );
     }
 
     #[test]

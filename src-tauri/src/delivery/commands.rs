@@ -748,6 +748,7 @@ pub fn delivery_request_approval(
             jira_statuses: jira_statuses.unwrap_or_default(),
             comment_url: None,
             resolve_thread: false,
+            interim: false,
             record: false,
         })
         .map_err(CommandError::from)

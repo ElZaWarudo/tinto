@@ -76,8 +76,8 @@ impl AgentCommand {
         Self::new(
             "bash",
             [
-                "-lc".to_string(),
-                "exec cargo run --manifest-path \"$1\" --bin tinto-agent".to_string(),
+                "-c".to_string(),
+                login_shell_exec("cargo run --manifest-path \"$1\" --bin tinto-agent"),
                 "tinto-agent-dev-source".to_string(),
                 format!("{root}/src-tauri/Cargo.toml"),
             ],
@@ -88,8 +88,10 @@ impl AgentCommand {
         Self::new(
             "bash",
             [
-                "-lc".to_string(),
-                format!("exec \"$HOME/.local/share/tinto/agents/{AGENT_VERSION}/tinto-agent\""),
+                "-c".to_string(),
+                login_shell_exec(&format!(
+                    "\"$HOME/.local/share/tinto/agents/{AGENT_VERSION}/tinto-agent\""
+                )),
             ],
         )
     }
@@ -103,6 +105,14 @@ impl AgentCommand {
         }
         Ok(())
     }
+}
+
+/// Script de `bash -c` que ejecuta `command` (sin comillas simples) en un
+/// login shell, para heredar su PATH. Lo que el perfil imprima va a stderr:
+/// stdout es el canal JSON del agente y una línea extra lo desfasaría. El
+/// agente recupera el stdout original (fd 3). `"$1"` llega al login shell.
+fn login_shell_exec(command: &str) -> String {
+    format!("exec 3>&1 1>&2; exec bash -lc 'exec {command} 1>&3 3>&-' \"$0\" \"$@\"")
 }
 
 impl WslLaunchConfig {
@@ -1260,7 +1270,7 @@ mod tests {
         let argv = build_wsl_argv(&config).expect("argv");
 
         assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--exec", "bash"]);
-        assert_eq!(argv[5], "-lc");
+        assert_eq!(argv[5], "-c");
         assert!(argv[6].contains("cargo run"));
         assert_eq!(argv[7], "tinto-agent-dev-source");
         assert_eq!(argv[8], "/home/mayor/tinto/src-tauri/Cargo.toml");
@@ -1272,10 +1282,34 @@ mod tests {
         let argv = build_wsl_argv(&config).expect("argv");
 
         assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--exec", "bash"]);
-        assert_eq!(argv[5], "-lc");
+        assert_eq!(argv[5], "-c");
         assert!(argv[6].contains("$HOME/.local/share/tinto/agents/"));
         assert!(argv[6].contains("/tinto-agent"));
-        assert!(argv[6].starts_with("exec "));
+    }
+
+    /// Un perfil de login que imprime no ensucia el stdout del agente.
+    #[cfg(unix)]
+    #[test]
+    fn login_profile_output_stays_off_the_agent_stdout() {
+        let home = tempfile::tempdir().expect("home");
+        let agent_dir = home
+            .path()
+            .join(format!(".local/share/tinto/agents/{AGENT_VERSION}"));
+        std::fs::create_dir_all(&agent_dir).expect("agent dir");
+        std::fs::write(home.path().join(".bash_profile"), "echo profile-noise\n").expect("profile");
+        let agent = agent_dir.join("tinto-agent");
+        std::fs::write(&agent, "#!/bin/sh\necho agent-ready\n").expect("agent");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let command = AgentCommand::managed_wsl_agent();
+        let output = std::process::Command::new(&command.program)
+            .args(&command.args)
+            .env("HOME", home.path())
+            .output()
+            .expect("run bash");
+
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "agent-ready\n");
     }
 
     #[test]

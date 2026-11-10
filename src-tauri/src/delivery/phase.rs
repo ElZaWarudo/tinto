@@ -220,7 +220,7 @@ pub enum PrWait {
     /// Its reviews let it merge but it is a draft: the user marks it ready.
     Draft,
     /// Its reviews let it merge, or it merged: the next step is the
-    /// coordinator's.
+    /// coordinator's. A task whose PR merged shows that step as its phase.
     Ready,
     /// Nobody is asked to review it and it needs a review: the user asks
     /// someone.
@@ -267,6 +267,12 @@ pub struct DeliveryTaskPhase {
     /// until each has one.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub threads_unanswered: usize,
+    /// The review threads still to answer and resolve, named (`url (author
+    /// en path:line)`): no reply, or only an interim one, and none waiting.
+    /// Pending work for the coordinator: once the fix is pushed, a
+    /// `pr_reply` for each, which resolves its thread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads_to_answer: Vec<String>,
 }
 
 fn is_zero(count: &usize) -> bool {
@@ -948,9 +954,60 @@ pub fn split_issues(
     issues
 }
 
+/// The review threads of an open PR still to be answered and resolved: no
+/// reply yet, or only an interim one of Tinto's, and no reply for them
+/// waiting for the user or for its fix on GitHub (that one goes out and
+/// resolves the thread by itself). Once the fix is pushed, each needs the
+/// reply that describes it.
+pub fn threads_to_answer<'a>(
+    pr: &'a DeliveryPr,
+    approvals: &[&DeliveryApproval],
+) -> Vec<&'a super::review_threads::ReviewThread> {
+    use super::review_threads::ThreadState;
+    if !pr.is_open() {
+        return Vec::new();
+    }
+    pr.review_threads
+        .iter()
+        .filter(|thread| thread.state != ThreadState::Resolved)
+        .filter(|thread| {
+            let replies: Vec<&&DeliveryApproval> = approvals
+                .iter()
+                .filter(|approval| {
+                    approval.task_id == pr.task_id
+                        && approval.rung == DeliveryRung::PrReply
+                        && approval
+                            .comment_url
+                            .as_deref()
+                            .and_then(super::threads::parse_comment_url)
+                            .is_some_and(|(_, _, id)| id == thread.id)
+                })
+                .collect();
+            let waiting = replies.iter().any(|reply| {
+                matches!(
+                    reply.status,
+                    DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                )
+            });
+            let interim_only = replies
+                .iter()
+                .filter(|reply| reply.status == DeliveryApprovalStatus::Executed)
+                .max_by_key(|reply| reply.executed_at_ms)
+                .is_some_and(|reply| reply.interim);
+            !waiting && (thread.state == ThreadState::Unanswered || interim_only)
+        })
+        .collect()
+}
+
 /// What a followed PR waits on. `replies` are the user's pending replies to
-/// its reviewers, `None` for a general comment.
-pub fn pr_wait(pr: &DeliveryPr, replies: &[Option<&str>], review_optional: bool) -> PrWait {
+/// its reviewers, `None` for a general comment; `to_answer` the authors of
+/// its [`threads_to_answer`].
+pub fn pr_wait(
+    pr: &DeliveryPr,
+    replies: &[Option<&str>],
+    to_answer: &[String],
+    review_optional: bool,
+) -> PrWait {
     if pr.state == "merged" {
         return PrWait::Ready;
     }
@@ -990,11 +1047,12 @@ pub fn pr_wait(pr: &DeliveryPr, replies: &[Option<&str>], review_optional: bool)
         return PrWait::Trouble;
     }
     let mut answer = logins(|state| state.awaits_answer());
-    // A review thread without a reply waits on one, whatever the reviewer's
-    // state says.
-    for thread in pr.unanswered() {
-        if !answer.contains(&thread.author) {
-            answer.push(thread.author.clone());
+    // A review thread without a reply, or with only an interim one, waits
+    // on its answer, whatever the reviewer's state says: the PR is not done
+    // with its review while one is open.
+    for author in to_answer {
+        if !answer.contains(author) {
+            answer.push(author.clone());
         }
     }
     if !answer.is_empty() {
@@ -1047,11 +1105,18 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         round: round.clone(),
         at: round_at(&phase),
     });
-    phase.threads_unanswered = facts
-        .prs
-        .iter()
-        .find(|pr| pr.task_id == task.id)
-        .map_or(0, |pr| pr.unanswered().count());
+    if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
+        phase.threads_unanswered = pr.unanswered().count();
+        let approvals: Vec<&DeliveryApproval> = facts
+            .approvals
+            .iter()
+            .filter(|approval| approval.task_id == task.id)
+            .collect();
+        phase.threads_to_answer = threads_to_answer(pr, &approvals)
+            .iter()
+            .map(|thread| thread.label())
+            .collect();
+    }
     phase
 }
 
@@ -1145,9 +1210,10 @@ fn phase_in_round(
         .iter()
         .find_map(|job| facts.queued.get(&job.id)?.warning.clone());
     let failing = failing_checks(&task.checks, &jobs);
-    // Replies to reviewers waiting for the user's approval hold no stage,
-    // but a push or the PR step is refused until every thread has one: a
-    // task whose next step is one of those waits on the user.
+    // Replies to reviewers waiting for the user's approval hold no stage
+    // and no push (fixes publish before their replies), but the PR step on
+    // an open PR is refused until every thread has one: a task whose next
+    // step is that waits on the user.
     let replies: Vec<Option<&str>> = facts
         .approvals
         .iter()
@@ -1161,7 +1227,7 @@ fn phase_in_round(
     let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
         waits_on: match &phase {
             Phase::NextStep {
-                rung: DeliveryRung::Push | DeliveryRung::Pr,
+                rung: DeliveryRung::Pr,
                 ..
             } if !replies.is_empty() => Waiter::User,
             _ => waits_on,
@@ -1173,6 +1239,7 @@ fn phase_in_round(
         warning: warning.clone(),
         failing_checks: failing.clone(),
         threads_unanswered: 0,
+        threads_to_answer: Vec::new(),
     };
 
     let decisions = facts
@@ -1520,9 +1587,34 @@ fn phase_in_round(
         }
     }
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
+        // A merged PR waits on nothing: the step left is what the task
+        // waits on, named, so the coordinator sees it among the idle ones.
+        if pr.state == "merged" {
+            return phase(
+                Phase::NextStep {
+                    rung,
+                    stage: stage.map(str::to_string),
+                },
+                Waiter::Coordinator,
+            );
+        }
         // Replies to reviewers are outside the ladder, but waiting for the
         // user's approval they are what the PR waits on.
-        let wait = pr_wait(pr, &replies, facts.review_optional.contains(&task.id));
+        let all: Vec<&DeliveryApproval> = facts
+            .approvals
+            .iter()
+            .filter(|approval| approval.task_id == task.id)
+            .collect();
+        let to_answer: Vec<String> = threads_to_answer(pr, &all)
+            .iter()
+            .map(|thread| thread.author.clone())
+            .collect();
+        let wait = pr_wait(
+            pr,
+            &replies,
+            &to_answer,
+            facts.review_optional.contains(&task.id),
+        );
         let waits_on = wait.waiter(unattended);
         return phase(
             Phase::Pr {
@@ -1814,9 +1906,11 @@ mod tests {
             }
         );
         assert_eq!(phase.waits_on, Waiter::Coordinator);
-        // A push is refused until the replies waiting for the user's
-        // approval are posted: then the user holds it, not the coordinator.
+        // A reply waiting for the user's approval does not hold the push
+        // (fixes publish before their replies); it holds the PR step.
         world.approvals.push(step("pr_reply", "pending", None));
+        assert_eq!(world.phase().waits_on, Waiter::Coordinator);
+        world.approvals.push(step("push", "executed", Some(11_000)));
         assert_eq!(world.phase().waits_on, Waiter::User);
     }
 
@@ -2084,6 +2178,62 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    /// The fix of a review round is pushed: every thread it left without the
+    /// reply that describes it (none, or only an interim one) is named to
+    /// the coordinator, and the PR does not read as waiting on its reviewer.
+    #[test]
+    fn a_thread_without_its_fix_reply_after_the_push_is_the_coordinators() {
+        use serde_json::json;
+        let thread = |id: u64, state: &str| {
+            json!({"id": id, "url": format!("https://github.com/o/r/pull/5#discussion_r{id}"),
+                   "author": "ana", "path": "a.rs", "line": id, "created_at": "", "state": state})
+        };
+        let pr = pr(json!({
+            "reviewers": ["ana"], "review_states": [{"login": "ana", "state": "answered"}],
+            "review_threads": [thread(1, "unanswered"), thread(2, "answered"),
+                               thread(3, "answered"), thread(4, "resolved"), thread(5, "unanswered")]
+        }));
+        let reply = |id: u64, status: &str, interim: bool| -> DeliveryApproval {
+            let mut reply = step("pr_reply", status, Some(id));
+            reply.id = format!("r{id}");
+            reply.comment_url = Some(format!("https://github.com/o/r/pull/5#discussion_r{id}"));
+            reply.interim = interim;
+            reply
+        };
+        // 2 has only an interim reply, 3 the one with its fix; 5's reply
+        // waits for its fix on GitHub and goes out by itself.
+        let replies = [
+            reply(2, "executed", true),
+            reply(3, "executed", false),
+            reply(5, "approved", false),
+        ];
+        let replies: Vec<&DeliveryApproval> = replies.iter().collect();
+        let named: Vec<String> = threads_to_answer(&pr, &replies)
+            .iter()
+            .map(|thread| thread.label())
+            .collect();
+        assert_eq!(
+            named,
+            [
+                "https://github.com/o/r/pull/5#discussion_r1 (ana en a.rs:1)",
+                "https://github.com/o/r/pull/5#discussion_r2 (ana en a.rs:2)"
+            ]
+        );
+        let wait = pr_wait(&pr, &[], &["ana".to_string()], false);
+        assert_eq!(
+            wait,
+            PrWait::Answer {
+                reviewers: vec!["ana".to_string()]
+            }
+        );
+        assert_eq!(wait.waiter(true), Waiter::Coordinator);
+        // Without them the reviewer is who it waits on.
+        assert_eq!(
+            pr_wait(&pr, &[], &[], false).waiter(true),
+            Waiter::Reviewers
+        );
+    }
+
     #[test]
     fn a_pr_waits_on_whoever_has_to_act_on_it() {
         use serde_json::json;
@@ -2283,7 +2433,12 @@ mod tests {
             ),
         ];
         for (over, replies, optional, wait, attended, unattended) in cases {
-            let got = pr_wait(&pr(over.clone()), &replies, optional);
+            let pr = pr(over.clone());
+            let to_answer: Vec<String> = threads_to_answer(&pr, &[])
+                .iter()
+                .map(|thread| thread.author.clone())
+                .collect();
+            let got = pr_wait(&pr, &replies, &to_answer, optional);
             assert_eq!(got, wait, "{over}");
             assert_eq!(got.waiter(false), attended, "{over}");
             assert_eq!(got.waiter(true), unattended, "{over}");
@@ -2330,6 +2485,28 @@ mod tests {
         let phase = world.phase();
         assert_eq!(phase.phase, Phase::Delivered);
         assert_eq!(phase.waits_on, Waiter::Nobody);
+    }
+
+    /// AGOS-129 · 1/6: PR #365 merged before its Jira step ran, and the task
+    /// sat as a merged PR. The step left is its phase, for the coordinator.
+    #[test]
+    fn a_merged_pr_with_a_step_left_names_that_step_for_the_coordinator() {
+        let mut world = World::new(vec![job("j1", "qa", Finished, Some("pass"))]);
+        for rung in ["commit", "push", "pr", "merge"] {
+            world.approvals.push(step(rung, "executed", Some(9_000)));
+        }
+        world.prs = vec![pr(serde_json::json!({"state": "merged"}))];
+        let phase = world.phase();
+        assert_eq!(
+            (phase.phase, phase.waits_on),
+            (
+                Phase::NextStep {
+                    rung: DeliveryRung::Jira,
+                    stage: Some(JIRA_AFTER_PR.into()),
+                },
+                Waiter::Coordinator
+            )
+        );
     }
 
     fn check(id: &str, command: &str, status: DeliveryJobStatus) -> DeliveryJob {

@@ -31,6 +31,7 @@ import {
   nowLine,
   prSummary,
   waitsOnLabel,
+  waitsOnPhrase,
   roundHistory,
   roundRung,
   roundStage,
@@ -197,7 +198,13 @@ describe("taskStatus words the phase Tinto derives", () => {
       created_at_ms: 1,
       updated_at_ms: 1,
     });
-    const qa_problems = [problem("open", 1), problem("still_failing", 2), problem("sent", 3)];
+    // One still failing has nothing for the user: QA reports it again as new.
+    const qa_problems = [
+      problem("open", 1),
+      problem("still_failing", 2),
+      problem("sent", 3),
+      problem("open", 4),
+    ];
     expect(status({ kind: "next_stage", role: "implementation" }, { qa_problems })).toEqual({
       group: "attention",
       tone: "attention",
@@ -580,10 +587,17 @@ describe("a followed PR", () => {
       group: "idle",
       label: "PR aprobado · siguiente: merge",
     });
-    const merged = [...upToJira, approval({ id: "m", rung: "merge", status: "executed" })];
-    expect(withPr({ state: "merged" }, ready, "coordinator", merged).label).toBe(
-      "PR fusionado · siguiente: Jira (merge)",
-    );
+    // AGOS-129 · 1/6: merged with its PR's Jira step left reads as unfinished.
+    expect(
+      status(
+        { kind: "next_step", rung: "jira", stage: "after_pr" },
+        { prs: [pr({ state: "merged" })] },
+      ).label,
+    ).toBe("PR fusionado · falta Jira (PR)");
+    expect(waitsOnPhrase("el coordinador")).toBe("espera al coordinador");
+    expect(waitsOnPhrase("ti")).toBe("te espera");
+    // A row that already says it does not say it twice.
+    expect(waitsOnPhrase("el coordinador", "Desbloqueada · espera al coordinador")).toBeNull();
     // Without the PR's Jira step, that one comes before the merge.
     expect(
       withPr({ review_decision: "approved" }, ready, "coordinator", upToJira.slice(0, 3)).label,

@@ -507,6 +507,45 @@ fn a_job_its_usage_limit_stopped_runs_again_later() {
 }
 
 #[test]
+fn a_restart_arms_again_the_usage_limit_retries_whose_stage_did_not_move_on() {
+    let h = harness();
+    let task = h.task("K-3C");
+    let limited = |id: &str, role: &str| -> DeliveryJob {
+        serde_json::from_value(json!({
+            "id": id, "task_id": task.id, "role": role, "attempt": 1, "agent": "codex",
+            "access": "workspace", "prompt": "events=codex-ok", "contract_version": 1,
+            "writes": true, "timeout_minutes": 60, "status": "failed",
+            "created_at_ms": 1, "started_at_ms": 1, "ended_at_ms": 2,
+            "error": "usage limit — Tinto lo reintenta en 60 minutos, cuando el límite puede haberse renovado."
+        }))
+        .unwrap()
+    };
+    let store = h.service.store().unwrap();
+    store.put_job(&limited("waits", "tests")).unwrap();
+    store
+        .put_job(&limited("moved-on", "implementation"))
+        .unwrap();
+    // That stage ran again since, on another agent.
+    let mut later = limited("later", "implementation");
+    later.created_at_ms = 3;
+    later.error = None;
+    store.put_job(&later).unwrap();
+    drop(store);
+
+    h.service.follow_running();
+    let retried = |id: &str| {
+        h.service
+            .overview()
+            .unwrap()
+            .jobs
+            .into_iter()
+            .find(|job| job.retry_of.as_deref() == Some(id))
+    };
+    eventually(|| retried("waits"));
+    assert!(retried("moved-on").is_none());
+}
+
+#[test]
 fn a_finished_process_without_a_result_fails() {
     let h = harness();
     let task = h.task("K-4");
@@ -875,6 +914,11 @@ fn a_paused_stage_holds_its_task_and_resource_until_it_resumes_in_its_session() 
         })
         .unwrap_err();
     assert_eq!(refused.category, "job_paused");
+    // Nor is the task removed under it, which would leave QA held for good.
+    assert_eq!(
+        h.service.remove_task(&task.id, true).unwrap_err().category,
+        "task_busy"
+    );
 
     // Resuming continues the same session and takes QA over.
     let resumed = h.service.resume(&paused.id).unwrap();
@@ -1558,6 +1602,7 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
 
@@ -3259,6 +3304,7 @@ fn a_split_issue_moves_in_jira_once_and_closes_with_its_last_package() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
     // A middle package's ladder ends at its merge; the last climbs the whole
@@ -3348,6 +3394,7 @@ fn a_package_merges_after_the_one_it_builds_on_into_that_ones_base() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
     // Its PR goes into package 1's branch: merging it now would land there.
@@ -4152,6 +4199,7 @@ fn commit_plan(
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     }
 }
@@ -4438,6 +4486,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             jira_statuses: Vec::new(),
             comment_url: None,
             resolve_thread: false,
+            interim: false,
             record: false,
         })
         .unwrap();
@@ -4512,6 +4561,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             jira_statuses: Vec::new(),
             comment_url: None,
             resolve_thread: false,
+            interim: false,
             record: false,
         })
         .unwrap_err();
@@ -4692,6 +4742,7 @@ fn step(task: &DeliveryTask, rung: DeliveryRung, title: &str) -> NewApproval {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     }
 }
@@ -4941,6 +4992,7 @@ fn a_commit_whose_parents_alone_were_fixed_outside_tinto_stays_done() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     });
     assert!(push.is_ok(), "{push:?}");
@@ -5040,6 +5092,10 @@ struct FakeGitHub {
     /// The repo's conversation comments and its PRs' review summaries.
     conversation: std::sync::Mutex<serde_json::Value>,
     review_bodies: std::sync::Mutex<serde_json::Value>,
+    /// When set, `create_pr` says it started and waits to be let go.
+    #[allow(clippy::type_complexity)]
+    create_gate:
+        std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl FakeGitHub {
@@ -5055,6 +5111,7 @@ impl FakeGitHub {
             review_comments: std::sync::Mutex::new(json!([])),
             conversation: std::sync::Mutex::new(json!([])),
             review_bodies: std::sync::Mutex::new(json!([])),
+            create_gate: std::sync::Mutex::new(None),
         })
     }
 }
@@ -5098,6 +5155,7 @@ impl super::prs::GitHub for FakeGitHub {
         subject: &str,
         _body: &str,
         delete_branch: bool,
+        _head: Option<&str>,
     ) -> Result<(), super::DeliveryError> {
         self.merged.lock().unwrap().push(match delete_branch {
             true => format!("{url} {method} {subject}"),
@@ -5116,6 +5174,10 @@ impl super::prs::GitHub for FakeGitHub {
         body: &str,
     ) -> Result<String, super::DeliveryError> {
         assert_eq!(repo, "o/r");
+        if let Some((started, release)) = self.create_gate.lock().unwrap().as_ref() {
+            started.send(()).unwrap();
+            release.recv().unwrap();
+        }
         self.actions
             .lock()
             .unwrap()
@@ -5294,6 +5356,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         review_comments: std::sync::Mutex::new(json!([])),
         conversation: std::sync::Mutex::new(json!([])),
         review_bodies: std::sync::Mutex::new(json!([])),
+        create_gate: std::sync::Mutex::new(None),
     });
     h.service.set_github(github.clone());
 
@@ -5369,6 +5432,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         review_comments: std::sync::Mutex::new(json!([])),
         conversation: std::sync::Mutex::new(json!([])),
         review_bodies: std::sync::Mutex::new(json!([])),
+        create_gate: std::sync::Mutex::new(None),
     });
     h.service.set_github(github.clone());
     let merge = |method: Option<&str>| NewApproval {
@@ -5385,6 +5449,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
     assert_eq!(
@@ -5706,6 +5771,7 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
     let commit = h
@@ -5859,6 +5925,7 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
     let next = h.service.request_approval(jira(None)).unwrap();
@@ -6044,6 +6111,7 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
@@ -6266,6 +6334,7 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         jira_statuses: statuses,
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
 
@@ -7286,6 +7355,23 @@ fn error_text(result: &serde_json::Value) -> String {
 }
 
 #[test]
+fn a_refused_sync_leaves_the_tasks_restack_base_as_it_was() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("W-0");
+    std::fs::write(worktree.join("a.txt"), "a").unwrap();
+    git(&worktree, &["add", "a.txt"]);
+    git(&worktree, &["commit", "-q", "-m", "a"]);
+    // Refused: a sync needs its text.
+    let refused = coordinator.write(
+        "request_approval",
+        json!({"task_id": task_id, "rung": "sync", "title": "", "restack_from": "HEAD~1"}),
+    );
+    error_text(&refused);
+    assert_eq!(h.service.task(&task_id).unwrap().restack_from, None);
+}
+
+#[test]
 fn a_pending_approval_can_be_withdrawn_with_a_reason_but_not_a_decided_one() {
     let h = harness();
     let coordinator = Coordinator::start(&h);
@@ -7462,6 +7548,46 @@ fn approving_the_pr_step_opens_the_pr_with_the_approved_text() {
     assert_eq!(published["title"], "feat: open it");
     assert_eq!(published["body"], "## Summary\n\nWhat was approved.");
     assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 50);
+}
+
+#[test]
+fn a_reject_while_the_approved_step_runs_waits_for_it_and_is_refused() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("O-6");
+    let github = FakeGitHub::new(json!({}), json!([]));
+    let (started, opening) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    *github.create_gate.lock().unwrap() = Some((started, released));
+    h.service.set_github(github.clone());
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": "a-pr", "task_id": task.id, "rung": "pr", "title": "feat: open it",
+        "body": "What was approved.", "status": "pending",
+        "requested_by": "coord", "requested_at_ms": 1
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&step).unwrap();
+
+    let service = h.service.clone();
+    let approving = std::thread::spawn(move || service.decide_approval("a-pr", true, None));
+    opening.recv().unwrap();
+    let service = h.service.clone();
+    let (rejected, rejecting) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = rejected.send(service.decide_approval("a-pr", false, None));
+    });
+    // The reject waits while the approved step opens the PR.
+    assert!(rejecting.recv_timeout(Duration::from_millis(300)).is_err());
+    release.send(()).unwrap();
+
+    let done = approving.join().unwrap().unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    let refused = rejecting.recv().unwrap().unwrap_err();
+    assert_eq!(refused.category, "approval_decided");
+    assert_eq!(
+        h.service.approval("a-pr").unwrap().status,
+        DeliveryApprovalStatus::Executed
+    );
 }
 
 #[test]
@@ -7991,20 +8117,17 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
          "body": "typo", "diff_hunk": "@@ -1,1 +1,1 @@\n+x"}
     ]);
     h.service.set_github(github.clone());
-    // The fix is published, so the threads can be resolved.
+    // The fix is on GitHub, so the replies go out and the threads resolve.
     let task = h.service.task(&task_id).unwrap();
-    let remote = format!("refs/remotes/origin/{}", task.branch);
-    git(
-        &PathBuf::from(plain_path(&task.worktree)),
-        &["update-ref", &remote, "HEAD"],
-    );
+    github.snapshot.lock().unwrap()["headRefOid"] =
+        json!(in_worktree(&task, &["rev-parse", "HEAD"]));
     // Past the brainstorm a reply still waits for the user.
     h.service.end_brainstorm(&coordinator.run_id).unwrap();
     let ask = |url: &str, body: &str| {
         coordinator.write(
             "request_approval",
-            json!({"task_id": task_id, "rung": "pr_reply", "comment_url": url,
-                   "body": body, "resolve_thread": true}),
+            // A reply that describes its fix resolves its thread by default.
+            json!({"task_id": task_id, "rung": "pr_reply", "comment_url": url, "body": body}),
         )
     };
 
@@ -8134,7 +8257,7 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
 }
 
 #[test]
-fn a_reply_comes_with_the_users_style_and_is_refused_with_a_label_or_an_unpushed_fix() {
+fn a_reply_comes_with_the_users_style_and_is_refused_with_a_status_label() {
     let h = harness();
     github_origin(&h);
     let coordinator = Coordinator::start(&h);
@@ -8207,25 +8330,18 @@ fn a_reply_comes_with_the_users_style_and_is_refused_with_a_label_or_an_unpushed
     assert_eq!(edited.notice, None);
     withdraw(&asked);
 
-    // Resolving waits for the fix to be on the remote branch.
-    let task = h.service.task(&task_id).unwrap();
-    let remote = format!("refs/remotes/origin/{}", task.branch);
-    let refused = error_text(&ask("The dialog now closes once.", true));
-    assert!(refused.contains("no está publicada"), "{refused}");
-    git(&worktree, &["update-ref", &remote, "HEAD"]);
+    // An interim reply does not resolve its thread. One that describes an
+    // unpublished fix is asked like any other: it waits once approved.
+    let interim = coordinator.write(
+        "request_approval",
+        json!({"task_id": task_id, "rung": "pr_reply",
+               "comment_url": "https://github.com/o/r/pull/299#discussion_r3000",
+               "body": "The dialog will close once; the fix comes next.",
+               "resolve_thread": true, "interim": true}),
+    );
+    assert!(error_text(&interim).contains("interim"), "{interim}");
     std::fs::write(worktree.join("README.md"), "fixed\n").unwrap();
-    let refused = error_text(&ask("The dialog now closes once.", true));
-    assert!(
-        refused.contains("README.md tiene cambios sin commit"),
-        "{refused}"
-    );
     git(&worktree, &["commit", "-qam", "fix"]);
-    let refused = error_text(&ask("The dialog now closes once.", true));
-    assert!(
-        refused.contains("que cambia README.md, no está en origin/"),
-        "{refused}"
-    );
-    git(&worktree, &["update-ref", &remote, "HEAD"]);
     let asked = ask("The dialog now closes once.", true);
     assert_eq!(
         asked["structuredContent"]["resolve_thread"], true,
@@ -8243,8 +8359,9 @@ fn a_reply_comes_with_the_users_style_and_is_refused_with_a_label_or_an_unpushed
 
 /// AIRInstitute/agentos#363: of a reviewer's three comments one got a reply
 /// at once; the other two waited 26 hours for their fix, and the PR looked
-/// ready for review meanwhile. (Resolving still waits for the pushed fix:
-/// `a_reply_comes_with_the_users_style_and_is_refused_with_a_label_or_an_unpushed_fix`.)
+/// ready for review meanwhile. (A reply that describes a fix waits for it on
+/// GitHub, and the push never waits for the threads:
+/// `replies_and_the_review_asked_again_wait_for_the_fix_on_github`.)
 #[test]
 fn a_pr_goes_back_to_review_only_once_every_review_thread_has_a_reply() {
     let h = harness();
@@ -8314,20 +8431,17 @@ fn a_pr_goes_back_to_review_only_once_every_review_thread_has_a_reply() {
     h.service.refresh_pr(&task_id, Duration::ZERO).unwrap();
     assert_eq!(alerts(), 2);
 
-    // Sending it back to review is refused, naming each thread.
-    let refused = error_text(&coordinator.write(
-        "request_approval",
-        json!({"task_id": task_id, "rung": "push", "title": "Publicar"}),
-    ));
-    assert!(refused.contains("threads_unanswered"), "{refused}");
-    for id in [2, 3] {
-        assert!(refused.contains(&format!("discussion_r{id} (rev en README.md:{id})")));
-    }
+    // Closing the round is refused, naming each thread.
     let refused = h
         .service
         .resolve_round(&task_id, "Respondido en el PR", None, "coordinator")
         .unwrap_err();
     assert_eq!(refused.category, "threads_unanswered");
+    for id in [2, 3] {
+        assert!(refused
+            .message
+            .contains(&format!("discussion_r{id} (rev en README.md:{id})")));
+    }
 
     // An interim reply goes out before the fix is pushed and answers it.
     let reply = coordinator.write(
@@ -8335,7 +8449,7 @@ fn a_pr_goes_back_to_review_only_once_every_review_thread_has_a_reply() {
         json!({"task_id": task_id, "rung": "pr_reply",
                "comment_url": "https://github.com/o/r/pull/299#discussion_r2",
                "body": "The parser will reject empty names; the fix comes with the next push.",
-               "resolve_thread": false}),
+               "interim": true}),
     );
     let reply_id = reply["structuredContent"]["id"].as_str().unwrap();
     let posted = h.service.decide_approval(reply_id, true, None).unwrap();
@@ -8354,11 +8468,7 @@ fn a_pr_goes_back_to_review_only_once_every_review_thread_has_a_reply() {
         .push(json!({"id": 5, "in_reply_to_id": 3, "user": {"login": "me"}, "body": "On it."}));
     let on_github = github.review_comments.lock().unwrap().clone();
     github.snapshot.lock().unwrap()["reviewComments"] = on_github;
-    let asked = coordinator.write(
-        "request_approval",
-        json!({"task_id": task_id, "rung": "push", "title": "Publicar"}),
-    );
-    assert_eq!(asked["isError"], serde_json::Value::Null, "{asked}");
+    h.service.refresh_pr(&task_id, Duration::ZERO).unwrap();
     assert!(h
         .service
         .task_pr(&task_id)
@@ -8366,6 +8476,226 @@ fn a_pr_goes_back_to_review_only_once_every_review_thread_has_a_reply() {
         .unwrap()
         .unanswered_threads
         .is_empty());
+}
+
+/// AIRInstitute/agentos#373: GitHub still had the commit reviewed before,
+/// green, when Tinto posted the approved replies describing fixes only in
+/// local commits and asked the review again; the develop sync was resolved
+/// locally but neither committed nor pushed, its checks failing for the
+/// environment. The reviewer saw the same diff and asked for changes again.
+#[test]
+fn replies_and_the_review_asked_again_wait_for_the_fix_on_github() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delivery.sqlite");
+    let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+    let _origin = bare_origin(&h);
+    set_repo_checks(&h, &["exit=1", "exit=0"]);
+    let task = h.task("AGOS-373");
+    let head = || in_worktree(&task, &["rev-parse", "HEAD"]);
+    // What GitHub has: the old head, reviewed and green.
+    write_files(&task, &["a.txt"]);
+    git(&task.worktree, &["add", "--all"]);
+    git(&task.worktree, &["commit", "-q", "-m", "work"]);
+    let old = head();
+    let thread = json!({"id": 1, "path": "a.txt", "line": 1, "position": 1,
+        "html_url": "https://github.com/o/r/pull/299#discussion_r1", "user": {"login": "rev"},
+        "created_at": "2026-11-09T08:15:00Z", "body": "Check the participant's tenant.",
+        "diff_hunk": "@@ -0,0 +1,1 @@\n+a.txt"});
+    let green = json!([{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]);
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "author": {"login": "me"}, "headRefOid": old,
+               "statusCheckRollup": green.clone(), "reviews": [], "comments": [],
+               "reviewComments": []}),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/299").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    // Asked once, rev reviewed it and asked for changes.
+    h.service
+        .change_pr_reviewers(&task.id, vec!["rev".into()], Vec::new())
+        .unwrap();
+    {
+        let mut snapshot = github.snapshot.lock().unwrap();
+        snapshot["reviewDecision"] = json!("CHANGES_REQUESTED");
+        snapshot["reviews"] = json!([{"author": {"login": "rev"}, "state": "CHANGES_REQUESTED",
+                                      "submittedAt": "2026-11-09T08:15:52Z"}]);
+        snapshot["reviewComments"] = json!([thread]);
+    }
+    *github.review_comments.lock().unwrap() = json!([thread]);
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    github.reviews.lock().unwrap().clear();
+
+    // The fix, in a local commit; then the sync with the base stops on a
+    // conflict, resolved but not committed, and the checks fail.
+    std::fs::write(task.worktree.join("a.txt"), "checks the tenant\n").unwrap();
+    std::fs::write(task.worktree.join("shared.txt"), "task\n").unwrap();
+    git(&task.worktree, &["add", "--all"]);
+    git(
+        &task.worktree,
+        &["commit", "-q", "-m", "fix: check the tenant"],
+    );
+    let fix = head();
+    std::fs::write(h.repo.path().join("shared.txt"), "main\n").unwrap();
+    git(h.repo.path(), &["add", "--all"]);
+    git(h.repo.path(), &["commit", "-q", "-m", "main moves on"]);
+    let main = in_worktree(&task, &["rev-parse", "main"]);
+    assert!(start_merge(&task));
+    std::fs::write(task.worktree.join("shared.txt"), "task and main\n").unwrap();
+    git(&task.worktree, &["add", "shared.txt"]);
+    h.service
+        .set_task_checks(&task.id, vec!["exit=1".into()])
+        .unwrap();
+    for job in h.service.run_checks(&task.id).unwrap() {
+        h.wait(&job.id);
+    }
+
+    // The reply describing the fix (resolving its thread) is approved with
+    // the review asked again: neither goes out, and both say why.
+    let reply = h
+        .service
+        .request_approval(NewApproval {
+            body: "Each participant is now checked against the tenant.".into(),
+            comment_url: Some("https://github.com/o/r/pull/299#discussion_r1".into()),
+            resolve_thread: true,
+            ..step(&task, DeliveryRung::PrReply, "")
+        })
+        .unwrap();
+    h.service
+        .approve_replies(
+            vec![super::prs::ApprovedReply {
+                approval_id: reply.id.clone(),
+                body: reply.body.clone(),
+                images: Vec::new(),
+            }],
+            vec!["rev".into()],
+        )
+        .unwrap();
+    let held = eventually(|| {
+        let pr = h.service.task_pr(&task.id).unwrap().unwrap();
+        pr.review_again_blocker.is_some().then_some(pr)
+    });
+    let reply = h.service.approval(&reply.id).unwrap();
+    assert_eq!(reply.status, DeliveryApprovalStatus::Approved);
+    assert_eq!(reply.head.as_deref(), Some(fix.as_str()));
+    let notice = reply.notice.clone().unwrap();
+    assert!(
+        notice.starts_with(super::published::REPLY_HELD)
+            && notice.contains(&old[..7])
+            && notice.contains("hay un merge o un restack en curso"),
+        "{notice}"
+    );
+    assert_eq!(held.review_again, ["rev"]);
+    // The push says what it waits on.
+    let refused = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publicar"))
+        .unwrap_err();
+    assert_eq!(refused.category, "merge_in_progress");
+
+    // The PR's head moves on GitHub to a commit without the fix, and Tinto
+    // restarts: the reply still waits, checked against the new head.
+    github.snapshot.lock().unwrap()["headRefOid"] = json!(main);
+    let service = reopen(&path, &h);
+    service.set_github(github.clone());
+    service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let notice = service.approval(&reply.id).unwrap().notice.unwrap();
+    assert!(notice.contains(&main[..7]), "{notice}");
+    let sent = |what: &str| {
+        github
+            .actions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|action| action.starts_with(what))
+            .count()
+    };
+    assert_eq!((sent("reply"), sent("resolve")), (0, 0));
+    assert!(github.reviews.lock().unwrap().is_empty());
+
+    // The environment is back: the checks pass, the merge is committed and
+    // the push goes out with the thread still unanswered.
+    service
+        .set_task_checks(&task.id, vec!["exit=0".into()])
+        .unwrap();
+    for job in service.run_checks(&task.id).unwrap() {
+        assert_eq!(
+            wait_on(&service, &job.id).status,
+            DeliveryJobStatus::Finished
+        );
+    }
+    let merge = service
+        .request_approval(step(&task, DeliveryRung::Commit, "Merge main"))
+        .unwrap();
+    let merged = service.decide_approval(&merge.id, true, None).unwrap();
+    assert_eq!(
+        merged.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        merged.outcome
+    );
+    let push = service
+        .request_approval(step(&task, DeliveryRung::Push, "Publicar"))
+        .unwrap();
+    let pushed = service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(
+        pushed.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        pushed.outcome
+    );
+    // Until GitHub shows it, nothing goes out.
+    service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(sent("reply"), 0);
+
+    // GitHub has it, CI still running there: the reply goes out and
+    // resolves its thread; the review waits for CI on this head.
+    {
+        let mut snapshot = github.snapshot.lock().unwrap();
+        snapshot["headRefOid"] = json!(head());
+        snapshot["statusCheckRollup"] = json!([{"name": "ci", "status": "IN_PROGRESS"}]);
+    }
+    service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        service.approval(&reply.id).unwrap().status,
+        DeliveryApprovalStatus::Executed
+    );
+    assert_eq!(
+        github.actions.lock().unwrap().as_slice(),
+        [
+            "reply 1 Each participant is now checked against the tenant.".to_string(),
+            "resolve 1".to_string()
+        ]
+    );
+    let pr = service.task_pr(&task.id).unwrap().unwrap();
+    assert!(github.reviews.lock().unwrap().is_empty());
+    assert!(
+        pr.review_again_blocker
+            .as_deref()
+            .is_some_and(|why| why.contains("checks en curso")),
+        "{:?}",
+        pr.review_again_blocker
+    );
+
+    // CI passes on it: the review is asked, once, also across a restart.
+    {
+        let mut snapshot = github.snapshot.lock().unwrap();
+        snapshot["statusCheckRollup"] = green;
+        snapshot["reviewComments"] = github.review_comments.lock().unwrap().clone();
+    }
+    service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let again = reopen(&path, &h);
+    again.set_github(github.clone());
+    again.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        github.reviews.lock().unwrap().as_slice(),
+        ["https://github.com/o/r/pull/299 rev".to_string()]
+    );
+    assert_eq!((sent("reply"), sent("resolve")), (1, 1));
+    let pr = again.task_pr(&task.id).unwrap().unwrap();
+    assert!(pr.review_again.is_empty());
+    assert_eq!(pr.review_again_blocker, None);
 }
 
 #[test]
@@ -9738,6 +10068,7 @@ fn a_drifted_push_clears_once_the_remote_branch_has_what_tinto_published() {
         jira_statuses: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        interim: false,
         record: false,
     };
     let commit = h
@@ -11608,6 +11939,9 @@ fn a_reply_shows_the_qa_screenshots_the_user_chose_from_a_branch_deleted_with_th
         .set_reply_images(&id, vec![image("other.png")])
         .is_err());
     h.service.set_reply_images(&id, vec![image(shot)]).unwrap();
+    // The fix the reply describes is on GitHub.
+    github.snapshot.lock().unwrap()["headRefOid"] =
+        json!(in_worktree(&task, &["rev-parse", "HEAD"]));
     let posted = h.service.decide_approval(&id, true, None).unwrap();
     assert_eq!(
         posted.status,
@@ -12189,10 +12523,7 @@ fn browser_qa_starts_on_a_prepared_stack_beside_a_command_line_qa() {
     assert!(!cli.qa_browser && cli.qa_stack.is_none());
     // Each holds its own environment's resource: both run at once.
     h.wait_status(&browser.id, DeliveryJobStatus::Started);
-    assert_eq!(
-        h.service.job(&cli.id).unwrap().status,
-        DeliveryJobStatus::Started
-    );
+    h.wait_status(&cli.id, DeliveryJobStatus::Started);
 
     let browser = h.wait(&browser.id);
     let prepare = browser.prepare.clone().unwrap();
@@ -13176,6 +13507,7 @@ fn past_the_brainstorm_tinto_asks_the_push_and_jira_steps_itself() {
             jira_statuses: Vec::new(),
             comment_url: None,
             resolve_thread: false,
+            interim: false,
             record: false,
         })
         .unwrap();

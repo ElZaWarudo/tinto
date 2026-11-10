@@ -32,7 +32,7 @@ Each device has its own room and key: revoking one leaves the others untouched.
 - Both peers open `wss://<relay>/v1/rooms/<roomId>?role=desktop|phone`.
 - A room holds at most one `desktop` and one `phone`. A second connection with the same role replaces the first (close code 4000).
 - The relay forwards each **binary** frame from one peer to the other, unchanged. A frame sent while the other peer is absent is dropped. Text frames close the socket (1003).
-- Limits: a frame is at most **256 KiB** (larger closes with 1009); at most **60 frames and 4 MiB per 10 s** per socket (more closes with 1008). The relay pings every 30 s and drops sockets that miss a pong. A room exists only while one of its sockets does.
+- Limits: a frame is at most **256 KiB** (larger closes with 1009); at most **60 frames and 4 MiB per 10 s** per socket (more closes with 1008). The relay pings every 30 s and drops sockets that miss a pong. A room exists only while one of its sockets does. The relay holds at most **2 000 sockets** (so at most 2 000 rooms); a connection beyond that is refused with HTTP 503 until one leaves.
 - `GET /healthz` answers `200 ok`.
 
 ## 3. Encryption and framing
@@ -60,7 +60,7 @@ Every plaintext carries:
 
 ### Freshness (replay rejection)
 
-- `hello` is accepted unless its `seq` is not greater than the last seen for the same `sid`. A new `sid` becomes the current peer session.
+- `hello` is accepted unless its `seq` is not greater than the last seen for the same `sid`, or its `sid` is one the receiver's session already replaced. A new `sid` becomes the current peer session, and the one it replaces is retired for good.
 - Every other message is accepted only if its `sid` is the current peer session, its `peer` equals the receiver's own `sid`, and its `seq` is greater than the last accepted one.
 - When a `hello` arrives whose `peer` is not the receiver's `sid`, the receiver answers with its own `hello` (with `peer` set). So each side learns the other's session without the relay telling anyone who is present.
 
@@ -71,6 +71,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
 ### Phone → desktop
 
 - `hello`: `{ "device": "<name, ≤ 64 chars>" }`.
+- `ping`: `{}`, sent every 30 s once the desktop's session is known (the desktop sends it too). Each side takes the other as gone after 75 s without a frame from it: Tinto stops showing the phone online, the phone goes back to waiting for Tinto. An unknown `type` is ignored, so older peers drop it.
 - `action`: `{ "id": "<request id, ≤ 64 chars>", "action": { "action": "<name>", ... } }`. Only these, with exactly these fields:
 
 | `action`             | fields                                                     | Tinto calls (as the user)                        |
@@ -81,7 +82,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
 | `send_qa_problems`   | `task_id`, `choices: [{ "problem_id", "solution" }]`       | `send_qa_problems(task_id, choices)`             |
 | `set_run_paused`     | `run_id`, `paused` (bool)                                  | `set_run_paused(run_id, paused)`                 |
 
-  Anything else (an unknown action, an extra field) is refused with `error`. `decide_approval` with `approve: true` is refused unless `digest` equals the approval's current digest (§5), so the phone approves exactly the text it showed; an approval whose text did not fit (`truncated`) can only be approved in Tinto. The same service validation as in the desktop panel applies to all of them.
+  Anything else (an unknown action, an extra field) is refused with `error`. `decide_approval` with `approve: true` is refused unless `digest` equals the approval's current digest (§5), so the phone approves exactly the text it showed; an approval whose text did not fit (`truncated`) can only be approved in Tinto. `answer_decision` on a decision with `in_tinto` (§5) is refused, except `denied` on a permission. The same service validation as in the desktop panel applies to all of them.
 
 ### Desktop → phone
 
@@ -102,7 +103,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
               "pr": { "number", "url", "state", "draft", "conflicts", "ci", "review_decision" } | null }],
   "decisions": [{ "id", "task_id", "kind", "question", "detail", "text", "command",
                   "options": [{ "label", "consequence", "recommended" }],
-                  "recommendation": { "why", "basis", "unknown" } | null, "blocking" }],
+                  "recommendation": { "why", "basis", "unknown" } | null, "blocking", "in_tinto" }],
   "approvals": [{ "id", "task_id", "rung", "stage", "title", "body",
                   "commits": ["<message>"], "merge_method", "jira_statuses", "reviewers",
                   "requested_at_ms", "digest", "truncated" }],
@@ -117,6 +118,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
 - `failures`: the 5 latest failed jobs, newest first, `error` cut to 500 characters.
 - `digest`: lowercase hex SHA-256 of the approval's fields as sent (before cutting). Opaque to the phone.
 - `truncated`: some text of the approval was longer than 16 000 characters and was cut.
+- `in_tinto`: the phone does not show all the decision would grant: a permission with full access, read or write folders, scripts, warnings, unfrozen files or a command over 4 000 characters, or a `text` decision whose text is over 4 000 characters (the phone gets it cut). Only Tinto allows or approves it; the phone can deny a permission.
 - Strings other than approval texts are cut to 4 000 characters. If the snapshot is still too large, `failures` and decision `detail` are dropped.
 
 Not sent, ever: file contents, diffs, logs, prompts, paths, tokens, settings. The only code the phone shows is what a decision already carries (`text`, `command`).

@@ -66,7 +66,11 @@ function PrReviewers({ pr }: { pr: DeliveryPr }) {
     if (!open || candidates) return;
     let live = true;
     getDeliveryPrReviewers(pr.task_id).then(
-      (logins) => live && setCandidates(logins),
+      (logins) => {
+        if (!live) return;
+        setError(null);
+        setCandidates(logins);
+      },
       (cause) =>
         live &&
         setError(
@@ -186,6 +190,14 @@ export function PrSection({ pr }: { pr: DeliveryPr }) {
         )}
         {pr.state === "open" && (
           <ul className="delivery-pr__facts">
+            {(pr.review_again?.length ?? 0) > 0 && (
+              <li role="status">
+                Revisión pedida de nuevo a {pr.review_again?.join(", ")} · espera
+                {pr.review_again_blocker
+                  ? `: ${pr.review_again_blocker}`
+                  : " a leer el PR en GitHub"}
+              </li>
+            )}
             <li>
               Revisión:{" "}
               <strong>

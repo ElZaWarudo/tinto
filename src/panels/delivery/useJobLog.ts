@@ -17,8 +17,10 @@ export function useJobLog(job: DeliveryJob): (DeliveryJobLog & { skipped: number
     let active = true;
     const load = async () => {
       try {
-        const chunk = await getDeliveryJobLog(job.id, nextLine.current);
-        if (!active) return;
+        const from = nextLine.current;
+        const chunk = await getDeliveryJobLog(job.id, from);
+        // A slow read overtaken by another from the same line adds nothing.
+        if (!active || from !== nextLine.current) return;
         nextLine.current = chunk.next_line;
         setLog((previous) => {
           const entries = [...(previous?.entries ?? []), ...chunk.entries];

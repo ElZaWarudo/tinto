@@ -154,11 +154,28 @@ struct Watches {
     /// Dirs vigilados por root (Linux).
     #[cfg(target_os = "linux")]
     dirs: HashMap<PathBuf, HashSet<PathBuf>>,
+    /// Gitdir vigilado por root de worktree enlazado: su HEAD e index
+    /// viven fuera del root.
+    git_dirs: HashMap<PathBuf, PathBuf>,
 }
 
 impl Watches {
+    fn watch_git_dir(&mut self, root: &Path, classifier: &PathClassifier) {
+        if let Some(git_dir) = classifier.git_dir() {
+            if self
+                .watcher
+                .watch(git_dir, RecursiveMode::NonRecursive)
+                .is_ok()
+            {
+                self.git_dirs
+                    .insert(root.to_path_buf(), git_dir.to_path_buf());
+            }
+        }
+    }
+
     #[cfg(not(target_os = "linux"))]
-    fn mount(&mut self, root: &Path, _classifier: &PathClassifier) -> notify::Result<()> {
+    fn mount(&mut self, root: &Path, classifier: &PathClassifier) -> notify::Result<()> {
+        self.watch_git_dir(root, classifier);
         self.watcher.watch(root, RecursiveMode::Recursive)
     }
 
@@ -166,6 +183,7 @@ impl Watches {
     /// dejaron de aplicar. Sirve de montaje y de re-sync tras un rebuild.
     #[cfg(target_os = "linux")]
     fn mount(&mut self, root: &Path, classifier: &PathClassifier) -> notify::Result<()> {
+        self.watch_git_dir(root, classifier);
         let previous = self.dirs.remove(root).unwrap_or_default();
         self.add_tree(root, root, classifier)?;
         let current = &self.dirs[root];
@@ -223,6 +241,9 @@ impl Watches {
         }
         #[cfg(not(target_os = "linux"))]
         let _ = self.watcher.unwatch(root);
+        if let Some(git_dir) = self.git_dirs.remove(root) {
+            let _ = self.watcher.unwatch(&git_dir);
+        }
     }
 }
 
@@ -272,6 +293,7 @@ impl FsWatcher {
             watcher,
             #[cfg(target_os = "linux")]
             dirs: HashMap::new(),
+            git_dirs: HashMap::new(),
         }));
 
         let debounce_handle = tokio::spawn(debounce::run(debounce_rx, batch_tx));
@@ -380,7 +402,15 @@ impl FsWatcher {
                     // ya encuentra su clasificador (sin ventana de pérdida
                     // durante el walk de construcción).
                     let Some(classifier) = self.send_classifier(&root, &fs_watch) else {
-                        continue; // ya reportado por el canal
+                        // Ya reportado por el canal. Un root muerto sigue
+                        // muerto: sin esto, `mounted` lo da por sano en la
+                        // próxima pasada y nunca se remonta.
+                        if was_removed_live {
+                            if let Ok(mut dead) = self.dead_roots.lock() {
+                                dead.insert(root);
+                            }
+                        }
+                        continue;
                     };
                     let mounted = match self.watches.lock() {
                         Ok(mut watches) => watches.mount(&root, &classifier),
@@ -620,12 +650,21 @@ fn route_event(
 
     let timestamp_ms = now_ms();
     for normalized in normalize::normalize(event) {
-        // Repo dueño del path: el root montado más profundo que lo prefija.
+        // Repo dueño del path: el root (o gitdir de worktree enlazado)
+        // montado más profundo que lo prefija.
         let Some(root) = repos
-            .keys()
-            .filter(|root| normalized.path.starts_with(root))
-            .max_by_key(|root| root.as_os_str().len())
-            .cloned()
+            .iter()
+            .filter_map(|(root, repo)| {
+                [Some(root.as_path()), repo.classifier.git_dir()]
+                    .into_iter()
+                    .flatten()
+                    .filter(|prefix| normalized.path.starts_with(prefix))
+                    .map(|prefix| prefix.as_os_str().len())
+                    .max()
+                    .map(|len| (root, len))
+            })
+            .max_by_key(|(_, len)| *len)
+            .map(|(root, _)| root.clone())
         else {
             continue; // Evento fuera de los repos montados.
         };
@@ -1050,6 +1089,36 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worktree_enlazado_avisa_head_e_index_de_su_gitdir() {
+        // `.git` es un archivo: HEAD e index viven en el gitdir del worktree,
+        // fuera del root montado.
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join("main/.git/worktrees/wt");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/wt\n").unwrap();
+        let root = temp.path().join("wt");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".git"), "gitdir: ../main/.git/worktrees/wt\n").unwrap();
+        let entry = RepoEntry::local(root.canonicalize().unwrap(), None, vec![]);
+
+        let (mut watcher, mut rx) = FsWatcher::new().unwrap();
+        watcher.watch_workbench(std::slice::from_ref(&entry));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        for file in ["HEAD", "index"] {
+            fs::write(git_dir.join(file), "x").unwrap();
+            assert!(
+                wait_for(&mut rx, |m| batch_has(m, Classification::GitMeta, file))
+                    .await
+                    .is_some(),
+                "falta GitMeta de {file} del gitdir enlazado"
+            );
+        }
+
+        watcher.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ae4_remount_conmuta_los_watches() {
         let a = fixture_repo("");
         let b = fixture_repo("");
@@ -1373,6 +1442,10 @@ mod tests {
         })
         .await
         .expect("RepoRemoved");
+
+        // Un reintento mientras falta la carpeta falla sin olvidar que el
+        // root está muerto.
+        watcher.watch_workbench(std::slice::from_ref(&entry));
 
         // El repo reaparece (mismo path) y el remount explícito lo revive.
         fs::create_dir_all(root.join("src")).unwrap();

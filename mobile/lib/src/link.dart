@@ -45,6 +45,13 @@ class LinkClient extends ChangeNotifier {
   Timer? _retry;
   bool _closed = false;
 
+  /// Each side pings the other every 30 s (§4); this long without a frame
+  /// from Tinto, it left.
+  static const _pingEvery = Duration(seconds: 30);
+  static const _desktopSilence = Duration(seconds: 75);
+  Timer? _ping;
+  DateTime _heard = DateTime.now();
+
   void _set(LinkState next, {String? error}) {
     state = next;
     this.error = error;
@@ -67,13 +74,23 @@ class LinkClient extends ChangeNotifier {
         onError: (_) => _lost(),
       );
       _set(LinkState.waitingDesktop);
+      _ping?.cancel();
+      _ping = Timer.periodic(_pingEvery, (_) => _tick());
       await _send('hello', {'device': pairing.device});
     } catch (e) {
       _lost(error: 'No se pudo conectar con el relay.');
     }
   }
 
+  void _tick() {
+    if (state == LinkState.paired && DateTime.now().difference(_heard) > _desktopSilence) {
+      _set(LinkState.waitingDesktop);
+    }
+    if (_session.knowsPeer) _send('ping', {});
+  }
+
   void _lost({String? error}) {
+    _ping?.cancel();
     _subscription?.cancel();
     _subscription = null;
     _channel = null;
@@ -100,7 +117,10 @@ class LinkClient extends ChangeNotifier {
     final plain = await pairing.key.open(data);
     final message = plain == null ? null : _session.accept(plain);
     if (message == null) return;
+    _heard = DateTime.now();
     switch (message.type) {
+      case 'ping':
+        if (state == LinkState.waitingDesktop && snapshot != null) _set(LinkState.paired);
       case 'hello':
         final paired = message.body['status'] == 'paired';
         if (message.answerHello) await _send('hello', {'device': pairing.device});
@@ -138,6 +158,7 @@ class LinkClient extends ChangeNotifier {
   Future<void> close() async {
     _closed = true;
     _retry?.cancel();
+    _ping?.cancel();
     await _subscription?.cancel();
     await _channel?.sink.close();
     _channel = null;

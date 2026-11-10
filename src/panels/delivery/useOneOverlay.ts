@@ -24,6 +24,8 @@ export function useOneOverlay(
     const press = (event: MouseEvent) => {
       const target = event.target as Node;
       if (from?.contains(target)) return;
+      // A confirm asked from inside it renders apart, on the page's body.
+      if (target instanceof Element && target.closest(".file-op-modal-overlay")) return;
       const above = opened.slice(opened.indexOf(entry));
       if (above.some((one) => one.surface.current?.contains(target))) return;
       entry.close();

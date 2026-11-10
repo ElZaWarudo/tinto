@@ -1794,6 +1794,50 @@ describe("TerminalPanel", () => {
     );
   });
 
+  it("pauses the queue when a queued message fails to send instead of retrying", async () => {
+    localStorage.setItem(
+      "tinto.agent-message-queues.v2",
+      JSON.stringify({
+        "sess-1": {
+          messages: [{ id: "sess-1:queued:1", text: "Con adjunto borrado", attachments: [] }],
+          paused: false,
+        },
+      }),
+    );
+    writeAgentSessionTurnMock.mockRejectedValueOnce(new Error("attachment missing"));
+    listAgentSessionsMock.mockResolvedValue([
+      sessionFixture({ turn_status: "waiting", runtime_options: { speed: "standard" } }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    expect(await screen.findByText("Cola pausada", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(writeAgentSessionTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("says why a queued message waits on a session that ended", async () => {
+    localStorage.setItem(
+      "tinto.agent-message-queues.v2",
+      JSON.stringify({
+        "sess-1": {
+          messages: [{ id: "sess-1:queued:1", text: "Para luego", attachments: [] }],
+          paused: false,
+        },
+      }),
+    );
+    listAgentSessionsMock.mockResolvedValue([sessionFixture({ status: "exited" })]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    expect(
+      await screen.findByText(
+        "1 en cola: la sesión terminó y no se enviarán",
+        {},
+        { timeout: 5000 },
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("pauses messages queued after interrupt and keeps the control single-flight", async () => {
     const user = userEvent.setup();
     let resolveInterrupt: (() => void) | undefined;
@@ -6275,7 +6319,7 @@ describe("TerminalPanel", () => {
     expect(stopAgentSessionMock).toHaveBeenCalledWith("sess-1");
   });
 
-  it("gives detached transfers a grace window before stopping", async () => {
+  it("does not stop a session moved to another window", async () => {
     vi.useFakeTimers();
     try {
       markTerminalDetached("sess-1");
@@ -6285,14 +6329,9 @@ describe("TerminalPanel", () => {
 
       unmount();
       await act(async () => {
-        vi.advanceTimersByTime(300);
+        vi.advanceTimersByTime(10_000);
       });
       expect(stopAgentSessionMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        vi.advanceTimersByTime(5000);
-      });
-      expect(stopAgentSessionMock).toHaveBeenCalledWith("sess-1");
     } finally {
       vi.useRealTimers();
     }
