@@ -794,11 +794,12 @@ impl AgentProcess for PtyHandle {
     }
 
     fn kill(&mut self) -> Result<(), AgentConsoleError> {
-        let tree_result = self
-            .child
-            .process_id()
-            .map(kill_process_tree)
-            .unwrap_or(Ok(()));
+        // Best effort, as for the other agents: once the child is reaped the
+        // stop succeeded, even if the tree was already gone (taskkill fails
+        // on a process that has exited).
+        if let Some(pid) = self.child.process_id() {
+            let _ = kill_process_tree(pid);
+        }
         let _ = self.child.kill();
         let deadline = Instant::now() + Duration::from_secs(2);
         let status = loop {
@@ -816,7 +817,6 @@ impl AgentProcess for PtyHandle {
             }
         };
         self.exit_code = Some(status.exit_code() as i32);
-        tree_result?;
         Ok(())
     }
 
@@ -1303,6 +1303,34 @@ mod tests {
         }
         let expected: Vec<&[u8]> = vec![b"hola", b"\r", b"a\nb", b"\r", b"\r", b"\x1b[B"];
         assert_eq!(writer.0, expected);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn stopping_an_agent_that_already_exited_succeeds() {
+        #[cfg(windows)]
+        let command = {
+            let mut command = CommandBuilder::new("cmd");
+            command.args(["/c", "exit 0"]);
+            command
+        };
+        #[cfg(unix)]
+        let command = {
+            let mut command = CommandBuilder::new("sh");
+            command.args(["-c", "true"]);
+            command
+        };
+        let mut handle = PtyHandle::spawn_command_builder(command).unwrap();
+        // ConPTY holds the child until its output is read.
+        let mut output = handle.take_output_reader().unwrap();
+        thread::spawn(move || std::io::copy(&mut output, &mut std::io::sink()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while handle.try_exit_code().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the agent never exited");
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        handle.kill().unwrap();
     }
 
     #[cfg(unix)]
