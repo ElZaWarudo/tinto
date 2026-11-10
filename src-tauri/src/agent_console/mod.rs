@@ -1609,7 +1609,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_lifetime_timeout_marks_failed_and_releases_capacity() {
+    fn registry_idle_timeout_marks_failed_and_releases_capacity() {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry =
             AgentSessionRegistry::with_process_factory(factory).with_limits(AgentSessionLimits {
