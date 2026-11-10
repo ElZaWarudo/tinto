@@ -82,6 +82,29 @@ describe("Delivery notifications", () => {
     ]);
   });
 
+  it("keys QA problems by their ids, so settling one does not announce the rest again", () => {
+    const problem = (id: string) => ({
+      id,
+      task_id: "t1",
+      job_id: "qa-1",
+      number: 1,
+      label: "P1",
+      change: "",
+      place: "",
+      text: "The toast covers Retry.",
+      suggestions: [],
+      status: "open" as const,
+      notes: [],
+      created_at_ms: 1,
+      updated_at_ms: 1,
+    });
+    const keys = (ids: string[]) =>
+      deliveryNeeds({ ...overview([]), qa_problems: ids.map(problem) }, 0)[0].keys;
+    expect(keys(["p1", "p2", "p3"])).toEqual(["p1", "p2", "p3"]);
+    // One dismissed: what is left was already announced.
+    expect(keys(["p1", "p3"])).toEqual(["p1", "p3"]);
+  });
+
   it("names a repo whose guide rules wait, once per proposal", () => {
     expect(deliveryNeeds(overview([]), 0, [{ repo: "C:\\work\\agentos", at: 5 }])).toEqual([
       {

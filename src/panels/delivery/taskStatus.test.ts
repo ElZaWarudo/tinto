@@ -198,7 +198,13 @@ describe("taskStatus words the phase Tinto derives", () => {
       created_at_ms: 1,
       updated_at_ms: 1,
     });
-    const qa_problems = [problem("open", 1), problem("still_failing", 2), problem("sent", 3)];
+    // One still failing has nothing for the user: QA reports it again as new.
+    const qa_problems = [
+      problem("open", 1),
+      problem("still_failing", 2),
+      problem("sent", 3),
+      problem("open", 4),
+    ];
     expect(status({ kind: "next_stage", role: "implementation" }, { qa_problems })).toEqual({
       group: "attention",
       tone: "attention",
@@ -589,7 +595,9 @@ describe("a followed PR", () => {
       ).label,
     ).toBe("PR fusionado · falta Jira (PR)");
     expect(waitsOnPhrase("el coordinador")).toBe("espera al coordinador");
-    expect(waitsOnPhrase("ti")).toBe("espera a ti");
+    expect(waitsOnPhrase("ti")).toBe("te espera");
+    // A row that already says it does not say it twice.
+    expect(waitsOnPhrase("el coordinador", "Desbloqueada · espera al coordinador")).toBeNull();
     // Without the PR's Jira step, that one comes before the merge.
     expect(
       withPr({ review_decision: "approved" }, ready, "coordinator", upToJira.slice(0, 3)).label,

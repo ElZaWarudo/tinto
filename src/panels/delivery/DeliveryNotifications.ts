@@ -85,20 +85,19 @@ function taskNeeds(overview: DeliveryOverview, now: number): DeliveryNeed[] {
   return overview.tasks.flatMap((task) => {
     const status = taskStatus(task, overview, now);
     if (status.group !== "attention") return [];
-    // The label counts pending decisions, so it changes as they are answered;
-    // their ids do not.
+    // The label counts pending decisions and QA problems, so it changes as
+    // the user settles them; their ids do not.
     const decisions = (overview.decisions ?? [])
       .filter((decision) => decision.task_id === task.id && decision.status === "pending")
       .map((decision) => decision.id);
     const approvals = overview.approvals
       .filter((approval) => approval.task_id === task.id && approval.status === "pending")
       .map((approval) => `${approval.id}:${approval.status}`);
-    const keys =
-      decisions.length > 0
-        ? decisions
-        : approvals.length > 0
-          ? approvals
-          : [`${task.id}:${status.label}`];
+    const problems = (overview.qa_problems ?? [])
+      .filter((problem) => problem.task_id === task.id && problem.status === "open")
+      .map((problem) => problem.id);
+    const ids = [...(decisions.length > 0 ? decisions : approvals), ...problems];
+    const keys = ids.length > 0 ? ids : [`${task.id}:${status.label}`];
     return [{ keys, title: `Tinto: ${taskLabel(task)}`, body: status.label }];
   });
 }

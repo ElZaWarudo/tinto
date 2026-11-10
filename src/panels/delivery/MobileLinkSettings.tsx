@@ -14,6 +14,7 @@ import {
   type MobileLinkStatus,
 } from "../../delivery/mobileLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
+import { errorText } from "./errorText";
 
 const time = (ms: number) =>
   new Date(ms).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
@@ -27,20 +28,24 @@ function connection(device: MobileDevice): string {
 export function MobileLinkSettings() {
   const [status, setStatus] = useState<MobileLinkStatus | null>(null);
   const [relay, setRelay] = useState("");
+  // Why the link's state could not be read, in place of the section.
+  const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
+    const failed = (cause: unknown) => live && setFailure(errorText(cause));
     const read = () =>
-      getMobileLinkStatus()
-        .then((next) => live && setStatus(next))
-        .catch(() => {});
-    getMobileLinkStatus()
-      .then((next) => {
+      getMobileLinkStatus().then((next) => {
         if (!live) return;
+        setFailure(null);
         setStatus(next);
-        setRelay(next.relay);
-      })
-      .catch(() => {});
+      }, failed);
+    getMobileLinkStatus().then((next) => {
+      if (!live) return;
+      setFailure(null);
+      setStatus(next);
+      setRelay(next.relay);
+    }, failed);
     const unlisten = onMobileLinkChanged(() => void read());
     return () => {
       live = false;
@@ -48,7 +53,17 @@ export function MobileLinkSettings() {
     };
   }, []);
 
-  if (!status) return null;
+  if (!status) {
+    if (!failure) return null;
+    return (
+      <>
+        <h3 className="delivery-dialog__subtitle">Móvil</h3>
+        <p className="delivery-job__note" role="status">
+          No se pudo leer el enlace con el móvil: {failure}
+        </p>
+      </>
+    );
+  }
   const pairing = status.pairing;
   return (
     <>

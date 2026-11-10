@@ -2718,8 +2718,32 @@
   align-items: center;
   gap: 10px;
 }
+/* Delivery's settings: one headed section per topic, well apart, with
+   fields at a readable width and each hint under its field. */
+.delivery-settings__wide {
+  display: grid;
+  gap: 28px;
+  padding-bottom: 16px;
+}
+.delivery-settings__wide > .delivery-settings__section {
+  padding-bottom: 0;
+}
+.delivery-settings__wide > .delivery-settings__section > h3:first-child {
+  margin-top: 0;
+}
+.delivery-settings__wide .delivery-settings__intro {
+  max-width: 776px;
+}
+.delivery-settings__wide .delivery-settings__section > .delivery-field {
+  grid-template-columns: 200px minmax(0, 560px);
+}
+.delivery-settings__wide .delivery-field select {
+  justify-self: start;
+  width: min(100%, 280px);
+}
 @container delivery-settings (max-width: 560px) {
-  .delivery-settings__section > .delivery-field {
+  .delivery-settings__section > .delivery-field,
+  .delivery-settings__wide .delivery-settings__section > .delivery-field {
     grid-template-columns: minmax(0, 1fr);
   }
   .delivery-settings__section > .delivery-field > *,

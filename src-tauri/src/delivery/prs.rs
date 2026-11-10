@@ -40,6 +40,35 @@ const PR_READ_EVERY: Duration = Duration::from_secs(2 * 60);
 /// How a PR step's notice starts when its reviewers could not be asked.
 const REVIEW_NOT_ASKED: &str = "No se pudo pedir la revisión a";
 
+/// How many independent GitHub writes of a batch go at once: more trips
+/// GitHub's secondary rate limit, which wants one user's writes few at a time.
+const GITHUB_AT_ONCE: usize = 4;
+
+/// Runs `work` on every item, up to [`GITHUB_AT_ONCE`] at a time, and
+/// returns what each gave, in the items' order.
+pub(super) fn at_once<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let work = &work;
+    items
+        .chunks(GITHUB_AT_ONCE)
+        .flat_map(|chunk| {
+            std::thread::scope(|scope| {
+                let running: Vec<_> = chunk
+                    .iter()
+                    .map(|item| scope.spawn(move || work(item)))
+                    .collect();
+                running
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect()
+}
+
 /// `owner/name` of the task's `origin`, when it is on GitHub.
 pub(super) fn task_github_repo(task: &DeliveryTask) -> Option<String> {
     let place = Place::of(task.distro.as_deref());
@@ -3011,12 +3040,12 @@ impl DeliveryService {
     }
 
     /// Approves the task's replies with the user's texts and returns once
-    /// they are saved; a background thread then posts them one after
-    /// another, as GitHub wants one user's writes, and asks `rerequest` to
-    /// review again after the last. Each reply shows as posted or failed when
-    /// its turn ends; one Tinto closes before posting stays pending. A reply
-    /// whose fix GitHub does not have yet, and the review asked again, wait
-    /// for it (see `published.rs`).
+    /// they are saved; a background thread then posts them, a few at a time
+    /// (see [`at_once`]), and asks `rerequest` to review again after the
+    /// last. Each reply shows as posted or failed on its own; one Tinto
+    /// closes before posting stays pending. A reply whose fix GitHub does
+    /// not have yet, and the review asked again, wait for it (see
+    /// `published.rs`).
     pub fn approve_replies(
         &self,
         replies: Vec<ApprovedReply>,
@@ -3030,14 +3059,11 @@ impl DeliveryService {
         }
         let service = self.clone();
         std::thread::spawn(move || {
-            for reply in replies {
+            at_once(&replies, |reply| {
                 if let Err(error) = service.decide_approval(&reply.approval_id, true, None) {
-                    eprintln!(
-                        "tinto: no se pudo responder {}: {}",
-                        reply.approval_id, error.message
-                    );
+                    service.note_unposted(&reply.approval_id, &error);
                 }
-            }
+            });
             if let Some(task_id) = task_id.filter(|_| !rerequest.is_empty()) {
                 if let Err(error) = service.change_pr_reviewers(&task_id, rerequest, Vec::new()) {
                     eprintln!(
@@ -3048,6 +3074,24 @@ impl DeliveryService {
             }
         });
         Ok(())
+    }
+
+    /// A reply of a batch that could not even be approved stays pending and
+    /// says why, so the others going out does not hide it.
+    fn note_unposted(&self, approval_id: &str, error: &DeliveryError) {
+        let noted = self.approval(approval_id).and_then(|mut approval| {
+            if approval.status != DeliveryApprovalStatus::Pending {
+                return Ok(());
+            }
+            approval.notice = Some(format!("No se publicó: {}", error.message));
+            self.save_approval(&approval, "pr_reply_failed")
+        });
+        if let Err(noting) = noted {
+            eprintln!(
+                "tinto: no se pudo responder {approval_id}: {} ({})",
+                error.message, noting.message
+            );
+        }
     }
 
     /// The reply as the user edited it before approving: the text posted.
@@ -3474,6 +3518,27 @@ mod tests {
             .expect("pinned");
         assert_eq!(args[at + 1], "abc123");
         assert!(!merge_args(url, "--squash", "", "", true, None).contains(&"--match-head-commit"));
+    }
+
+    #[test]
+    fn a_batch_runs_a_few_at_a_time_and_keeps_its_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (running, most) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let items: Vec<usize> = (0..10).collect();
+        let doubled = at_once(&items, |item| {
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(now, Ordering::SeqCst);
+            // Each waits until a full set runs at once, or gives up: run one
+            // after another, the most at once stays 1.
+            let until = Instant::now() + Duration::from_secs(5);
+            while most.load(Ordering::SeqCst) < GITHUB_AT_ONCE && Instant::now() < until {
+                std::thread::yield_now();
+            }
+            running.fetch_sub(1, Ordering::SeqCst);
+            item * 2
+        });
+        assert_eq!(doubled, (0..10).map(|item| item * 2).collect::<Vec<_>>());
+        assert_eq!(most.load(Ordering::SeqCst), GITHUB_AT_ONCE);
     }
 
     #[test]

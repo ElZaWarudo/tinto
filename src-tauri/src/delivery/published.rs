@@ -212,14 +212,17 @@ impl DeliveryService {
             .filter(is_held)
             .map(|approval| approval.id)
             .collect();
-        for id in held {
-            // The step's claim, as a decision takes it: read again under it,
-            // so a reply being posted from the user's approve, or withdrawn
-            // meanwhile, is not posted here as well.
-            let lock = super::service::keyed_lock(&self.inner.deciding, &id);
+        // A few at a time; one failing does not stop the others, and the
+        // review is asked again only after all of them.
+        let posted = super::prs::at_once(&held, |id| {
+            // Each reply's own claim, as a decision takes it, read again
+            // under it: a reply being posted from the user's approve, or
+            // withdrawn meanwhile, is not posted here as well. No lock is
+            // held across the batch.
+            let lock = super::service::keyed_lock(&self.inner.deciding, id);
             let _deciding = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let Some(mut approval) = self.store()?.approval(&id)?.filter(is_held) else {
-                continue;
+            let Some(mut approval) = self.store()?.approval(id)?.filter(is_held) else {
+                return Ok(());
             };
             let before = approval.clone();
             self.post_reply_once_published(&mut approval, Some(live_head))?;
@@ -227,7 +230,9 @@ impl DeliveryService {
                 self.save_approval(&approval, "pr_reply_published")?;
                 self.reply_answered(&approval)?;
             }
-        }
+            Ok::<(), DeliveryError>(())
+        });
+        posted.into_iter().collect::<Result<(), _>>()?;
         self.request_held_reviews(&self.task(task_id)?)
     }
 

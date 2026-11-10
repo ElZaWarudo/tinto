@@ -120,7 +120,6 @@ import {
   CorrectResultDialog,
   NewTaskDialog,
   ReleaseLeaseDialog,
-  DeliverySettingsDialog,
   SettingsPage,
   StageAgentRow,
   type CorrectableStep,
@@ -218,7 +217,6 @@ type Dialog =
   | { kind: "dispatch"; task: DeliveryTask; role: string; prompt: string; source: string | null }
   | { kind: "release"; name: string; note: string | null }
   | { kind: "archived" }
-  | { kind: "settings" }
   | null;
 
 /** What the task list shows: one batch (null: all of them), the children
@@ -272,12 +270,15 @@ const TONE_ICON: Record<Tone, StatusIcon> = {
 /** The task's state; `who` it waits on follows it, unless the state already
  *  asks the user or an agent is at work. */
 function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }) {
-  const shown = status.group !== "attention" && status.group !== "running" ? who : null;
+  const shown =
+    status.group !== "attention" && status.group !== "running" && who
+      ? waitsOnPhrase(who, status.label)
+      : null;
   return (
     <span className={`delivery-status-line delivery-tone--${status.tone}`}>
       <StatusMark icon={status.icon} />
       {status.label}
-      {shown && <small className="delivery-status-line__who">{waitsOnPhrase(shown)}</small>}
+      {shown && <small className="delivery-status-line__who">{shown}</small>}
     </span>
   );
 }
@@ -610,7 +611,9 @@ interface DeliveryShared {
 type Asked =
   | { kind: "task"; taskId: string }
   | { kind: "stall"; runId: string }
-  | { kind: "guides"; repo: string };
+  | { kind: "guides"; repo: string }
+  /** The header's gear: the settings page, on its Delivery tab. */
+  | { kind: "delivery-settings"; repo: string };
 
 const DeliveryContext = createContext<DeliveryShared | null>(null);
 
@@ -660,6 +663,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [dialog, setDialog] = useState<Dialog>(null);
   const [error, setError] = useState<string | null>(null);
+  // Why the overview could not be read: the next good read clears it.
+  const [readError, setReadError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [repoSettings, setRepoSettings] = useState<DeliveryRepoSettings | null>(null);
   const [listView, setListView] = useState(savedListView);
@@ -711,11 +716,12 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   // The overview, then the guides of its batches' repos.
   const show = useCallback((next: DeliveryOverview) => {
     setOverview(next);
+    setReadError(null);
     void guideProposals(next).then(setGuides);
   }, []);
 
   const refresh = useCallback(
-    () => getDeliveryOverview().then(show, (cause: unknown) => setError(errorText(cause))),
+    () => getDeliveryOverview().then(show, (cause: unknown) => setReadError(errorText(cause))),
     [show],
   );
 
@@ -740,7 +746,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
         if (active) show(next);
       },
       (cause: unknown) => {
-        if (active) setError(errorText(cause));
+        if (active) setReadError(errorText(cause));
       },
     );
     // Running agents change things several times a second: read the
@@ -848,6 +854,19 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     if (!api) return;
     addRepoPanel(api, repo);
     api.getPanel(repoPanelId(repo))?.api.setActive();
+  };
+
+  // Delivery's settings open in the repo in front (else the first one), on
+  // its settings page's Delivery tab.
+  const hasSettingsRepo = Boolean(only) || repos.length > 0;
+  const openDeliverySettings = () => {
+    const settingsRepo =
+      only ??
+      (dockRef.current?.activePanel?.params as { repo?: string } | undefined)?.repo ??
+      repos[0]?.path;
+    if (!settingsRepo) return;
+    if (!only) openRepo(settingsRepo);
+    setAsked({ kind: "delivery-settings", repo: settingsRepo });
   };
 
   // Brings the repo forward: its tab, or its window when it has one.
@@ -1193,7 +1212,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
               className="delivery-icon-button"
               aria-label="Ajustes de Delivery"
               title="Agentes en paralelo y conexión de coordinadores"
-              onClick={() => setDialog({ kind: "settings" })}
+              disabled={!hasSettingsRepo}
+              onClick={openDeliverySettings}
             >
               <Icon name="gear" />
             </button>
@@ -1207,10 +1227,17 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             </button>
           </header>
 
-          {error && (
+          {(error ?? readError) && (
             <div className="delivery-panel__error" role="alert">
-              <span>{error}</span>
-              <button type="button" aria-label="Descartar error" onClick={() => setError(null)}>
+              <span>{error ?? readError}</span>
+              <button
+                type="button"
+                aria-label="Descartar error"
+                onClick={() => {
+                  setError(null);
+                  setReadError(null);
+                }}
+              >
                 ×
               </button>
             </div>
@@ -1255,14 +1282,6 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             </div>
           )}
 
-          {dialog?.kind === "settings" && (
-            <DeliverySettingsDialog
-              settings={wideSettings}
-              endpoint={overview?.coordinator ?? null}
-              onSettings={(value) => void run(() => updateDeliverySettings(value))}
-              onClose={() => setDialog(null)}
-            />
-          )}
           {dialog?.kind === "new-task" && (
             <NewTaskDialog
               repos={repos}
@@ -1610,7 +1629,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const shared = useDelivery();
   const { overview, now, repos, listView, setListView, selected, select, reveal, run } = shared;
   // Settings in place of the tasks, opened on a section or at the top;
-  // "proposal": the guides, on the rules proposed.
+  // "proposal": the guides, on the rules proposed; "delivery": its Delivery tab.
   const [settingsAt, setSettingsAt] = useState<string | null>(null);
   const settingsOpen = settingsAt !== null;
   const guidesOpen = settingsAt === "guides" || settingsAt === "proposal";
@@ -1618,11 +1637,15 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const { asked, settleAsked } = shared;
   const guidesWait = shared.guides.some((guide) => repoKey(guide.repo) === key);
   // «te necesita» chose this repo's proposed rules: the guides open on them.
-  const askedGuides = asked?.kind === "guides" && repoKey(asked.repo) === key ? asked : null;
+  // The header's gear: the settings, on the Delivery tab.
+  const askedGuides =
+    (asked?.kind === "guides" || asked?.kind === "delivery-settings") && repoKey(asked.repo) === key
+      ? asked
+      : null;
   const [seenAsk, setSeenAsk] = useState<Asked | null>(null);
   if (askedGuides && askedGuides !== seenAsk) {
     setSeenAsk(askedGuides);
-    setSettingsAt("proposal");
+    setSettingsAt(askedGuides.kind === "guides" ? "proposal" : "delivery");
   }
   // Or one of its stopped coordinators: its chip gets the focus.
   const askedStall =
@@ -1707,14 +1730,24 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     if (next && selectedTask && selectedTask.run_id !== next) select(repo, null);
   };
   // The delivered tasks the list shows go to "Archivadas…", as one by one.
+  // One after another, as they remove worktrees and branches of the same
+  // repository; one that fails does not stop the rest, and the error names it.
   const archiveDelivered = async (delivered: DeliveryTask[]) => {
     const ok = await confirm(
       `${delivered.length === 1 ? "Se archiva 1 tarea entregada" : `Se archivan ${delivered.length} tareas entregadas`}: se borran sus worktrees y ramas locales, todo está en GitHub. Puedes recuperarlas en "Archivadas…".`,
       { title: "Archivar entregadas", okLabel: "Archivar" },
     );
     if (!ok) return false;
-    for (const task of delivered) await archiveDeliveryTask(task.id);
+    const failed: string[] = [];
+    for (const task of delivered) {
+      try {
+        await archiveDeliveryTask(task.id);
+      } catch (cause) {
+        failed.push(`${task.key}: ${errorText(cause)}`);
+      }
+    }
     if (selectedTask && delivered.includes(selectedTask)) select(repo, null);
+    if (failed.length > 0) throw new Error(`No se archivaron ${failed.join("; ")}`);
   };
   const toggleGroup = (group: StatusGroup) => {
     const folding = !listView.folded.includes(group);
@@ -2119,8 +2152,13 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           key={settingsAt}
           repos={repos}
           repo={choice}
-          section={settingsAt === "proposal" ? undefined : settingsAt || undefined}
+          section={
+            settingsAt === "proposal" || settingsAt === "delivery"
+              ? undefined
+              : settingsAt || undefined
+          }
           focusProposal={settingsAt === "proposal"}
+          scope={settingsAt === "delivery" ? "delivery" : undefined}
           onBack={() => setSettingsAt(null)}
           settings={overview?.settings ?? { capacity: 0, quota_stop_percent: QUOTA_STOP_PERCENT }}
           endpoint={overview?.coordinator ?? null}
@@ -2385,6 +2423,13 @@ function TaskDetail({
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
   const taskRun = overview.runs.find((candidate) => candidate.id === task.run_id);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(newestFirst[0]?.id ?? null);
+  // A stage launched while the task is open shows its log as it runs.
+  const newestStage = newestFirst.find((job) => job.agent !== "shell")?.id ?? null;
+  const [seenStage, setSeenStage] = useState(newestStage);
+  if (newestStage !== seenStage) {
+    setSeenStage(newestStage);
+    if (newestStage) setExpandedJobId(newestStage);
+  }
   const latestUndoable = newestFirst.find(
     (job) => job.agent !== "shell" && !job.undone_at_ms && job.changes.length > 0,
   );
@@ -2469,8 +2514,17 @@ function TaskDetail({
   const failedMerge = lastMerge?.status === "failed" && pr?.state === "open" ? lastMerge : null;
   // Opening the task checks its steps against GitHub: the PR is found by its
   // branch if needed and read, unless it was read moments ago.
+  // A check that failed says so: what the task shows may be out of date.
+  const [checkFailed, setCheckFailed] = useState<{ taskId: string; why: string } | null>(null);
   useEffect(() => {
-    void checkDeliveryTask(task.id).catch(() => {});
+    let live = true;
+    checkDeliveryTask(task.id).then(
+      () => live && setCheckFailed(null),
+      (cause) => live && setCheckFailed({ taskId: task.id, why: errorText(cause) }),
+    );
+    return () => {
+      live = false;
+    };
   }, [task.id]);
   const taskDecisions = (overview.decisions ?? []).filter(
     (decision) => decision.task_id === task.id,
@@ -3039,6 +3093,11 @@ function TaskDetail({
           </ApprovalBar>
         ))}
       {failedMerge && pr && <MergeFailed approval={failedMerge} pr={pr} />}
+      {checkFailed?.taskId === task.id && (
+        <p className="delivery-job__note" role="status">
+          No se pudo comprobar la tarea en GitHub: {checkFailed.why}
+        </p>
+      )}
       {replies.length > 0 && (
         <StepBar
           id={askId("replies")}
@@ -4246,9 +4305,12 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
     );
     await askAgain([authorOf(reply)]);
   };
-  // Approved together, the replies are posted in the background: until
-  // each one is, it stays here without its buttons.
-  const [posting, setPosting] = useState(false);
+  // Approved together, the replies are posted in the background, a few at
+  // a time: until each one is, it stays here without its buttons. One that
+  // could not go out gets a new notice saying why, and its buttons back.
+  const [posting, setPosting] = useState<Record<string, string | null>>({});
+  const isPosting = (reply: DeliveryApproval) =>
+    reply.id in posting && posting[reply.id] === (reply.notice ?? null);
   const approveAll = async () => {
     await approveDeliveryReplies(
       replies.map((reply) => ({
@@ -4258,7 +4320,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
       })),
       authors.filter((login) => !skipped.includes(login)),
     );
-    setPosting(true);
+    setPosting(Object.fromEntries(replies.map((reply) => [reply.id, reply.notice ?? null])));
   };
   return (
     <div
@@ -4319,7 +4381,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
               {reply.interim ? "" : " en cuanto el PR en GitHub tenga la corrección"}. Rechazar no
               publica nada.
             </p>
-            {posting ? (
+            {isPosting(reply) ? (
               <p className="delivery-muted" role="status">
                 Publicando en GitHub…
               </p>
@@ -4365,7 +4427,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
           ))}
         </fieldset>
       )}
-      {replies.length > 1 && !posting && (
+      {replies.length > 1 && !replies.some(isPosting) && (
         <ActionGroup>
           <div className="delivery-actions">
             <ActionButton
@@ -4381,6 +4443,10 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
     </div>
   );
 }
+
+/** The commit, PR or merge texts the user edited and has not approved yet,
+ *  by approval: hiding the step or opening another task does not lose them. */
+const stepDrafts = new Map<string, { title: string; body: string; messages?: string[] }>();
 
 function ApprovalBanner({
   task,
@@ -4411,10 +4477,10 @@ function ApprovalBanner({
   useEffect(() => {
     if (!choosesReviewers) return;
     let live = true;
-    setCandidatesError(null);
     getDeliveryPrReviewers(task.id).then(
       (logins) => {
         if (!live) return;
+        setCandidatesError(null);
         setCandidates(logins);
         setFresh(true);
         cacheReviewers(task.repo, logins);
@@ -4449,9 +4515,10 @@ function ApprovalBanner({
   const planned = approval.rung === "commit" && (approval.commits ?? []).length > 0;
   const editsText =
     pending && !approval.record && ["commit", "pr", "merge"].includes(approval.rung);
-  const [title, setTitle] = useState(approval.title);
-  const [body, setBody] = useState(approval.body);
-  const [messages, setMessages] = useState<string[] | undefined>(undefined);
+  const draft = stepDrafts.get(approval.id);
+  const [title, setTitle] = useState(draft?.title ?? approval.title);
+  const [body, setBody] = useState(draft?.body ?? approval.body);
+  const [messages, setMessages] = useState<string[] | undefined>(draft?.messages);
   const edited = !editsText
     ? undefined
     : planned
@@ -4459,6 +4526,10 @@ function ApprovalBanner({
       : title !== approval.title || body !== approval.body
         ? { title, body }
         : undefined;
+  useEffect(() => {
+    if (edited) stepDrafts.set(approval.id, { title, body, messages });
+    else stepDrafts.delete(approval.id);
+  });
   // The PR's description can show the task's QA screenshots.
   const [images, setImages] = useState<DeliveryReplyImage[]>(approval.images ?? []);
   const [shots, setShots] = useState<DeliveryQaScreenshot[]>([]);
@@ -4589,7 +4660,13 @@ function ApprovalBanner({
             <p className="delivery-job__note">
               No se pudo leer quién puede revisar: {candidatesError}.
               {candidates !== null && " Es la última lista leída."}{" "}
-              <button type="button" onClick={() => setAttempt((count) => count + 1)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCandidatesError(null);
+                  setAttempt((count) => count + 1);
+                }}
+              >
                 Reintentar
               </button>
             </p>
