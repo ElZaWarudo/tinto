@@ -210,14 +210,18 @@ impl DeliveryService {
                     && approval.status == DeliveryApprovalStatus::Approved
             })
             .collect();
-        for mut approval in held {
-            let before = approval.clone();
+        // A few at a time; one failing does not stop the others, and the
+        // review is asked again only after all of them.
+        let posted = super::prs::at_once(&held, |before| {
+            let mut approval = before.clone();
             self.post_reply_once_published(&mut approval, Some(live_head))?;
-            if approval != before {
+            if approval != *before {
                 self.save_approval(&approval, "pr_reply_published")?;
                 self.reply_answered(&approval)?;
             }
-        }
+            Ok::<(), DeliveryError>(())
+        });
+        posted.into_iter().collect::<Result<(), _>>()?;
         self.request_held_reviews(&self.task(task_id)?)
     }
 

@@ -1707,14 +1707,24 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     if (next && selectedTask && selectedTask.run_id !== next) select(repo, null);
   };
   // The delivered tasks the list shows go to "Archivadas…", as one by one.
+  // One after another, as they remove worktrees and branches of the same
+  // repository; one that fails does not stop the rest, and the error names it.
   const archiveDelivered = async (delivered: DeliveryTask[]) => {
     const ok = await confirm(
       `${delivered.length === 1 ? "Se archiva 1 tarea entregada" : `Se archivan ${delivered.length} tareas entregadas`}: se borran sus worktrees y ramas locales, todo está en GitHub. Puedes recuperarlas en "Archivadas…".`,
       { title: "Archivar entregadas", okLabel: "Archivar" },
     );
     if (!ok) return false;
-    for (const task of delivered) await archiveDeliveryTask(task.id);
+    const failed: string[] = [];
+    for (const task of delivered) {
+      try {
+        await archiveDeliveryTask(task.id);
+      } catch (cause) {
+        failed.push(`${task.key}: ${errorText(cause)}`);
+      }
+    }
     if (selectedTask && delivered.includes(selectedTask)) select(repo, null);
+    if (failed.length > 0) throw new Error(`No se archivaron ${failed.join("; ")}`);
   };
   const toggleGroup = (group: StatusGroup) => {
     const folding = !listView.folded.includes(group);
@@ -4246,9 +4256,12 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
     );
     await askAgain([authorOf(reply)]);
   };
-  // Approved together, the replies are posted in the background: until
-  // each one is, it stays here without its buttons.
-  const [posting, setPosting] = useState(false);
+  // Approved together, the replies are posted in the background, a few at
+  // a time: until each one is, it stays here without its buttons. One that
+  // could not go out gets a new notice saying why, and its buttons back.
+  const [posting, setPosting] = useState<Record<string, string | null>>({});
+  const isPosting = (reply: DeliveryApproval) =>
+    reply.id in posting && posting[reply.id] === (reply.notice ?? null);
   const approveAll = async () => {
     await approveDeliveryReplies(
       replies.map((reply) => ({
@@ -4258,7 +4271,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
       })),
       authors.filter((login) => !skipped.includes(login)),
     );
-    setPosting(true);
+    setPosting(Object.fromEntries(replies.map((reply) => [reply.id, reply.notice ?? null])));
   };
   return (
     <div
@@ -4319,7 +4332,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
               {reply.interim ? "" : " en cuanto el PR en GitHub tenga la corrección"}. Rechazar no
               publica nada.
             </p>
-            {posting ? (
+            {isPosting(reply) ? (
               <p className="delivery-muted" role="status">
                 Publicando en GitHub…
               </p>
@@ -4365,7 +4378,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
           ))}
         </fieldset>
       )}
-      {replies.length > 1 && !posting && (
+      {replies.length > 1 && !replies.some(isPosting) && (
         <ActionGroup>
           <div className="delivery-actions">
             <ActionButton
