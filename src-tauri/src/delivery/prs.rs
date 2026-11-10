@@ -1115,7 +1115,8 @@ pub trait GitHub: Send + Sync {
     }
     /// Merges the PR and, with `delete_branch`, deletes its branch on
     /// GitHub. `subject` and `body` are the merge commit's message
-    /// (`rebase` has none).
+    /// (`rebase` has none). With `head`, GitHub merges only while the PR
+    /// is still at that commit, the one Tinto checked.
     fn merge(
         &self,
         url: &str,
@@ -1123,6 +1124,7 @@ pub trait GitHub: Send + Sync {
         subject: &str,
         body: &str,
         delete_branch: bool,
+        head: Option<&str>,
     ) -> Result<(), DeliveryError>;
     /// Opens a PR from `head` into `base` (`None`: the repo's default
     /// branch) in `repo` (`owner/name`) and returns its URL.
@@ -1338,6 +1340,7 @@ impl GitHub for Offline {
         _subject: &str,
         _body: &str,
         _delete_branch: bool,
+        _head: Option<&str>,
     ) -> Result<(), DeliveryError> {
         self.pr("").map(|_| ())
     }
@@ -1634,6 +1637,31 @@ impl GhCli {
     }
 }
 
+/// `gh pr merge`'s arguments; `flag` is the method's (`--squash`).
+fn merge_args<'a>(
+    url: &'a str,
+    flag: &'a str,
+    subject: &'a str,
+    body: &'a str,
+    delete_branch: bool,
+    head: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut args = vec!["pr", "merge", url, flag];
+    if delete_branch {
+        args.push("--delete-branch");
+    }
+    if let Some(head) = head.filter(|head| !head.is_empty()) {
+        args.extend(["--match-head-commit", head]);
+    }
+    if flag != "--rebase" {
+        if !subject.trim().is_empty() {
+            args.extend(["--subject", subject]);
+        }
+        args.extend(["--body", body]);
+    }
+    args
+}
+
 impl GitHub for GhCli {
     fn pr(&self, url: &str) -> Result<Value, DeliveryError> {
         let mut snapshot = Self::json(&["pr", "view", url, "--json", PR_FIELDS])?;
@@ -1816,18 +1844,10 @@ impl GitHub for GhCli {
         subject: &str,
         body: &str,
         delete_branch: bool,
+        head: Option<&str>,
     ) -> Result<(), DeliveryError> {
         let flag = format!("--{method}");
-        let mut args = vec!["pr", "merge", url, flag.as_str()];
-        if delete_branch {
-            args.push("--delete-branch");
-        }
-        if method != "rebase" {
-            if !subject.trim().is_empty() {
-                args.extend(["--subject", subject]);
-            }
-            args.extend(["--body", body]);
-        }
+        let args = merge_args(url, &flag, subject, body, delete_branch, head);
         let output = Self::run(&args)?;
         if output.status.success() {
             return Ok(());
@@ -3443,6 +3463,18 @@ fn pr_changed(before: &DeliveryPr, after: &DeliveryPr) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_merge_is_pinned_to_the_head_tinto_checked() {
+        let url = "https://github.com/o/r/pull/1";
+        let args = merge_args(url, "--squash", "feat: x", "", true, Some("abc123"));
+        let at = args
+            .iter()
+            .position(|arg| *arg == "--match-head-commit")
+            .expect("pinned");
+        assert_eq!(args[at + 1], "abc123");
+        assert!(!merge_args(url, "--squash", "", "", true, None).contains(&"--match-head-commit"));
+    }
 
     #[test]
     fn a_command_past_its_time_is_stopped() {

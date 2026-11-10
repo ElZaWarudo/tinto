@@ -507,6 +507,45 @@ fn a_job_its_usage_limit_stopped_runs_again_later() {
 }
 
 #[test]
+fn a_restart_arms_again_the_usage_limit_retries_whose_stage_did_not_move_on() {
+    let h = harness();
+    let task = h.task("K-3C");
+    let limited = |id: &str, role: &str| -> DeliveryJob {
+        serde_json::from_value(json!({
+            "id": id, "task_id": task.id, "role": role, "attempt": 1, "agent": "codex",
+            "access": "workspace", "prompt": "events=codex-ok", "contract_version": 1,
+            "writes": true, "timeout_minutes": 60, "status": "failed",
+            "created_at_ms": 1, "started_at_ms": 1, "ended_at_ms": 2,
+            "error": "usage limit — Tinto lo reintenta en 60 minutos, cuando el límite puede haberse renovado."
+        }))
+        .unwrap()
+    };
+    let store = h.service.store().unwrap();
+    store.put_job(&limited("waits", "tests")).unwrap();
+    store
+        .put_job(&limited("moved-on", "implementation"))
+        .unwrap();
+    // That stage ran again since, on another agent.
+    let mut later = limited("later", "implementation");
+    later.created_at_ms = 3;
+    later.error = None;
+    store.put_job(&later).unwrap();
+    drop(store);
+
+    h.service.follow_running();
+    let retried = |id: &str| {
+        h.service
+            .overview()
+            .unwrap()
+            .jobs
+            .into_iter()
+            .find(|job| job.retry_of.as_deref() == Some(id))
+    };
+    eventually(|| retried("waits"));
+    assert!(retried("moved-on").is_none());
+}
+
+#[test]
 fn a_finished_process_without_a_result_fails() {
     let h = harness();
     let task = h.task("K-4");
@@ -875,6 +914,11 @@ fn a_paused_stage_holds_its_task_and_resource_until_it_resumes_in_its_session() 
         })
         .unwrap_err();
     assert_eq!(refused.category, "job_paused");
+    // Nor is the task removed under it, which would leave QA held for good.
+    assert_eq!(
+        h.service.remove_task(&task.id, true).unwrap_err().category,
+        "task_busy"
+    );
 
     // Resuming continues the same session and takes QA over.
     let resumed = h.service.resume(&paused.id).unwrap();
@@ -5048,6 +5092,10 @@ struct FakeGitHub {
     /// The repo's conversation comments and its PRs' review summaries.
     conversation: std::sync::Mutex<serde_json::Value>,
     review_bodies: std::sync::Mutex<serde_json::Value>,
+    /// When set, `create_pr` says it started and waits to be let go.
+    #[allow(clippy::type_complexity)]
+    create_gate:
+        std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl FakeGitHub {
@@ -5063,6 +5111,7 @@ impl FakeGitHub {
             review_comments: std::sync::Mutex::new(json!([])),
             conversation: std::sync::Mutex::new(json!([])),
             review_bodies: std::sync::Mutex::new(json!([])),
+            create_gate: std::sync::Mutex::new(None),
         })
     }
 }
@@ -5106,6 +5155,7 @@ impl super::prs::GitHub for FakeGitHub {
         subject: &str,
         _body: &str,
         delete_branch: bool,
+        _head: Option<&str>,
     ) -> Result<(), super::DeliveryError> {
         self.merged.lock().unwrap().push(match delete_branch {
             true => format!("{url} {method} {subject}"),
@@ -5124,6 +5174,10 @@ impl super::prs::GitHub for FakeGitHub {
         body: &str,
     ) -> Result<String, super::DeliveryError> {
         assert_eq!(repo, "o/r");
+        if let Some((started, release)) = self.create_gate.lock().unwrap().as_ref() {
+            started.send(()).unwrap();
+            release.recv().unwrap();
+        }
         self.actions
             .lock()
             .unwrap()
@@ -5302,6 +5356,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         review_comments: std::sync::Mutex::new(json!([])),
         conversation: std::sync::Mutex::new(json!([])),
         review_bodies: std::sync::Mutex::new(json!([])),
+        create_gate: std::sync::Mutex::new(None),
     });
     h.service.set_github(github.clone());
 
@@ -5377,6 +5432,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         review_comments: std::sync::Mutex::new(json!([])),
         conversation: std::sync::Mutex::new(json!([])),
         review_bodies: std::sync::Mutex::new(json!([])),
+        create_gate: std::sync::Mutex::new(None),
     });
     h.service.set_github(github.clone());
     let merge = |method: Option<&str>| NewApproval {
@@ -7299,6 +7355,23 @@ fn error_text(result: &serde_json::Value) -> String {
 }
 
 #[test]
+fn a_refused_sync_leaves_the_tasks_restack_base_as_it_was() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("W-0");
+    std::fs::write(worktree.join("a.txt"), "a").unwrap();
+    git(&worktree, &["add", "a.txt"]);
+    git(&worktree, &["commit", "-q", "-m", "a"]);
+    // Refused: a sync needs its text.
+    let refused = coordinator.write(
+        "request_approval",
+        json!({"task_id": task_id, "rung": "sync", "title": "", "restack_from": "HEAD~1"}),
+    );
+    error_text(&refused);
+    assert_eq!(h.service.task(&task_id).unwrap().restack_from, None);
+}
+
+#[test]
 fn a_pending_approval_can_be_withdrawn_with_a_reason_but_not_a_decided_one() {
     let h = harness();
     let coordinator = Coordinator::start(&h);
@@ -7475,6 +7548,46 @@ fn approving_the_pr_step_opens_the_pr_with_the_approved_text() {
     assert_eq!(published["title"], "feat: open it");
     assert_eq!(published["body"], "## Summary\n\nWhat was approved.");
     assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 50);
+}
+
+#[test]
+fn a_reject_while_the_approved_step_runs_waits_for_it_and_is_refused() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("O-6");
+    let github = FakeGitHub::new(json!({}), json!([]));
+    let (started, opening) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    *github.create_gate.lock().unwrap() = Some((started, released));
+    h.service.set_github(github.clone());
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": "a-pr", "task_id": task.id, "rung": "pr", "title": "feat: open it",
+        "body": "What was approved.", "status": "pending",
+        "requested_by": "coord", "requested_at_ms": 1
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&step).unwrap();
+
+    let service = h.service.clone();
+    let approving = std::thread::spawn(move || service.decide_approval("a-pr", true, None));
+    opening.recv().unwrap();
+    let service = h.service.clone();
+    let (rejected, rejecting) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = rejected.send(service.decide_approval("a-pr", false, None));
+    });
+    // The reject waits while the approved step opens the PR.
+    assert!(rejecting.recv_timeout(Duration::from_millis(300)).is_err());
+    release.send(()).unwrap();
+
+    let done = approving.join().unwrap().unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    let refused = rejecting.recv().unwrap().unwrap_err();
+    assert_eq!(refused.category, "approval_decided");
+    assert_eq!(
+        h.service.approval("a-pr").unwrap().status,
+        DeliveryApprovalStatus::Executed
+    );
 }
 
 #[test]

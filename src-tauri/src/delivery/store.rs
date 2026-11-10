@@ -21,17 +21,48 @@ pub struct DeliveryStore {
     conn: Connection,
 }
 
+/// The error of a second Tinto opening the Delivery store.
+pub const INSTANCE_RUNNING: &str = "delivery_instance_running";
+
+/// Where `delivery.sqlite` lives, created if missing.
+pub fn default_dir() -> Result<std::path::PathBuf, DeliveryError> {
+    let dir = crate::runtime_paths::tinto_config_dir().ok_or_else(|| {
+        DeliveryError::new("delivery_store_unavailable", "config directory unavailable")
+    })?;
+    std::fs::create_dir_all(&dir).map_err(DeliveryError::io)?;
+    Ok(dir)
+}
+
 impl DeliveryStore {
     pub fn open_default() -> Result<Self, DeliveryError> {
-        let dir = crate::runtime_paths::tinto_config_dir().ok_or_else(|| {
-            DeliveryError::new("delivery_store_unavailable", "config directory unavailable")
-        })?;
-        std::fs::create_dir_all(&dir).map_err(DeliveryError::io)?;
-        Self::open(&dir.join("delivery.sqlite"))
+        Self::open(&default_dir()?.join("delivery.sqlite"))
+    }
+
+    /// Takes the app's hold on the store in `dir`: one Tinto at a time
+    /// follows its jobs. The MCP proxy opens the store without it. Held for
+    /// as long as the returned file stays open.
+    pub fn lock_instance(dir: &Path) -> Result<std::fs::File, DeliveryError> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join("delivery.lock"))
+            .map_err(DeliveryError::io)?;
+        match file.try_lock() {
+            Ok(()) => Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => Err(DeliveryError::new(
+                INSTANCE_RUNNING,
+                "otra ventana de Tinto ya tiene abierto el estado de Delivery",
+            )),
+            Err(std::fs::TryLockError::Error(error)) => Err(DeliveryError::io(error)),
+        }
     }
 
     pub fn open(path: &Path) -> Result<Self, DeliveryError> {
         let conn = Connection::open(path)?;
+        // The MCP proxy opens the same file: a write in progress there is
+        // waited for, not an error here.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -555,7 +586,16 @@ impl DeliveryStore {
     ) -> Result<Vec<T>, DeliveryError> {
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map(params, |row| row.get::<_, String>(0))?;
-        rows.map(|row| decode(&row?)).collect()
+        let mut all = Vec::new();
+        for row in rows {
+            // A row this build cannot read (a newer Tinto wrote it) is left
+            // out, not a reason for Delivery not to open.
+            match decode(&row?) {
+                Ok(value) => all.push(value),
+                Err(error) => eprintln!("tinto: delivery skipped a stored row: {}", error.message),
+            }
+        }
+        Ok(all)
     }
 }
 
@@ -572,4 +612,37 @@ fn encode<T: Serialize + ?Sized>(value: &T) -> Result<String, DeliveryError> {
 fn decode<T: DeserializeOwned>(value: &str) -> Result<T, DeliveryError> {
     serde_json::from_str(value)
         .map_err(|error| DeliveryError::new("delivery_store_decode", error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_tinto_holds_the_store_and_the_proxy_still_opens_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = DeliveryStore::lock_instance(dir.path()).unwrap();
+        assert_eq!(
+            DeliveryStore::lock_instance(dir.path())
+                .unwrap_err()
+                .category,
+            INSTANCE_RUNNING
+        );
+        DeliveryStore::open(&dir.path().join("delivery.sqlite")).unwrap();
+        drop(held);
+        DeliveryStore::lock_instance(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn a_row_this_build_cannot_read_is_left_out_of_a_list() {
+        let store = DeliveryStore::open_in_memory().unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO runs (id, data) VALUES ('new', '{\"from\": \"a newer Tinto\"}')",
+                [],
+            )
+            .unwrap();
+        assert!(store.runs().unwrap().is_empty());
+    }
 }

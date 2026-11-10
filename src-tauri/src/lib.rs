@@ -107,8 +107,16 @@ pub fn run() {
     let mut initial_repos = Some(initial_repos);
     let agent_journal = agent_console::journal::AgentJournal::open_default()
         .expect("no se pudo abrir el diario SQLite de agentes");
-    let delivery = delivery::service::DeliveryService::open_default()
-        .expect("no se pudo abrir el estado SQLite de Delivery");
+    let delivery = match delivery::service::DeliveryService::open_default() {
+        Ok(delivery) => delivery,
+        // A Tinto is already open (a double launch, or the MCP proxy
+        // opening one while the first answers slowly): this one leaves.
+        Err(error) if error.category == delivery::store::INSTANCE_RUNNING => {
+            eprintln!("tinto: {}", error.message);
+            std::process::exit(0);
+        }
+        Err(error) => panic!("no se pudo abrir el estado SQLite de Delivery: {error}"),
+    };
     let delivery_for_setup = delivery.clone();
 
     let builder = pumarejo_builder(tauri::Builder::default())
