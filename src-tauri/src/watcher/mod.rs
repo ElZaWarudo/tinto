@@ -380,7 +380,15 @@ impl FsWatcher {
                     // ya encuentra su clasificador (sin ventana de pérdida
                     // durante el walk de construcción).
                     let Some(classifier) = self.send_classifier(&root, &fs_watch) else {
-                        continue; // ya reportado por el canal
+                        // Ya reportado por el canal. Un root muerto sigue
+                        // muerto: sin esto, `mounted` lo da por sano en la
+                        // próxima pasada y nunca se remonta.
+                        if was_removed_live {
+                            if let Ok(mut dead) = self.dead_roots.lock() {
+                                dead.insert(root);
+                            }
+                        }
+                        continue;
                     };
                     let mounted = match self.watches.lock() {
                         Ok(mut watches) => watches.mount(&root, &classifier),
@@ -1373,6 +1381,10 @@ mod tests {
         })
         .await
         .expect("RepoRemoved");
+
+        // Un reintento mientras falta la carpeta falla sin olvidar que el
+        // root está muerto.
+        watcher.watch_workbench(std::slice::from_ref(&entry));
 
         // El repo reaparece (mismo path) y el remount explícito lo revive.
         fs::create_dir_all(root.join("src")).unwrap();
