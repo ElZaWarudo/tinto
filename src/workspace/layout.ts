@@ -18,17 +18,21 @@ export function layoutReferencesTree(layout: SerializedDockview | null): boolean
   return Object.values(panels).some((p) => p?.contentComponent === PANEL_TREE);
 }
 
-export function layoutReferencesEphemeralConsoles(layout: SerializedDockview | null): boolean {
-  if (!layout) return false;
+/** The saved Agents and agent terminal panels: they belong to the run that
+ * saved them, so a restore drops them and keeps the rest of the layout. */
+function ephemeralConsolePanelIds(layout: SerializedDockview | null): string[] {
+  if (!layout) return [];
   const panels = (layout as { panels?: Record<string, { contentComponent?: string }> }).panels;
-  if (!panels) return false;
-  return Object.entries(panels).some(
-    ([id, panel]) =>
-      id === PANEL_AGENT_CONSOLES ||
-      id.startsWith(`${PANEL_AGENT_TERMINAL}:`) ||
-      panel?.contentComponent === PANEL_AGENT_CONSOLES ||
-      panel?.contentComponent === PANEL_AGENT_TERMINAL,
-  );
+  if (!panels) return [];
+  return Object.entries(panels)
+    .filter(
+      ([id, panel]) =>
+        id === PANEL_AGENT_CONSOLES ||
+        id.startsWith(`${PANEL_AGENT_TERMINAL}:`) ||
+        panel?.contentComponent === PANEL_AGENT_CONSOLES ||
+        panel?.contentComponent === PANEL_AGENT_TERMINAL,
+    )
+    .map(([id]) => id);
 }
 
 /** Parse a persisted layout string; returns null on null/empty/corrupt input. */
@@ -75,18 +79,19 @@ export function buildDefaultLayout(api: DockviewApi): void {
   api.addPanel({ id: PANEL_DASHBOARD, component: PANEL_DASHBOARD, title: "Resumen" });
 }
 
-/** Restore a persisted layout, falling back to the default if unusable or if it
- * still references the legacy in-dock repo tree (now a fixed sidebar). */
+/** Restore a persisted layout without its agent consoles, falling back to the
+ * default if unusable, if nothing else was open, or if it still references the
+ * legacy in-dock repo tree (now a fixed sidebar). */
 export function applyLayout(api: DockviewApi, layout: SerializedDockview | null): void {
-  if (
-    layout &&
-    isUsableLayout(layout) &&
-    !layoutReferencesTree(layout) &&
-    !layoutReferencesEphemeralConsoles(layout)
-  ) {
+  if (layout && isUsableLayout(layout) && !layoutReferencesTree(layout)) {
     try {
       api.fromJSON(layout);
-      return;
+      // Removed in the same tick, before React mounts their content.
+      for (const id of ephemeralConsolePanelIds(layout)) {
+        const panel = api.getPanel(id);
+        if (panel) api.removePanel(panel);
+      }
+      if (api.panels.length > 0) return;
     } catch (e) {
       console.warn("tinto: corrupt saved layout, using default", e);
     }
