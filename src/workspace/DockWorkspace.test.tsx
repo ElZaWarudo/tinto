@@ -47,7 +47,10 @@ function makeFakeApi(): FakeApi {
     addPanel: vi.fn((opts: { id: string }) => {
       api.panels.push({ id: opts.id });
     }),
-    fromJSON: vi.fn(),
+    // Like dockview: a restored layout's panels are the dock's panels.
+    fromJSON: vi.fn((layout: { panels?: Record<string, unknown> }) => {
+      api.panels = Object.keys(layout.panels ?? {}).map((id) => ({ id }));
+    }),
     toJSON: vi.fn(() => ({ panels: { dashboard: {} } })),
     onDidLayoutChange: vi.fn((cb: () => void) => {
       layoutCbs.push(cb);
