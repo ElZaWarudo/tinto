@@ -117,7 +117,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
 - `failures`: the 5 latest failed jobs, newest first, `error` cut to 500 characters.
 - `digest`: lowercase hex SHA-256 of the approval's fields as sent (before cutting). Opaque to the phone.
 - `truncated`: some text of the approval was longer than 16 000 characters and was cut.
-- `in_tinto`: the phone does not show all the decision would grant: a permission with full access, read or write folders, scripts, warnings, unfrozen files or a command over 4 000 characters. Only Tinto allows it; the phone can deny it.
+- `in_tinto`: the phone does not show all the decision would grant: a permission with full access, read or write folders, scripts, warnings, unfrozen files or a command over 4 000 characters, or a `text` decision whose text is over 4 000 characters (the phone gets it cut). Only Tinto allows or approves it; the phone can deny a permission.
 - Strings other than approval texts are cut to 4 000 characters. If the snapshot is still too large, `failures` and decision `detail` are dropped.
 
 Not sent, ever: file contents, diffs, logs, prompts, paths, tokens, settings. The only code the phone shows is what a decision already carries (`text`, `command`).

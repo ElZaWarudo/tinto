@@ -146,7 +146,13 @@ class DecisionCard extends StatelessWidget {
       if (d.kind == 'text') ...[
         const Text('El texto, tal como lo verán:'),
         _Mono(d.text),
-        FilledButton(onPressed: () => _answer(context, d.text), child: const Text('Aprobar el texto')),
+        if (d.inTinto)
+          Text('El texto no cabe entero en el móvil: apruébalo en Tinto.',
+              style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        FilledButton(
+          onPressed: d.inTinto ? null : () => _answer(context, d.text),
+          child: const Text('Aprobar el texto'),
+        ),
       ],
       if (d.kind == 'permission') ...[
         if (d.command != null) _Mono(d.command!),

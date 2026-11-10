@@ -198,6 +198,15 @@ mod tests {
     }
 
     #[test]
+    fn the_phone_approves_a_text_only_when_it_showed_it_whole() {
+        let short = decision("text", json!({ "text": "Hola" }));
+        assert_eq!(answerable(&short, "Hola"), Ok(()));
+        // The phone shows, and would send back, its first 4 000 characters.
+        let long = decision("text", json!({ "text": "t".repeat(4_001) }));
+        assert!(answerable(&long, &format!("{}…", "t".repeat(4_000))).is_err());
+    }
+
+    #[test]
     fn an_approval_needs_the_digest_of_the_whole_text_the_phone_showed() {
         let shown = sample_approval("a1", "cuerpo");
         let digest = crate::mobile_link::snapshot::approval(&shown).digest;

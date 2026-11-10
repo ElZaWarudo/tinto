@@ -85,8 +85,9 @@ pub struct Decision {
     pub options: Vec<DeliveryDecisionOption>,
     pub recommendation: Option<DeliveryRecommendation>,
     pub blocking: bool,
-    /// The phone cannot show all it would allow or approve: only Tinto
-    /// allows it (a permission can still be denied from the phone).
+    /// The phone cannot show all it would allow or approve (hidden grants,
+    /// a cut text): only Tinto does (a permission can still be denied
+    /// from the phone).
     pub in_tinto: bool,
 }
 
@@ -201,7 +202,8 @@ fn decision(decision: &DeliveryDecision) -> Decision {
 pub(super) fn in_tinto(decision: &DeliveryDecision) -> bool {
     let long = |text: &str| text.chars().count() > TEXT;
     match decision.kind {
-        DeliveryDecisionKind::Choice | DeliveryDecisionKind::Text => false,
+        DeliveryDecisionKind::Choice => false,
+        DeliveryDecisionKind::Text => long(&decision.text),
         DeliveryDecisionKind::Permission => {
             decision.full_access
                 || !decision.write_dirs.is_empty()
