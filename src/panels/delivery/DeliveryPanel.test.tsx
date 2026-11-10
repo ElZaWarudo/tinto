@@ -3428,7 +3428,8 @@ describe("DeliveryPanel", () => {
         jobs: [job({ id: "qa-1", role: "qa", visual_record: "C:/jobs/qa-1/qa/AGOS-501.html" })],
         qa_problems: [
           problem("a", "open"),
-          problem("b", "still_failing"),
+          problem("b", "open"),
+          problem("e", "still_failing"),
           problem("c", "sent"),
           problem("d", "verified"),
         ],

@@ -198,7 +198,13 @@ describe("taskStatus words the phase Tinto derives", () => {
       created_at_ms: 1,
       updated_at_ms: 1,
     });
-    const qa_problems = [problem("open", 1), problem("still_failing", 2), problem("sent", 3)];
+    // One still failing has nothing for the user: QA reports it again as new.
+    const qa_problems = [
+      problem("open", 1),
+      problem("still_failing", 2),
+      problem("sent", 3),
+      problem("open", 4),
+    ];
     expect(status({ kind: "next_stage", role: "implementation" }, { qa_problems })).toEqual({
       group: "attention",
       tone: "attention",

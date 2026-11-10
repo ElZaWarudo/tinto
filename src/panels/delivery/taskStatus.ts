@@ -563,13 +563,11 @@ export function pendingDecisions(overview: DeliveryOverview, taskId: string): nu
   ).length;
 }
 
-/** The task's QA problems that wait on the user: new ones, and fixes that
- *  did not hold. */
+/** The task's QA problems that wait on the user: the new ones. One that
+ *  still fails has nothing for the user: QA reports it again as a new one. */
 export function qaProblemsToDecide(overview: DeliveryOverview, taskId: string): number {
   return (overview.qa_problems ?? []).filter(
-    (problem) =>
-      problem.task_id === taskId &&
-      (problem.status === "open" || problem.status === "still_failing"),
+    (problem) => problem.task_id === taskId && problem.status === "open",
   ).length;
 }
 
