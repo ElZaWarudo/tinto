@@ -6296,7 +6296,7 @@ describe("TerminalPanel", () => {
     expect(stopAgentSessionMock).toHaveBeenCalledWith("sess-1");
   });
 
-  it("gives detached transfers a grace window before stopping", async () => {
+  it("does not stop a session moved to another window", async () => {
     vi.useFakeTimers();
     try {
       markTerminalDetached("sess-1");
@@ -6306,14 +6306,9 @@ describe("TerminalPanel", () => {
 
       unmount();
       await act(async () => {
-        vi.advanceTimersByTime(300);
+        vi.advanceTimersByTime(10_000);
       });
       expect(stopAgentSessionMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        vi.advanceTimersByTime(5000);
-      });
-      expect(stopAgentSessionMock).toHaveBeenCalledWith("sess-1");
     } finally {
       vi.useRealTimers();
     }
