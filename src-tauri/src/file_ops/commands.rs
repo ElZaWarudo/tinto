@@ -20,9 +20,25 @@ use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION};
 
 use super::{safe_join, FileConflict, FileConflictKind};
 
-/// Recursively copia un archivo o directorio a `dest`.
+/// Recursively copia un archivo o directorio a `dest`. Los symlinks se copian
+/// como links: seguirlos copiaría su destino (o no terminaría, con un ciclo).
 pub(crate) fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
-    if src.is_dir() {
+    let meta = fs::symlink_metadata(src)?;
+    if meta.file_type().is_symlink() {
+        let target = fs::read_link(src)?;
+        #[cfg(unix)]
+        return std::os::unix::fs::symlink(target, dest);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileTypeExt;
+            return if meta.file_type().is_symlink_dir() {
+                std::os::windows::fs::symlink_dir(target, dest)
+            } else {
+                std::os::windows::fs::symlink_file(target, dest)
+            };
+        }
+    }
+    if meta.is_dir() {
         fs::create_dir_all(dest)?;
         for entry in fs::read_dir(src)? {
             let entry = entry?;
@@ -95,7 +111,8 @@ enum ResolveOutcome {
 
 /// Decide qué hacer con un par (src, dest). Nunca toca FS.
 fn classify(src: &Path, dest: &Path, overwrite: bool) -> ResolveOutcome {
-    if !src.exists() {
+    // `symlink_metadata`: un link roto sigue siendo una fuente válida.
+    if fs::symlink_metadata(src).is_err() {
         return ResolveOutcome::SourceMissing;
     }
     if dest.exists() {
@@ -326,7 +343,7 @@ pub async fn export_from_repo(
     let mut srcs = Vec::with_capacity(sources.len());
     for src_rel in &sources {
         let src_abs = safe_join(&repo_abs, src_rel)?;
-        if !src_abs.exists() {
+        if fs::symlink_metadata(&src_abs).is_err() {
             return Err(CommandError::new(
                 "source-missing",
                 format!("no existe {} en el repo", src_rel.display()),
@@ -378,7 +395,7 @@ pub async fn delete_from_repo(
                 "no se puede eliminar el root del repo",
             ));
         }
-        if !src_abs.exists() {
+        if fs::symlink_metadata(&src_abs).is_err() {
             return Err(CommandError::new(
                 "source-missing",
                 format!("no existe {} en el repo", src_rel.display()),
@@ -1012,11 +1029,19 @@ fn neighbor_path(path: &Path, role: &str) -> io::Result<PathBuf> {
     Ok(parent.join(candidate))
 }
 
+/// Borra `path` sin seguir symlinks: un link se borra como link.
 fn remove_path(path: &Path) -> io::Result<()> {
-    if !path.exists() {
+    let Ok(meta) = fs::symlink_metadata(path) else {
         return Ok(());
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if meta.file_type().is_symlink_dir() {
+            return fs::remove_dir(path);
+        }
     }
-    if path.is_dir() {
+    if meta.is_dir() {
         fs::remove_dir_all(path)
     } else {
         fs::remove_file(path)
