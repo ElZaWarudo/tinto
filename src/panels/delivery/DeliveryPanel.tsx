@@ -2293,6 +2293,10 @@ function TaskDetail({
   const replies = openApprovals.filter(
     (approval) => approval.rung === "pr_reply" && approval.status === "pending",
   );
+  // Approved replies Tinto posts once GitHub has their fix.
+  const heldReplies = openApprovals.filter(
+    (approval) => approval.rung === "pr_reply" && approval.status === "approved",
+  );
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
   const openChanges = async () => {
@@ -2874,6 +2878,15 @@ function TaskDetail({
         >
           <RepliesBanner replies={replies} />
         </StepBar>
+      )}
+      {heldReplies.length > 0 && (
+        <ul className="delivery-pr__facts" aria-label="Respuestas aprobadas sin publicar">
+          {heldReplies.map((reply) => (
+            <li key={reply.id} role="status">
+              <strong>{reply.title}</strong>: {reply.notice ?? "Respuesta aprobada · publicándose"}
+            </li>
+          ))}
+        </ul>
       )}
 
       {rejected && openApprovals.length === 0 && (
@@ -4113,7 +4126,9 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
             <p className="delivery-muted">
               Al aprobar, Tinto la publica con tu cuenta de GitHub
               {reply.thread ? " en el hilo del comentario" : " como comentario del PR"}
-              {reply.resolve_thread ? " y resuelve el hilo" : ""}. Rechazar no publica nada.
+              {reply.resolve_thread ? " y resuelve el hilo" : ""}
+              {reply.interim ? "" : " en cuanto el PR en GitHub tenga la corrección"}. Rechazar no
+              publica nada.
             </p>
             {posting ? (
               <p className="delivery-muted" role="status">

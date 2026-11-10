@@ -1018,7 +1018,8 @@ pub struct DeliveryApproval {
     #[serde(default)]
     pub tip: Option<String>,
     /// `push` only: the branch's HEAD when the push was asked, the commit
-    /// the user approves publishing.
+    /// the user approves publishing. `pr_reply`: the branch's HEAD when it
+    /// was approved, the fix it describes.
     #[serde(default)]
     pub head: Option<String>,
     /// `commit` only: the author git records on the commits (`Name
@@ -1040,6 +1041,12 @@ pub struct DeliveryApproval {
     /// `pr_reply` only: resolve the review thread once replied.
     #[serde(default)]
     pub resolve_thread: bool,
+    /// `pr_reply` only: it says the fix is still in progress, so it is
+    /// posted at once. Any other reply describes a fix and is posted only
+    /// once GitHub's PR head has `head`, the branch's HEAD when it was
+    /// approved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interim: bool,
     /// `commit` only: it creates nothing, it records the commits the branch
     /// already has (made outside Tinto) as the task's, once the user saw
     /// them in `body`. `head` is the branch's HEAD they were listed at.

@@ -3759,6 +3759,15 @@ describe("DeliveryPanel", () => {
             executed_at_ms: 2,
             outcome: "https://github.com/o/r/pull/299#discussion_r9003",
           }),
+          // Approved before its fix reached GitHub: it says what it waits for.
+          reply({
+            id: "r3",
+            title: "Respuesta a eva",
+            status: "approved",
+            comment_url: "https://github.com/o/r/pull/299#discussion_r2110",
+            notice:
+              "Respuesta aprobada · espera a que se publique la corrección: el PR en GitHub está en f5a41bb y la corrección en 4f54085",
+          }),
         ],
       }),
     );
@@ -3770,6 +3779,10 @@ describe("DeliveryPanel", () => {
     ]);
     renderPanel();
     expect(await screen.findByText("Aprobar 2 respuestas a los revisores")).toBeTruthy();
+    const held = screen.getByRole("list", { name: "Respuestas aprobadas sin publicar" });
+    expect(
+      within(held).getByText(/espera a que se publique la corrección: .* f5a41bb/),
+    ).toBeTruthy();
     const banner = await openStep("Revisar las respuestas a los revisores", "pr_reply");
     expect(within(banner).getByText("The leave dialog now says why. Tests cover it.")).toBeTruthy();
     const first = within(banner).getByRole("region", { name: "Respuesta a Sn4pe" });

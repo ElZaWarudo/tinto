@@ -1145,9 +1145,10 @@ fn phase_in_round(
         .iter()
         .find_map(|job| facts.queued.get(&job.id)?.warning.clone());
     let failing = failing_checks(&task.checks, &jobs);
-    // Replies to reviewers waiting for the user's approval hold no stage,
-    // but a push or the PR step is refused until every thread has one: a
-    // task whose next step is one of those waits on the user.
+    // Replies to reviewers waiting for the user's approval hold no stage
+    // and no push (fixes publish before their replies), but the PR step on
+    // an open PR is refused until every thread has one: a task whose next
+    // step is that waits on the user.
     let replies: Vec<Option<&str>> = facts
         .approvals
         .iter()
@@ -1161,7 +1162,7 @@ fn phase_in_round(
     let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
         waits_on: match &phase {
             Phase::NextStep {
-                rung: DeliveryRung::Push | DeliveryRung::Pr,
+                rung: DeliveryRung::Pr,
                 ..
             } if !replies.is_empty() => Waiter::User,
             _ => waits_on,

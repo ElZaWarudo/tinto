@@ -291,6 +291,13 @@ pub struct DeliveryPr {
     /// has waited: what blocks sending it back to review.
     #[serde(default)]
     pub unanswered_threads: Vec<super::review_threads::ReviewThread>,
+    /// Reviewers the user asked to review again, held until GitHub's PR
+    /// head has the fixes, their replies are posted and its CI passed.
+    #[serde(default)]
+    pub review_again: Vec<String>,
+    /// Why `review_again` still waits, as last checked.
+    #[serde(default)]
+    pub review_again_blocker: Option<String>,
 }
 
 impl DeliveryPr {
@@ -332,6 +339,8 @@ impl DeliveryPr {
             review_states: Vec::new(),
             review_threads: Vec::new(),
             unanswered_threads: Vec::new(),
+            review_again: Vec::new(),
+            review_again_blocker: None,
         }
     }
 
@@ -717,7 +726,7 @@ fn check_state(check: &Value) -> &'static str {
 /// The checks on the head of a `gh pr view --json` answer. With the base's
 /// required checks (`requiredChecks`, which `GhCli::pr` adds), only they
 /// count, and one with no run on the head never started.
-fn head_checks(snapshot: &Value) -> PrChecks {
+pub(super) fn head_checks(snapshot: &Value) -> PrChecks {
     let required: Vec<String> = snapshot["requiredChecks"]
         .as_array()
         .into_iter()
@@ -2382,6 +2391,7 @@ impl DeliveryService {
         let read = github
             .pr(&pr.url)
             .and_then(|snapshot| Ok((snapshot, self.github_login(&*github)?)));
+        let live = read.as_ref().ok().map(|(snapshot, _)| snapshot.clone());
         // GitHub's answer goes onto the PR as it is now: while it was asked,
         // the user may have seen its news (a stage started on the task).
         let (before, pr) = {
@@ -2438,6 +2448,12 @@ impl DeliveryService {
         let done = |pr: &DeliveryPr| pr.state == "merged" || pr.state == "closed";
         if done(&pr) && !done(&before) && before.checked_at_ms.is_some() {
             self.drop_evidence(&self.task(task_id)?);
+        }
+        // What waited for this revision on GitHub goes out now, in order:
+        // the replies, then the review asked again.
+        if let Some(live) = live.filter(|_| pr.is_open()) {
+            self.publish_held(task_id, &live)?;
+            return self.task_pr(task_id);
         }
         Ok(Some(pr))
     }
@@ -2634,15 +2650,30 @@ impl DeliveryService {
             Err(_) => {}
         }
         let now = now_ms();
+        // Replies approved and waiting for their fix on GitHub.
+        let held: Vec<String> = self
+            .store()
+            .and_then(|store| store.approvals())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|approval| {
+                approval.rung == DeliveryRung::PrReply
+                    && approval.status == DeliveryApprovalStatus::Approved
+            })
+            .map(|approval| approval.task_id)
+            .collect();
         for pr in open {
             let key = format!("{}#{}", pr.repo, pr.number);
             // What can change any moment is read on every pass: CI running,
-            // red (it may be running again), not run yet, conflicts.
+            // red (it may be running again), not run yet, conflicts, and
+            // what waits for the PR's head to have its fix.
             let hot = pr.state == "unknown"
                 || pr.checks.pending > 0
                 || pr.checks.failing > 0
                 || pr.ci == Some(CiState::NotRun)
-                || pr.conflicts;
+                || pr.conflicts
+                || !pr.review_again.is_empty()
+                || held.contains(&pr.task_id);
             let stale = pr
                 .checked_at_ms
                 .is_none_or(|at| now.saturating_sub(at) >= PR_READ_EVERY.as_millis() as u64);
@@ -2868,8 +2899,10 @@ impl DeliveryService {
     }
 
     /// Changes who reviews the task's open PR: `request` are asked for a
-    /// review (again, when they already gave one), `remove` lose their
-    /// pending request. Returns the PR as GitHub has it afterwards.
+    /// review, `remove` lose their pending request. One who already
+    /// reviewed is asked again only once GitHub has what answers them (see
+    /// [`Self::request_held_reviews`]): until then the request is held on
+    /// the PR. Returns the PR as GitHub has it afterwards.
     pub fn change_pr_reviewers(
         &self,
         task_id: &str,
@@ -2891,9 +2924,16 @@ impl DeliveryService {
                 .collect()
         };
         let (request, remove) = (clean(request), clean(remove));
-        if !request.is_empty() {
-            self.check_threads_answered(task_id, "volver a pedir la revisión")?;
-        }
+        // Someone who reviewed: a verdict or comments Tinto followed, or a
+        // review thread of theirs.
+        let reviewed = |login: &String| {
+            let same = |other: &str| other.eq_ignore_ascii_case(login);
+            pr.review_states.iter().any(|state| {
+                same(&state.login) && state.state != super::reviews::ReviewState::Asked
+            }) || pr.changes_requested_by.iter().any(|other| same(other))
+                || pr.review_threads.iter().any(|thread| same(&thread.author))
+        };
+        let (again, request): (Vec<String>, Vec<String>) = request.into_iter().partition(reviewed);
         let github = self.github();
         if !remove.is_empty() {
             github.remove_reviewers(&pr.url, &remove)?;
@@ -2910,10 +2950,21 @@ impl DeliveryService {
                 stored.reviewers.retain(|login| !gone(login));
                 stored.asked_on_github.retain(|login| !gone(login));
                 stored.removed_in_tinto.extend(remove.iter().cloned());
+                stored.review_again.retain(|login| !gone(login));
                 stored.add_reviewers(&request);
+                for login in again {
+                    if !stored
+                        .review_again
+                        .iter()
+                        .any(|held| held.eq_ignore_ascii_case(&login))
+                    {
+                        stored.review_again.push(login);
+                    }
+                }
                 store.put_pr(&stored)?;
             }
         }
+        // Reading it asks those held, when GitHub has what answers them.
         self.refresh_pr(task_id, Duration::ZERO)
     }
 
@@ -2943,7 +2994,9 @@ impl DeliveryService {
     /// they are saved; a background thread then posts them one after
     /// another, as GitHub wants one user's writes, and asks `rerequest` to
     /// review again after the last. Each reply shows as posted or failed when
-    /// its turn ends; one Tinto closes before posting stays pending.
+    /// its turn ends; one Tinto closes before posting stays pending. A reply
+    /// whose fix GitHub does not have yet, and the review asked again, wait
+    /// for it (see `published.rs`).
     pub fn approve_replies(
         &self,
         replies: Vec<ApprovedReply>,
@@ -3144,47 +3197,6 @@ impl DeliveryService {
                 subject: subject.to_string(),
             })
             .collect()
-    }
-
-    /// A review thread is resolved once its fix is on GitHub: no commit of
-    /// the branch that changes the commented file is missing from
-    /// `origin/<branch>`, and the file has nothing uncommitted. Without a
-    /// path, the whole branch is checked.
-    pub(super) fn check_fix_pushed(
-        &self,
-        task: &DeliveryTask,
-        path: &str,
-    ) -> Result<(), DeliveryError> {
-        let place = Place::of(task.distro.as_deref());
-        let remote = format!("origin/{}", task.branch);
-        let unpushed = |why: String| {
-            DeliveryError::new(
-                "fix_unpushed",
-                format!("{why}: resolve_thread espera a que el arreglo esté publicado; pide el push y vuelve a pedir la respuesta, o pídela sin resolve_thread"),
-            )
-        };
-        let git = |args: &[&str]| tasks::git(place, &task.worktree, args);
-        if git(&["rev-parse", "--verify", "--quiet", &remote]).is_err() {
-            return Err(unpushed(format!(
-                "la rama {} no está publicada",
-                task.branch
-            )));
-        }
-        let range = format!("{remote}..HEAD");
-        let (only, what) = match path {
-            "" => (Vec::new(), "la rama"),
-            path => (vec!["--", path], path),
-        };
-        let commits = git(&[&["log", "--format=%h", &range][..], &only].concat())?;
-        if let Some(commit) = commits.lines().next() {
-            return Err(unpushed(format!(
-                "el commit {commit}, que cambia {what}, no está en {remote}"
-            )));
-        }
-        if !git(&[&["status", "--porcelain"][..], &only].concat())?.is_empty() {
-            return Err(unpushed(format!("{what} tiene cambios sin commit")));
-        }
-        Ok(())
     }
 
     /// Asks the PR step's reviewers on GitHub once its PR is linked, once.
