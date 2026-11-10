@@ -220,7 +220,7 @@ pub enum PrWait {
     /// Its reviews let it merge but it is a draft: the user marks it ready.
     Draft,
     /// Its reviews let it merge, or it merged: the next step is the
-    /// coordinator's.
+    /// coordinator's. A task whose PR merged shows that step as its phase.
     Ready,
     /// Nobody is asked to review it and it needs a review: the user asks
     /// someone.
@@ -1520,6 +1520,17 @@ fn phase_in_round(
         }
     }
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
+        // A merged PR waits on nothing: the step left is what the task
+        // waits on, named, so the coordinator sees it among the idle ones.
+        if pr.state == "merged" {
+            return phase(
+                Phase::NextStep {
+                    rung,
+                    stage: stage.map(str::to_string),
+                },
+                Waiter::Coordinator,
+            );
+        }
         // Replies to reviewers are outside the ladder, but waiting for the
         // user's approval they are what the PR waits on.
         let wait = pr_wait(pr, &replies, facts.review_optional.contains(&task.id));
@@ -2330,6 +2341,28 @@ mod tests {
         let phase = world.phase();
         assert_eq!(phase.phase, Phase::Delivered);
         assert_eq!(phase.waits_on, Waiter::Nobody);
+    }
+
+    /// AGOS-129 · 1/6: PR #365 merged before its Jira step ran, and the task
+    /// sat as a merged PR. The step left is its phase, for the coordinator.
+    #[test]
+    fn a_merged_pr_with_a_step_left_names_that_step_for_the_coordinator() {
+        let mut world = World::new(vec![job("j1", "qa", Finished, Some("pass"))]);
+        for rung in ["commit", "push", "pr", "merge"] {
+            world.approvals.push(step(rung, "executed", Some(9_000)));
+        }
+        world.prs = vec![pr(serde_json::json!({"state": "merged"}))];
+        let phase = world.phase();
+        assert_eq!(
+            (phase.phase, phase.waits_on),
+            (
+                Phase::NextStep {
+                    rung: DeliveryRung::Jira,
+                    stage: Some(JIRA_AFTER_PR.into()),
+                },
+                Waiter::Coordinator
+            )
+        );
     }
 
     fn check(id: &str, command: &str, status: DeliveryJobStatus) -> DeliveryJob {
