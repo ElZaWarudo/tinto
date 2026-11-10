@@ -97,6 +97,8 @@ pub fn run() {
         workbench::WorkbenchStore::with_default_config(dir)
     });
 
+    std::thread::spawn(file_ops::commands::purge_stale_delete_undo);
+
     // Runtime repos from the persisted active workbench seed the initial bus mount.
     let initial_repos = initial_runtime_repos(&store);
 

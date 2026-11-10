@@ -307,6 +307,19 @@ fn delete_batch_restores_every_source_and_discards_its_failed_token() {
 }
 
 #[test]
+fn stale_delete_tokens_are_purged_and_recent_ones_kept() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    fs::create_dir_all(temp.path().join("token/objects")).expect("token");
+    fs::write(temp.path().join("token/objects/0"), "x").expect("object");
+
+    purge_entries_older_than(temp.path(), std::time::Duration::from_secs(3600));
+    assert!(temp.path().join("token").exists());
+
+    purge_entries_older_than(temp.path(), std::time::Duration::ZERO);
+    assert!(!temp.path().join("token").exists());
+}
+
+#[test]
 fn restore_batch_keeps_the_token_retriable_after_a_failure() {
     let temp = tempfile::tempdir().expect("temp dir");
     let repo = temp.path().join("repo");
