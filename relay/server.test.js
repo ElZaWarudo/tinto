@@ -42,7 +42,8 @@ test("forwards binary frames between the two peers of a room, untouched", () =>
 
 test("refuses bad rooms and roles, text frames, oversized frames and floods", () =>
   withRelay(async (base, relay) => {
-    for (const path of [`/v1/rooms/short?role=phone`, `/v1/rooms/${ROOM}?role=admin`]) {
+    // "//" is not a valid URL path: it used to throw and take the relay down.
+    for (const path of [`/v1/rooms/short?role=phone`, `/v1/rooms/${ROOM}?role=admin`, "//"]) {
       const ws = new WebSocket(base + path);
       await assert.rejects(once(ws, "open"));
     }

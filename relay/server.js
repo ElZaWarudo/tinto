@@ -30,9 +30,10 @@ export function startRelay({ port = 8787, host } = {}) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME });
 
   http.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "http://relay");
-    const room = ROOM_PATH.exec(url.pathname)?.[1];
-    const role = url.searchParams.get("role");
+    // URL.parse returns null on paths such as "//" instead of throwing.
+    const url = URL.parse(req.url ?? "/", "http://relay");
+    const room = url && ROOM_PATH.exec(url.pathname)?.[1];
+    const role = url?.searchParams.get("role");
     if (!room || !ROLES.includes(role)) {
       socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
       return;
