@@ -20,6 +20,10 @@ const DEBOUNCE: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// The relay pings every 30 s: this long without a frame, it is gone.
 const RELAY_SILENCE: Duration = Duration::from_secs(90);
+/// Each side pings the other this often (§4) ...
+const PING: Duration = Duration::from_secs(30);
+/// ... so this long without a frame from the phone, it left.
+const PHONE_SILENCE: Duration = Duration::from_secs(75);
 const MAX_NAME: usize = 64;
 
 /// What Tinto does about one message from the phone.
@@ -162,6 +166,8 @@ where
     let mut changes = link.inner.changes.subscribe();
     let (done_tx, mut done) = mpsc::unbounded_channel::<(&'static str, Value)>();
     let mut push_at: Option<Instant> = None;
+    let mut ping = tokio::time::interval(PING);
+    let mut heard: Option<Instant> = None;
 
     macro_rules! send {
         ($kind:expr, $body:expr) => {{
@@ -205,7 +211,9 @@ where
                 else {
                     continue;
                 };
-                link.set_live(room, |live| live.phone = true);
+                if heard.replace(Instant::now()).is_none() {
+                    link.set_live(room, |live| live.phone = true);
+                }
                 let paired = link.is_paired(room);
                 for reply in react(paired, &incoming) {
                     match reply {
@@ -232,6 +240,15 @@ where
                             });
                         }
                     }
+                }
+            }
+            _ = ping.tick() => {
+                if heard.is_some_and(|at| at.elapsed() > PHONE_SILENCE) {
+                    heard = None;
+                    link.set_live(room, |live| live.phone = false);
+                }
+                if session.knows_peer() {
+                    send!("ping", json!({}));
                 }
             }
             _ = changes.changed() => {

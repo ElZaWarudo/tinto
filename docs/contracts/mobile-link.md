@@ -71,6 +71,7 @@ Because `sid` is fresh per connection and every non-hello message names the rece
 ### Phone → desktop
 
 - `hello`: `{ "device": "<name, ≤ 64 chars>" }`.
+- `ping`: `{}`, sent every 30 s once the desktop's session is known (the desktop sends it too). Each side takes the other as gone after 75 s without a frame from it: Tinto stops showing the phone online, the phone goes back to waiting for Tinto. An unknown `type` is ignored, so older peers drop it.
 - `action`: `{ "id": "<request id, ≤ 64 chars>", "action": { "action": "<name>", ... } }`. Only these, with exactly these fields:
 
 | `action`             | fields                                                     | Tinto calls (as the user)                        |
