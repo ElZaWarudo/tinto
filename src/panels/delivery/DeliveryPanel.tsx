@@ -4398,6 +4398,10 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
   );
 }
 
+/** The commit, PR or merge texts the user edited and has not approved yet,
+ *  by approval: hiding the step or opening another task does not lose them. */
+const stepDrafts = new Map<string, { title: string; body: string; messages?: string[] }>();
+
 function ApprovalBanner({
   task,
   approval,
@@ -4465,9 +4469,10 @@ function ApprovalBanner({
   const planned = approval.rung === "commit" && (approval.commits ?? []).length > 0;
   const editsText =
     pending && !approval.record && ["commit", "pr", "merge"].includes(approval.rung);
-  const [title, setTitle] = useState(approval.title);
-  const [body, setBody] = useState(approval.body);
-  const [messages, setMessages] = useState<string[] | undefined>(undefined);
+  const draft = stepDrafts.get(approval.id);
+  const [title, setTitle] = useState(draft?.title ?? approval.title);
+  const [body, setBody] = useState(draft?.body ?? approval.body);
+  const [messages, setMessages] = useState<string[] | undefined>(draft?.messages);
   const edited = !editsText
     ? undefined
     : planned
@@ -4475,6 +4480,10 @@ function ApprovalBanner({
       : title !== approval.title || body !== approval.body
         ? { title, body }
         : undefined;
+  useEffect(() => {
+    if (edited) stepDrafts.set(approval.id, { title, body, messages });
+    else stepDrafts.delete(approval.id);
+  });
   // The PR's description can show the task's QA screenshots.
   const [images, setImages] = useState<DeliveryReplyImage[]>(approval.images ?? []);
   const [shots, setShots] = useState<DeliveryQaScreenshot[]>([]);

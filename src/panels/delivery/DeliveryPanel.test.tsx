@@ -1348,7 +1348,7 @@ describe("DeliveryPanel", () => {
     );
     client.decideDeliveryApproval.mockResolvedValue({ ...approval, status: "executed" });
     renderPanel();
-    const group = await openStep("Revisar commit", "commit");
+    let group = await openStep("Revisar commit", "commit");
     expect(within(group).getByRole("textbox", { name: "Cuerpo" })).toHaveValue(
       "Parser now rejects empty input.",
     );
@@ -1361,6 +1361,14 @@ describe("DeliveryPanel", () => {
     const title = within(group).getByRole("textbox", { name: "Título" });
     await user.clear(title);
     await user.type(title, "AGOS-501: Reject empty input");
+    // Hidden and opened again, the step keeps the edited text.
+    await user.click(screen.getByRole("button", { name: "Revisar commit" }));
+    expect(screen.queryByRole("group", { name: "Aprobación commit" })).toBeNull();
+    await openStep("Revisar commit", "commit");
+    group = screen.getByRole("group", { name: "Aprobación commit" });
+    expect(within(group).getByRole("textbox", { name: "Título" })).toHaveValue(
+      "AGOS-501: Reject empty input",
+    );
     await user.click(within(group).getByRole("button", { name: "Aprobar y hacer commit" }));
     await waitFor(() =>
       expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
