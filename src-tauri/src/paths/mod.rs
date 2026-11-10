@@ -55,6 +55,8 @@ pub enum ClassifierError {
 #[derive(Debug, Clone)]
 pub struct PathClassifier {
     root: PathBuf,
+    /// Gitdir de un worktree enlazado (ver [`linked_git_dir`]).
+    git_dir: Option<PathBuf>,
     /// (dir relativo al root, matcher) ordenados por profundidad creciente.
     gitignores: Vec<(PathBuf, Gitignore)>,
     watchlist: GlobSet,
@@ -102,6 +104,7 @@ impl PathClassifier {
 
         Ok(Self {
             root: root.to_path_buf(),
+            git_dir: linked_git_dir(root),
             gitignores,
             watchlist,
             watch_prefixes,
@@ -112,6 +115,13 @@ impl PathClassifier {
     /// `is_dir` lo aporta el caller; usar `false` para paths borrados.
     /// No hace I/O.
     pub fn classify(&self, path: &Path, is_dir: bool) -> Classification {
+        if let Some(rest) = self
+            .git_dir
+            .as_ref()
+            .and_then(|dir| path.strip_prefix(dir).ok())
+        {
+            return git_meta_or_internal(rest);
+        }
         let rel = match self.relativize(path) {
             Some(rel) => rel,
             None => return Classification::OutsideRepo,
@@ -124,11 +134,7 @@ impl PathClassifier {
         let mut components = rel.components();
         if components.next() == Some(Component::Normal(".git".as_ref())) {
             let rest: PathBuf = components.collect();
-            return if rest == Path::new("HEAD") || rest == Path::new("index") {
-                Classification::GitMeta
-            } else {
-                Classification::GitInternal
-            };
+            return git_meta_or_internal(&rest);
         }
 
         // ¿Gitignoreado? El match más profundo gana (semántica git).
@@ -168,6 +174,11 @@ impl PathClassifier {
         }
     }
 
+    /// Gitdir de un worktree enlazado, si lo es.
+    pub fn git_dir(&self) -> Option<&Path> {
+        self.git_dir.as_deref()
+    }
+
     fn relativize(&self, path: &Path) -> Option<PathBuf> {
         if path.is_absolute() {
             path.strip_prefix(&self.root).ok().map(Path::to_path_buf)
@@ -190,6 +201,28 @@ fn literal_prefix(pattern: &str) -> PathBuf {
         .split('/')
         .take_while(|c| !c.contains(['*', '?', '[', '{', '\\']))
         .collect()
+}
+
+/// `HEAD` e `index` (relativos al gitdir) señalan commit, stage o checkout.
+fn git_meta_or_internal(rest: &Path) -> Classification {
+    if rest == Path::new("HEAD") || rest == Path::new("index") {
+        Classification::GitMeta
+    } else {
+        Classification::GitInternal
+    }
+}
+
+/// En un worktree enlazado `.git` es un archivo `gitdir: <path>` y `HEAD` e
+/// `index` viven en ese gitdir, fuera del root. Devuelve el gitdir
+/// canonicalizado (misma forma que el root montado); `None` en un repo normal.
+pub fn linked_git_dir(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if !dot_git.is_file() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&dot_git).ok()?;
+    let target = content.trim().strip_prefix("gitdir:")?.trim();
+    root.join(target).canonicalize().ok()
 }
 
 /// Recorre el árbol en BFS construyendo un matcher por directorio con
