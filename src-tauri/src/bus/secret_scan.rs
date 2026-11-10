@@ -909,8 +909,13 @@ impl StagedChanges {
         let staged = Self { root };
         for path in changed_paths {
             let source = repo.join(path);
-            // Deleted files and folders (a submodule) have nothing to scan.
-            if !source.is_file()
+            // Deleted files and folders (a submodule) have nothing to scan;
+            // files over the diff's size cap are not copied either (the diff
+            // shows them as binary, and a dump would double on disk).
+            let within_cap = std::fs::metadata(&source).is_ok_and(|meta| {
+                meta.is_file() && meta.len() <= super::contract::FILE_CONTENT_MAX_BYTES as u64
+            });
+            if !within_cap
                 || Path::new(path).components().any(|part| {
                     matches!(
                         part,
@@ -1206,6 +1211,23 @@ fn normalize_path(path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::bus::commands::GITLEAKS_TEMPLATE;
+
+    #[test]
+    fn staged_changes_skip_files_over_the_diff_cap() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::write(repo.path().join("small.env"), "TOKEN=x\n").unwrap();
+        fs::write(
+            repo.path().join("dump.sql"),
+            vec![b'a'; super::super::contract::FILE_CONTENT_MAX_BYTES + 1],
+        )
+        .unwrap();
+        let changed: HashSet<String> = ["small.env", "dump.sql"].map(String::from).into();
+
+        let staged = StagedChanges::copy(repo.path(), &changed).unwrap();
+
+        assert!(staged.root.join("small.env").is_file());
+        assert!(!staged.root.join("dump.sql").exists());
+    }
 
     fn sample_diff(path: &str, lines: Vec<(&str, Option<u32>)>) -> FileDiff {
         FileDiff {
