@@ -21,11 +21,33 @@ impl<'a> Place<'a> {
     }
 }
 
+/// The git commands that reach the remote: a remote that never answers
+/// must not hold the task's git lock for good.
+const NETWORK_COMMANDS: [&str; 3] = ["push", "fetch", "ls-remote"];
+const NETWORK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// Runs `git -C <dir> <args>` and returns trimmed stdout.
 pub fn git(place: Place<'_>, dir: &Path, args: &[&str]) -> Result<String, DeliveryError> {
-    let output = git_command(place, dir, args).output().map_err(|error| {
+    let failed = |error: std::io::Error| {
         DeliveryError::new("git_failed", format!("no se pudo ejecutar git: {error}"))
-    })?;
+    };
+    let mut command = git_command(place, dir, args);
+    let output = match args.first() {
+        Some(name) if NETWORK_COMMANDS.contains(name) => {
+            super::prs::output_within(&mut command, NETWORK_TIMEOUT)
+                .map_err(failed)?
+                .ok_or_else(|| {
+                    DeliveryError::new(
+                        "git_failed",
+                        format!(
+                            "git {name}: el remoto no respondió en {} minutos",
+                            NETWORK_TIMEOUT.as_secs() / 60
+                        ),
+                    )
+                })?
+        }
+        _ => command.output().map_err(failed)?,
+    };
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
