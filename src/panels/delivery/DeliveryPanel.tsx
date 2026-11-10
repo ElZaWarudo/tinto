@@ -120,7 +120,6 @@ import {
   CorrectResultDialog,
   NewTaskDialog,
   ReleaseLeaseDialog,
-  DeliverySettingsDialog,
   SettingsPage,
   StageAgentRow,
   type CorrectableStep,
@@ -218,7 +217,6 @@ type Dialog =
   | { kind: "dispatch"; task: DeliveryTask; role: string; prompt: string; source: string | null }
   | { kind: "release"; name: string; note: string | null }
   | { kind: "archived" }
-  | { kind: "settings" }
   | null;
 
 /** What the task list shows: one batch (null: all of them), the children
@@ -613,7 +611,9 @@ interface DeliveryShared {
 type Asked =
   | { kind: "task"; taskId: string }
   | { kind: "stall"; runId: string }
-  | { kind: "guides"; repo: string };
+  | { kind: "guides"; repo: string }
+  /** The header's gear: the settings page, on its Delivery tab. */
+  | { kind: "delivery-settings"; repo: string };
 
 const DeliveryContext = createContext<DeliveryShared | null>(null);
 
@@ -854,6 +854,19 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     if (!api) return;
     addRepoPanel(api, repo);
     api.getPanel(repoPanelId(repo))?.api.setActive();
+  };
+
+  // Delivery's settings open in the repo in front (else the first one), on
+  // its settings page's Delivery tab.
+  const hasSettingsRepo = Boolean(only) || repos.length > 0;
+  const openDeliverySettings = () => {
+    const settingsRepo =
+      only ??
+      (dockRef.current?.activePanel?.params as { repo?: string } | undefined)?.repo ??
+      repos[0]?.path;
+    if (!settingsRepo) return;
+    if (!only) openRepo(settingsRepo);
+    setAsked({ kind: "delivery-settings", repo: settingsRepo });
   };
 
   // Brings the repo forward: its tab, or its window when it has one.
@@ -1199,7 +1212,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
               className="delivery-icon-button"
               aria-label="Ajustes de Delivery"
               title="Agentes en paralelo y conexión de coordinadores"
-              onClick={() => setDialog({ kind: "settings" })}
+              disabled={!hasSettingsRepo}
+              onClick={openDeliverySettings}
             >
               <Icon name="gear" />
             </button>
@@ -1268,14 +1282,6 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             </div>
           )}
 
-          {dialog?.kind === "settings" && (
-            <DeliverySettingsDialog
-              settings={wideSettings}
-              endpoint={overview?.coordinator ?? null}
-              onSettings={(value) => void run(() => updateDeliverySettings(value))}
-              onClose={() => setDialog(null)}
-            />
-          )}
           {dialog?.kind === "new-task" && (
             <NewTaskDialog
               repos={repos}
@@ -1623,7 +1629,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const shared = useDelivery();
   const { overview, now, repos, listView, setListView, selected, select, reveal, run } = shared;
   // Settings in place of the tasks, opened on a section or at the top;
-  // "proposal": the guides, on the rules proposed.
+  // "proposal": the guides, on the rules proposed; "delivery": its Delivery tab.
   const [settingsAt, setSettingsAt] = useState<string | null>(null);
   const settingsOpen = settingsAt !== null;
   const guidesOpen = settingsAt === "guides" || settingsAt === "proposal";
@@ -1631,11 +1637,15 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const { asked, settleAsked } = shared;
   const guidesWait = shared.guides.some((guide) => repoKey(guide.repo) === key);
   // «te necesita» chose this repo's proposed rules: the guides open on them.
-  const askedGuides = asked?.kind === "guides" && repoKey(asked.repo) === key ? asked : null;
+  // The header's gear: the settings, on the Delivery tab.
+  const askedGuides =
+    (asked?.kind === "guides" || asked?.kind === "delivery-settings") && repoKey(asked.repo) === key
+      ? asked
+      : null;
   const [seenAsk, setSeenAsk] = useState<Asked | null>(null);
   if (askedGuides && askedGuides !== seenAsk) {
     setSeenAsk(askedGuides);
-    setSettingsAt("proposal");
+    setSettingsAt(askedGuides.kind === "guides" ? "proposal" : "delivery");
   }
   // Or one of its stopped coordinators: its chip gets the focus.
   const askedStall =
@@ -2142,8 +2152,13 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           key={settingsAt}
           repos={repos}
           repo={choice}
-          section={settingsAt === "proposal" ? undefined : settingsAt || undefined}
+          section={
+            settingsAt === "proposal" || settingsAt === "delivery"
+              ? undefined
+              : settingsAt || undefined
+          }
           focusProposal={settingsAt === "proposal"}
+          scope={settingsAt === "delivery" ? "delivery" : undefined}
           onBack={() => setSettingsAt(null)}
           settings={overview?.settings ?? { capacity: 0, quota_stop_percent: QUOTA_STOP_PERCENT }}
           endpoint={overview?.coordinator ?? null}

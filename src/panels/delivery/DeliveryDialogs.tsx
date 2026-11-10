@@ -1624,6 +1624,7 @@ export function SettingsPage({
   repo,
   section,
   focusProposal,
+  scope: opensOn = "repo",
   onBack,
   ...wide
 }: {
@@ -1633,9 +1634,11 @@ export function SettingsPage({
   section?: string;
   /** Open on the guide rules proposed, focused. */
   focusProposal?: boolean;
+  /** The tab to open on. */
+  scope?: SettingsScope;
   onBack: () => void;
 } & DeliveryWideProps) {
-  const [scope, setScope] = useState<SettingsScope>("repo");
+  const [scope, setScope] = useState<SettingsScope>(opensOn);
   const [chosen, setChosen] = useState(repo);
   const choices = repos.some((candidate) => candidate.path === repo.path)
     ? repos
@@ -1682,13 +1685,7 @@ export function SettingsPage({
   if (scope === "delivery") {
     return (
       <SettingsFrame onBack={onBack} tabs={tabs}>
-        <section className="delivery-settings__section" aria-label="Ajustes de Delivery">
-          <h3>Delivery</h3>
-          <p className="delivery-settings__intro">
-            Vale para todos los repositorios y se guarda al cambiarlo.
-          </p>
-          <DeliveryWideSettings {...wide} />
-        </section>
+        <DeliveryWideSettings {...wide} />
       </SettingsFrame>
     );
   }
@@ -1903,21 +1900,9 @@ type DeliveryWideProps = {
 /** The shares of an account's usage limit the settings offer to stop at. */
 const QUOTA_STOP_CHOICES = [50, 60, 70, 80, 90, 95, 97, 98, 99, 100];
 
-/** What applies to Delivery in every repo: how many agents run at once and
- *  how an outside coordinator connects. */
-export function DeliverySettingsDialog({
-  onClose,
-  ...wide
-}: DeliveryWideProps & { onClose: () => void }) {
-  return (
-    <FormDialog title="Ajustes de Delivery" wide onCancel={onClose}>
-      <DeliveryWideSettings {...wide} />
-    </FormDialog>
-  );
-}
-
-/** How many agents run at once and how an outside coordinator connects:
- *  the same in the dialog and on a repo's settings page. */
+/** What applies to Delivery in every repo, one headed section per topic:
+ *  how many agents run at once, the usage limit, how an outside
+ *  coordinator connects and the phone link. The settings page's Delivery tab. */
 function DeliveryWideSettings({ settings, endpoint, onSettings }: DeliveryWideProps) {
   const { capacity, quota_stop_percent: quotaStop } = settings;
   // The token is a credential: the page shows it masked and only the copy
@@ -1942,71 +1927,84 @@ function DeliveryWideSettings({ settings, endpoint, onSettings }: DeliveryWidePr
         ? `[mcp_servers.tinto-delivery]\ncommand = '${command}'\nargs = ["--delivery-mcp-proxy"]`
         : `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`;
   return (
-    <>
-      <Field
-        label="Agentes en paralelo"
-        hint="Automático: uno por cada tarea activa (cada issue), hasta uno por núcleo físico menos uno (para las comprobaciones de Tinto), que corren de una en una. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
-      >
-        <select
-          value={capacity}
-          onChange={(event) => onSettings({ ...settings, capacity: Number(event.target.value) })}
-        >
-          <option value={0}>Automático: uno por issue</option>
-          {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
-          <option value={UNLIMITED_CAPACITY}>Sin límite</option>
-        </select>
-      </Field>
-      <Field
-        label="Límite de uso de cada cuenta"
-        hint="Desde esta parte del límite de uso de su cuenta, Tinto no empieza trabajos nuevos de un agente hasta que se renueve (o los empieza con el agente alternativo de la etapa); los que corren siguen. Un trabajo que se queda sin cuota a medias falla con sus cambios a medio hacer y se reintenta una hora después."
-      >
-        <select
-          value={quotaStop}
-          onChange={(event) =>
-            onSettings({ ...settings, quota_stop_percent: Number(event.target.value) })
-          }
-        >
-          {(QUOTA_STOP_CHOICES.includes(quotaStop)
-            ? QUOTA_STOP_CHOICES
-            : [...QUOTA_STOP_CHOICES, quotaStop].sort((a, b) => a - b)
-          ).map((value) => (
-            <option key={value} value={value}>
-              {value === 100 ? "100%: no detener nunca" : `${value}%`}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <h3 className="delivery-dialog__subtitle">Conectar un coordinador</h3>
+    <section className="delivery-settings__wide" aria-label="Ajustes de Delivery">
       <p className="delivery-settings__intro">
-        Un agente coordinador (por ejemplo la skill backlog-delivery) dirige Delivery mediante MCP:
-        crea tareas, lanza etapas y pide aprobaciones.
+        Vale para todos los repositorios y se guarda al cambiarlo.
       </p>
-      {endpoint ? (
-        <>
-          <p className="delivery-settings__intro">
-            Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
-            herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
-            fuera de Tinto: arrancan el proxy de Tinto como servidor MCP, que sigue en marcha cuando
-            Tinto se actualiza, abre Tinto si está cerrado y lo encuentra aunque cambie de puerto.
-            Si lo añadiste antes con tinto.exe, vuelve a añadirlo con este comando: cada
-            actualización de Tinto corta esa conexión.
-          </p>
-          <CopySnippet label="Claude Code" shown={claude(MASK)} copied={claude(endpoint.token)} />
-          <CopySnippet
-            label="Codex (config.toml)"
-            shown={codex(MASK)}
-            copied={codex(endpoint.token)}
-          />
-        </>
-      ) : (
-        <p className="delivery-settings__intro">El API de coordinador no está disponible.</p>
-      )}
-      <MobileLinkSettings />
-    </>
+      <section className="delivery-settings__section" aria-label="Agentes en paralelo">
+        <h3>Agentes en paralelo</h3>
+        <Field
+          label="Cuántos a la vez"
+          hint="Automático: uno por cada tarea activa (cada issue), hasta uno por núcleo físico menos uno (para las comprobaciones de Tinto), que corren de una en una. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
+        >
+          <select
+            value={capacity}
+            onChange={(event) => onSettings({ ...settings, capacity: Number(event.target.value) })}
+          >
+            <option value={0}>Automático: uno por issue</option>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+            <option value={UNLIMITED_CAPACITY}>Sin límite</option>
+          </select>
+        </Field>
+      </section>
+      <section className="delivery-settings__section" aria-label="Límite de uso">
+        <h3>Límite de uso</h3>
+        <Field
+          label="Detener en"
+          hint="Desde esta parte del límite de uso de su cuenta, Tinto no empieza trabajos nuevos de un agente hasta que se renueve (o los empieza con el agente alternativo de la etapa); los que corren siguen. Un trabajo que se queda sin cuota a medias falla con sus cambios a medio hacer y se reintenta una hora después."
+        >
+          <select
+            value={quotaStop}
+            onChange={(event) =>
+              onSettings({ ...settings, quota_stop_percent: Number(event.target.value) })
+            }
+          >
+            {(QUOTA_STOP_CHOICES.includes(quotaStop)
+              ? QUOTA_STOP_CHOICES
+              : [...QUOTA_STOP_CHOICES, quotaStop].sort((a, b) => a - b)
+            ).map((value) => (
+              <option key={value} value={value}>
+                {value === 100 ? "100%: no detener nunca" : `${value}%`}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </section>
+      <section className="delivery-settings__section" aria-label="Conectar un coordinador">
+        <h3>Conectar un coordinador</h3>
+        <p className="delivery-settings__intro">
+          Un agente coordinador (por ejemplo la skill backlog-delivery) dirige Delivery mediante
+          MCP: crea tareas, lanza etapas y pide aprobaciones.
+        </p>
+        {endpoint ? (
+          <>
+            <p className="delivery-settings__intro">
+              Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
+              herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
+              fuera de Tinto: arrancan el proxy de Tinto como servidor MCP, que sigue en marcha
+              cuando Tinto se actualiza, abre Tinto si está cerrado y lo encuentra aunque cambie de
+              puerto. Si lo añadiste antes con tinto.exe, vuelve a añadirlo con este comando: cada
+              actualización de Tinto corta esa conexión.
+            </p>
+            <CopySnippet label="Claude Code" shown={claude(MASK)} copied={claude(endpoint.token)} />
+            <CopySnippet
+              label="Codex (config.toml)"
+              shown={codex(MASK)}
+              copied={codex(endpoint.token)}
+            />
+          </>
+        ) : (
+          <p className="delivery-settings__intro">El API de coordinador no está disponible.</p>
+        )}
+      </section>
+      <section className="delivery-settings__section" aria-label="Móvil">
+        <MobileLinkSettings />
+      </section>
+    </section>
   );
 }
 

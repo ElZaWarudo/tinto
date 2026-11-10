@@ -2681,17 +2681,18 @@ describe("DeliveryPanel", () => {
       within(batches).getByRole("button", { name: "Tomar el control del lote Lote A" }),
     ).toBeInTheDocument();
 
-    // What applies to every repo is a dialog over the tasks.
+    // What applies to every repo opens as the settings page, on its Delivery tab.
     await user.click(screen.getByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    const settings = await screen.findByRole("region", { name: "Ajustes de Delivery" });
+    expect(screen.getByRole("tab", { name: "Delivery" })).toHaveAttribute("aria-selected", "true");
     expect(settings).not.toHaveTextContent("secret");
     await user.click(
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),
     );
     expect(await navigator.clipboard.readText()).toContain("Bearer secret");
     expect(within(settings).getByText("Copiado, con el token.")).toBeInTheDocument();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: "Ajustes de Delivery" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "← Volver" }));
+    expect(screen.queryByRole("region", { name: "Ajustes de Delivery" })).toBeNull();
 
     // New tasks go to the repo's most recent active batch by default.
     await user.click(screen.getByRole("button", { name: "Nueva tarea" }));
@@ -2870,7 +2871,7 @@ describe("DeliveryPanel", () => {
     expect(screen.getByRole("region", { name: "Guías de agentos" })).toBeInTheDocument();
     // What applies to all of Delivery and to Tinto itself, each in its tab.
     await user.click(screen.getByRole("tab", { name: "Delivery" }));
-    expect(screen.getByRole("combobox", { name: /Agentes en paralelo/ })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /Cuántos a la vez/ })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Ajustes de agentos" })).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Tinto" }));
     expect(screen.getByRole("combobox", { name: "Tema" })).toBeInTheDocument();
@@ -4279,7 +4280,7 @@ describe("DeliveryPanel", () => {
     );
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    const settings = await screen.findByRole("region", { name: "Ajustes de Delivery" });
     expect(settings).not.toHaveTextContent("secret");
     await user.click(
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),
