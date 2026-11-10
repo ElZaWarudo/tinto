@@ -967,6 +967,7 @@ impl DeliveryService {
             leases: &leases,
             approvals: &approvals,
             decisions: &decisions,
+            qa_problems: &qa_problems,
             settings_proposals: &settings_proposals,
             prs: &prs,
             rounds: &rounds,

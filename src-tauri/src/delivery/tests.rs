@@ -3538,6 +3538,41 @@ fn executed_step(task_id: &str, rung: &str) -> super::model::DeliveryApproval {
 }
 
 #[test]
+fn a_note_cannot_block_a_task_that_already_waits_on_the_user() {
+    use super::model::NewBlocker;
+    let h = harness();
+    let task = h.task("WU-1");
+    write_files(&task, &["a.txt"]);
+    // A commit step waits for the user's approval: Tinto shows that.
+    h.service
+        .request_approval(step(&task, DeliveryRung::Commit, "Add a"))
+        .unwrap();
+    let note = || {
+        h.service.set_blockers(
+            &task.id,
+            vec![NewBlocker::Note {
+                text: "Waiting for the user to approve the commit".into(),
+            }],
+            "waits for the user",
+        )
+    };
+    assert_eq!(note().unwrap_err().category, "waits_on_user");
+    // Anything else still blocks it.
+    let other = h.task("WU-2");
+    assert!(h
+        .service
+        .set_blockers(
+            &task.id,
+            vec![NewBlocker::Task {
+                task: other.id,
+                until: None
+            }],
+            "needs WU-2"
+        )
+        .is_ok());
+}
+
+#[test]
 fn a_task_blocked_on_another_tasks_merge_waits_until_it_merges() {
     use super::model::NewBlocker;
     use super::phase::Waiter;

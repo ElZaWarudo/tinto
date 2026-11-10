@@ -870,6 +870,8 @@ export type DeliveryPrWait =
 /** Where a task is, as Tinto derives it (src-tauri/src/delivery/phase.rs). */
 export type DeliveryPhase =
   | { kind: "decisions"; count: number }
+  /** QA problems the user decides: fix or dismiss each. */
+  | { kind: "qa_problems"; count: number }
   | { kind: "approval" | "record" | "drifted"; rung: DeliveryRung; stage: string | null }
   /** An approved step Tinto runs apart (a merge): what it is doing, since when. */
   | { kind: "step_running"; rung: DeliveryRung; step: string; since_ms: number }

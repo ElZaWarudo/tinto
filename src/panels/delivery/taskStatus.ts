@@ -417,6 +417,8 @@ function packageWhere(overview: DeliveryOverview, taskId: string): string {
       return "bloqueado";
     case "decisions":
       return "con decisiones";
+    case "qa_problems":
+      return "con problemas de QA";
     case "pr":
       return "PR abierto";
     case "pr_waits_predecessor":
@@ -822,6 +824,12 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
     case "decisions":
       return attention(
         phase.count === 1 ? "1 decisión pendiente" : `${phase.count} decisiones pendientes`,
+      );
+    case "qa_problems":
+      return attention(
+        phase.count === 1
+          ? "1 problema de QA por decidir"
+          : `${phase.count} problemas de QA por decidir`,
       );
     case "approval": {
       const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
