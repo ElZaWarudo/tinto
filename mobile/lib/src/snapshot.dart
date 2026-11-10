@@ -75,11 +75,15 @@ class Decision {
         command = _opt(j['command']),
         options = _list(j['options']).map(DecisionOption.new).toList(),
         recommendationWhy = j['recommendation'] is Map ? _s(j['recommendation']['why']) : null,
-        blocking = j['blocking'] != false;
+        blocking = j['blocking'] != false,
+        inTinto = j['in_tinto'] == true;
   final String id, taskId, kind, question, detail, text;
   final String? command, recommendationWhy;
   final List<DecisionOption> options;
   final bool blocking;
+
+  /// The phone does not show all it would allow or approve: only Tinto can.
+  final bool inTinto;
 }
 
 class Approval {

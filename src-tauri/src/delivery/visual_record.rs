@@ -349,9 +349,21 @@ fn redundant_caption(label: &str) -> bool {
     numeric(sides.next()) && numeric(sides.next()) && sides.next().is_none()
 }
 
+/// The image `reference` names inside `base`; one outside it (`..`, an
+/// absolute path, a link) is refused, since the reference comes from an
+/// agent's markdown.
 pub(super) fn data_uri(reference: &str, base: &Path) -> Result<String, String> {
-    let source = base.join(reference);
-    let bytes = std::fs::read(&source).map_err(|_| format!("falta la captura {reference}"))?;
+    let missing = || format!("falta la captura {reference}");
+    let source = base.join(reference).canonicalize().map_err(|_| missing())?;
+    if !base
+        .canonicalize()
+        .is_ok_and(|base| source.starts_with(base))
+    {
+        return Err(format!(
+            "la captura {reference} está fuera de la carpeta de QA"
+        ));
+    }
+    let bytes = std::fs::read(&source).map_err(|_| missing())?;
     let mime = match source
         .extension()
         .map(|ext| ext.to_string_lossy().to_lowercase())
@@ -808,6 +820,24 @@ mod tests {
         assert!(render_beside(&record)
             .unwrap_err()
             .contains("K-2-1-a-desktop.png"));
+    }
+
+    #[test]
+    fn a_screenshot_outside_the_qa_folder_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let qa = dir.path().join("qa");
+        std::fs::create_dir_all(qa.join("shots")).unwrap();
+        std::fs::write(qa.join("shots/a.png"), b"png").unwrap();
+        let outside = dir.path().join("secret.png");
+        std::fs::write(&outside, b"png").unwrap();
+        assert!(data_uri("shots/a.png", &qa).is_ok());
+        let outside = outside.to_string_lossy().to_string();
+        for reference in ["../secret.png", outside.as_str()] {
+            assert!(
+                data_uri(reference, &qa).unwrap_err().contains("fuera"),
+                "{reference}"
+            );
+        }
     }
 
     #[test]

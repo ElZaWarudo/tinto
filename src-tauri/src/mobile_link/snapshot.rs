@@ -8,9 +8,9 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 use crate::delivery::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryDecision, DeliveryDecisionOption,
-    DeliveryDecisionStatus, DeliveryJobStatus, DeliveryOverview, DeliveryQaProblemStatus,
-    DeliveryRecommendation, DeliveryRung, DeliverySettingsProposalStatus,
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryDecision, DeliveryDecisionKind,
+    DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJobStatus, DeliveryOverview,
+    DeliveryQaProblemStatus, DeliveryRecommendation, DeliveryRung, DeliverySettingsProposalStatus,
 };
 use crate::delivery::phase::{DeliveryTaskPhase, Phase, PrWait};
 
@@ -85,6 +85,10 @@ pub struct Decision {
     pub options: Vec<DeliveryDecisionOption>,
     pub recommendation: Option<DeliveryRecommendation>,
     pub blocking: bool,
+    /// The phone cannot show all it would allow or approve (hidden grants,
+    /// a cut text): only Tinto does (a permission can still be denied
+    /// from the phone).
+    pub in_tinto: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,6 +193,26 @@ fn decision(decision: &DeliveryDecision) -> Decision {
         options: decision.options.clone(),
         recommendation: decision.recommendation.clone(),
         blocking: decision.blocking,
+        in_tinto: in_tinto(decision),
+    }
+}
+
+/// Whether allowing a permission or approving a text needs what the phone
+/// does not show: the grants beyond its command, or a text it cuts.
+pub(super) fn in_tinto(decision: &DeliveryDecision) -> bool {
+    let long = |text: &str| text.chars().count() > TEXT;
+    match decision.kind {
+        DeliveryDecisionKind::Choice => false,
+        DeliveryDecisionKind::Text => long(&decision.text),
+        DeliveryDecisionKind::Permission => {
+            decision.full_access
+                || !decision.write_dirs.is_empty()
+                || !decision.read_dirs.is_empty()
+                || !decision.scripts.is_empty()
+                || !decision.warnings.is_empty()
+                || !decision.unfrozen.is_empty()
+                || decision.command.as_deref().is_some_and(long)
+        }
     }
 }
 
