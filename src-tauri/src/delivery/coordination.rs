@@ -1689,25 +1689,26 @@ impl DeliveryService {
         if approval.rung == DeliveryRung::PrReply {
             self.post_reply_once_published(&mut approval, None)?;
         }
+        // One step at a time runs git in the worktree, until it is saved: a
+        // reader must not see its git work without the step that did it.
+        let lock = super::service::keyed_lock(&self.inner.git_work, &approval.task_id);
+        let mut git_work = None;
         if matches!(
             approval.rung,
             DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
         ) {
             let task = self.task(&approval.task_id)?;
-            // One step at a time runs git in the worktree.
-            let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
-            let git_work = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            git_work = Some(lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
             let executed = match approval.rung {
                 DeliveryRung::Commit if approval.record => self.run_record(&task, &mut approval),
                 DeliveryRung::Commit => run_commit_plan(&task, &mut approval),
                 DeliveryRung::Sync => self.run_sync(&task, &mut approval),
-                _ if self.commits_lost(&task)? => Err(DeliveryError::new(
+                _ if self.commits_lost_locked(&task)? => Err(DeliveryError::new(
                     "commit_missing",
                     "No se publicó: los commits que hizo Tinto ya no están en la rama. Vuelve a preparar el commit.",
                 )),
                 _ => self.run_push(&task, &mut approval),
             };
-            drop(git_work);
             approval.executed_at_ms = Some(now_ms());
             match executed {
                 Ok(outcome) => {
@@ -1730,6 +1731,7 @@ impl DeliveryService {
             }
         }
         self.save_approval(&approval, "approval_approved")?;
+        drop(git_work);
         if approval.rung == DeliveryRung::PrReply {
             self.reply_answered(&approval)?;
         }
@@ -3348,7 +3350,20 @@ impl DeliveryService {
     /// Whether the commits of the task's commit step are gone from its
     /// branch (reset, amend or rebase done outside Tinto). The step then
     /// counts as undone, so the commit is prepared again before any push.
+    /// While a step runs git in the worktree it says nothing: a restack
+    /// rewrites the commits before its sync step is saved.
     pub(super) fn commits_lost(&self, task: &DeliveryTask) -> Result<bool, DeliveryError> {
+        let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
+        let _git_work = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+        };
+        self.commits_lost_locked(task)
+    }
+
+    /// [`Self::commits_lost`] for a caller that holds the task's git work.
+    fn commits_lost_locked(&self, task: &DeliveryTask) -> Result<bool, DeliveryError> {
         let latest = self
             .store()?
             .approvals()?
