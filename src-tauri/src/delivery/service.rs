@@ -260,6 +260,9 @@ pub(super) struct Inner {
     /// Jobs whose process outlived the last Tinto, which this one follows
     /// once the app is wired (see [`DeliveryService::follow_running`]).
     adopted: Mutex<Vec<String>>,
+    /// What held each queued job at the last scheduling tick, then what
+    /// its `job_started` event says of a long wait (see `Queue::note_waits`).
+    queue_notes: Mutex<HashMap<String, String>>,
     /// Tests set it to stand for Tinto closing: its jobs keep running and
     /// nothing follows them any more.
     closed: AtomicBool,
@@ -623,6 +626,7 @@ impl DeliveryService {
                 pausing: Mutex::new(HashSet::new()),
                 restart_retries: Mutex::new(Vec::new()),
                 adopted: Mutex::new(Vec::new()),
+                queue_notes: Mutex::new(HashMap::new()),
                 closed: AtomicBool::new(false),
                 notify: Mutex::new(None),
                 changes: (Mutex::new(0), Condvar::new()),
@@ -3043,6 +3047,9 @@ impl DeliveryService {
             store.put_job(job)?;
         }
         let (plan, leases) = queue.plan(now);
+        if let Ok(mut notes) = self.inner.queue_notes.lock() {
+            queue.note_waits(&plan, now, &mut notes);
+        }
         for lease in leases.iter().filter(|lease| !queue.leases.contains(lease)) {
             store.put_lease(lease)?;
         }
@@ -3266,12 +3273,18 @@ impl DeliveryService {
             if let Some(start) = &start {
                 store.set_start_snapshot(&job.id, start)?;
             }
+            let waited = self
+                .inner
+                .queue_notes
+                .lock()
+                .ok()
+                .and_then(|mut notes| notes.remove(&job.id));
             store.record_event(
                 now_ms(),
                 "job_started",
                 Some(&job.task_id),
                 Some(&job.id),
-                "",
+                waited.as_deref().unwrap_or_default(),
             )?;
             Ok(current)
         })();

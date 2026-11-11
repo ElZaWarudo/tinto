@@ -24,6 +24,11 @@ use super::DeliveryError;
 /// so few, but not one, or every task's checks queue behind the others'.
 const CHECKS_AT_ONCE: usize = 2;
 
+/// A job queued longer than this says in its `job_started` event how long
+/// it waited and what held it last: `queued_reason` is only ever computed
+/// when read, so without it a long wait leaves no trace.
+const LONG_WAIT_MS: u64 = 5 * 60_000;
+
 /// One of Tinto's own checks: a verification command run on a stage's
 /// result.
 fn is_check(job: &DeliveryJob) -> bool {
@@ -175,7 +180,7 @@ impl Queue {
     }
 
     /// Each queued job, those of tasks about to merge first, then oldest
-    /// first, with what holds it (`None`: it starts now): one job per task at
+    /// first (a task's checks quickest first), with what holds it (`None`: it starts now): one job per task at
     /// a time, setup first, the environment for
     /// those that need it, up to the capacity, and exclusive resources in
     /// the order they were asked for. The resources it takes or queues for
@@ -205,6 +210,25 @@ impl Queue {
             .filter(|job| job.status == DeliveryJobStatus::Queued)
             .collect();
         queued.sort_by_key(|job| !self.merging.contains(&job.task_id));
+        // Within each task's batch of checks the quickest goes first, so a
+        // build or lint that fails reports before a long suite ends. Only
+        // there: tasks keep their turn, so no task's long check waits behind
+        // newer tasks' short ones, and a batch is finite. A command with no
+        // finished run yet goes first: it is measured once, and a new check
+        // is never left last for good.
+        let mut checks: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (at, job) in queued.iter().enumerate() {
+            if is_check(job) {
+                checks.entry(job.task_id.as_str()).or_default().push(at);
+            }
+        }
+        for places in checks.values() {
+            let mut batch: Vec<&DeliveryJob> = places.iter().map(|&at| queued[at]).collect();
+            batch.sort_by_key(|job| self.last_run_ms(job));
+            for (&at, job) in places.iter().zip(batch) {
+                queued[at] = job;
+            }
+        }
         let mut plan = Vec::new();
         for job in queued {
             let hold = self.hold(job, &busy, running, &checking, &mut leases, now);
@@ -218,6 +242,48 @@ impl Queue {
             plan.push((job.id.clone(), hold));
         }
         (plan, leases)
+    }
+
+    /// Keeps `notes` from one scheduling tick to the next: for each job
+    /// `plan` holds, why; for each it starts after a long wait, what its
+    /// `job_started` event says, from the reason the tick before left.
+    /// Notes of jobs no longer queued nor about to start are dropped.
+    pub(super) fn note_waits(
+        &self,
+        plan: &[(String, Option<Hold>)],
+        now: u64,
+        notes: &mut HashMap<String, String>,
+    ) {
+        notes.retain(|id, _| {
+            self.job(id).is_some_and(|job| {
+                matches!(
+                    job.status,
+                    DeliveryJobStatus::Queued | DeliveryJobStatus::Pending
+                )
+            })
+        });
+        for (id, hold) in plan {
+            let Some(job) = self.job(id) else { continue };
+            match hold {
+                Some(hold) => {
+                    notes.insert(id.clone(), self.explain(job, hold, now).0);
+                }
+                None => {
+                    let last = notes.remove(id);
+                    let waited = now.saturating_sub(job.created_at_ms);
+                    if waited > LONG_WAIT_MS {
+                        let why = match last {
+                            Some(reason) => format!("lo último que lo retenía: {reason}"),
+                            None => "sin motivo anotado desde que Tinto arrancó".to_string(),
+                        };
+                        notes.insert(
+                            id.clone(),
+                            format!("esperó {} min en la cola; {why}", waited / 60_000),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn hold(
@@ -570,6 +636,28 @@ impl Queue {
         })
     }
 
+    /// How long the last finished run of the check's command took in its
+    /// repo; `None` if it never finished there.
+    fn last_run_ms(&self, check: &DeliveryJob) -> Option<u64> {
+        let repo = |task_id: &str| {
+            self.tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .map(|task| &task.repo)
+        };
+        let ours = repo(&check.task_id);
+        self.jobs
+            .iter()
+            .rev()
+            .filter(|other| {
+                other.status == DeliveryJobStatus::Finished
+                    && is_check(other)
+                    && other.prompt == check.prompt
+                    && repo(&other.task_id) == ours
+            })
+            .find_map(|other| Some(other.ended_at_ms?.saturating_sub(other.started_at_ms?)))
+    }
+
     /// How long jobs like this one (the same stage, or the same command
     /// for Tinto's own) took the last times they ended well: the median of
     /// the last five.
@@ -857,5 +945,79 @@ mod tests {
             .map(|(id, _)| id)
             .collect();
         assert_eq!(started, ["merging", "older"]);
+    }
+
+    #[test]
+    fn a_tasks_checks_start_quickest_first_and_new_commands_before_any() {
+        let check = |id: &str, task: &str, command: &str, took: Option<u64>| {
+            let mut job = job(id, task, DeliveryAgent::Shell);
+            job.role = CHECKS_ROLE.into();
+            job.prompt = command.into();
+            if let Some(took) = took {
+                job.status = DeliveryJobStatus::Finished;
+                job.started_at_ms = Some(0);
+                job.ended_at_ms = Some(took);
+            }
+            job
+        };
+        let mut queue = queue(
+            vec![
+                check("old-suite", "done", "npm test", Some(5 * 60_000)),
+                check("old-build", "done", "cargo build", Some(6_000)),
+                // Another repo's run of the suite is not this one's.
+                check("elsewhere", "other", "npm test", Some(1_000)),
+                check("suite", "t1", "npm test", None),
+                check("build", "t1", "cargo build", None),
+                check("new", "t1", "npm run lint", None),
+            ],
+            Vec::new(),
+            QUOTA_STOP_PERCENT,
+        );
+        queue.tasks[2].repo = PathBuf::from("/other");
+        // One job of the task at a time: each ends before the next starts.
+        let mut order = Vec::new();
+        while let Some((id, _)) = queue.plan(0).0.into_iter().find(|(_, h)| h.is_none()) {
+            let job = queue.jobs.iter_mut().find(|job| job.id == id).unwrap();
+            job.status = DeliveryJobStatus::Finished;
+            order.push(id);
+        }
+        assert_eq!(order, ["new", "build", "suite"]);
+    }
+
+    #[test]
+    fn a_job_started_after_a_long_wait_keeps_what_held_it_last() {
+        let minute = 60_000;
+        let mut long = job("long", "t1", DeliveryAgent::Claude);
+        long.created_at_ms = 0;
+        let mut short = job("short", "t2", DeliveryAgent::Claude);
+        short.created_at_ms = 9 * minute;
+        let mut unseen = job("unseen", "t3", DeliveryAgent::Claude);
+        unseen.created_at_ms = 0;
+        let mut gone = job("gone", "t4", DeliveryAgent::Claude);
+        gone.status = DeliveryJobStatus::Cancelled;
+        let mut queue = queue(vec![long, short, unseen, gone], Vec::new(), 100);
+        let mut notes = HashMap::from([("gone".to_string(), "old".to_string())]);
+        // A tick that holds the first two, before "unseen" was known.
+        queue.capacity = 0;
+        let (plan, _) = queue.plan(minute);
+        queue.note_waits(&plan[..2], minute, &mut notes);
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        // The tick that starts them all.
+        queue.capacity = 8;
+        let (plan, _) = queue.plan(10 * minute);
+        queue.note_waits(&plan, 10 * minute, &mut notes);
+        assert_eq!(
+            notes,
+            HashMap::from([
+                (
+                    "long".to_string(),
+                    "esperó 10 min en la cola; lo último que lo retenía: capacidad llena: corren 0 de 0 trabajos a la vez".to_string()
+                ),
+                (
+                    "unseen".to_string(),
+                    "esperó 10 min en la cola; sin motivo anotado desde que Tinto arrancó".to_string()
+                ),
+            ])
+        );
     }
 }
