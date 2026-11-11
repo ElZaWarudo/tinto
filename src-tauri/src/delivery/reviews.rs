@@ -164,6 +164,15 @@ pub fn follow(
         .filter(|item| ours(item, "user"))
         .filter_map(|item| Some((opener(item)?, item["created_at"].as_str()?)))
         .collect();
+    // GitHub wraps the user's thread replies in a review of theirs with no
+    // body and the replies' time (one review for a batch of them); gh gives
+    // it no id to join on, so the time does. It is no answer to everyone.
+    let wraps_replies = |item: &Value| {
+        item["body"].as_str().is_some_and(str::is_empty)
+            && item["submittedAt"]
+                .as_str()
+                .is_some_and(|at| replies.iter().any(|(_, time)| *time == at))
+    };
     // When the user last wrote on the PR otherwise: a review, a comment, or
     // a review comment that is not such a reply (one whose thread is not in
     // the snapshot included). It answers every reviewer.
@@ -178,7 +187,7 @@ pub fn follow(
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|item| ours(item, who) && opener(item).is_none())
+            .filter(|item| ours(item, who) && opener(item).is_none() && !wraps_replies(item))
             .filter_map(|item| item[*time].as_str())
     })
     .max();
@@ -354,6 +363,9 @@ mod tests {
             "reviews": [
                 review("ana", "COMMENTED", "2026-11-04T10:00:00Z"),
                 review("luis", "COMMENTED", "2026-11-04T10:30:00Z"),
+                // The review GitHub wraps the user's reply in.
+                {"author": {"login": "me"}, "state": "COMMENTED", "body": "",
+                 "submittedAt": "2026-11-04T11:00:00Z"},
             ],
             "reviewComments": [
                 comment(1, None, "ana", "2026-11-04T10:00:00Z"),
