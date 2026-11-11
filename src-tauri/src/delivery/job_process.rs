@@ -208,10 +208,11 @@ impl JobProcess {
             let Some(tree) = tree else {
                 return Vec::new();
             };
-            let left = tree.processes();
+            let mut left = tree.processes();
             if !left.is_empty() {
                 let _ = tree.kill_all();
             }
+            left.retain(|process| !is_console_host(process));
             left
         }
         #[cfg(not(target_os = "windows"))]
@@ -243,6 +244,16 @@ impl JobProcess {
             left
         }
     }
+}
+
+/// Windows attaches a `conhost.exe` to every console process: it is no
+/// leftover of the job, and would bury the ones that are.
+#[cfg(any(target_os = "windows", test))]
+fn is_console_host(process: &str) -> bool {
+    process
+        .split(" (pid ")
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("conhost.exe"))
 }
 
 /// What the AppImage's runtime sets for Tinto itself: a job's `python3`
@@ -355,6 +366,18 @@ mod tests {
             let mut command = Command::new("sleep");
             command.arg("30");
             command
+        }
+    }
+
+    #[test]
+    fn the_console_host_is_not_a_leftover() {
+        for (process, console) in [
+            ("conhost.exe (pid 4120)", true),
+            ("Conhost.EXE (pid 4120)", true),
+            ("chrome.exe (pid 812)", false),
+            ("myconhost.exe (pid 9)", false),
+        ] {
+            assert_eq!(is_console_host(process), console, "{process}");
         }
     }
 
