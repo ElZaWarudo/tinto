@@ -6452,7 +6452,27 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
         h.repo.path(),
         &["remote", "add", "origin", &plain_path(remote.path())],
     );
-    let task = h.task("P-12");
+    // The coordinator archives it through its tool, under the same rule.
+    let fence = coordinated_run(&h);
+    let created = tool(
+        &h,
+        "create_task",
+        with(
+            &fence,
+            json!({"repo": plain_path(h.repo.path()), "key": "P-12", "title": "x"}),
+        ),
+    );
+    let task = h
+        .service
+        .task(created["structuredContent"]["id"].as_str().unwrap())
+        .unwrap();
+    let archive = || {
+        tool(
+            &h,
+            "archive_task",
+            with(&fence, json!({"task_id": task.id})),
+        )
+    };
     let worktree = PathBuf::from(plain_path(&task.worktree));
     std::fs::write(worktree.join("feature.txt"), "x").unwrap();
     git(&worktree, &["add", "."]);
@@ -6466,9 +6486,14 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
     let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/5").unwrap();
     h.service.link_pr(&task.id, &reference).unwrap();
 
-    assert_eq!(
-        h.service.archive_task(&task.id).unwrap_err().category,
-        "task_not_delivered"
+    let refused = archive();
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("task_not_delivered"),
+        "{refused}"
     );
     for (id, rung, stage) in [
         ("a1", "commit", None),
@@ -6486,7 +6511,11 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
         .unwrap();
         h.service.store().unwrap().put_approval(&step).unwrap();
     }
-    h.service.archive_task(&task.id).unwrap();
+    let archived = archive();
+    assert_eq!(
+        archived["structuredContent"]["archived"], true,
+        "{archived}"
+    );
     assert!(!worktree.exists(), "the worktree goes");
     let branch = format!("refs/heads/{}", task.branch);
     assert!(
