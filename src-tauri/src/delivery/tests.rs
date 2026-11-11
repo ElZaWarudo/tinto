@@ -9089,7 +9089,7 @@ fn a_merge_syncs_no_pr_without_conflicts_and_a_sync_replaces_the_checks_on_the_c
         sync.outcome
     );
     assert!(sync.conflicts.is_empty());
-    let checks: Vec<(String, DeliveryJobStatus)> = h
+    let checks: Vec<(String, DeliveryJobStatus, Option<String>)> = h
         .service
         .store()
         .unwrap()
@@ -9097,11 +9097,13 @@ fn a_merge_syncs_no_pr_without_conflicts_and_a_sync_replaces_the_checks_on_the_c
         .unwrap()
         .into_iter()
         .filter(|job| job.role == "checks")
-        .map(|job| (job.id, job.status))
+        .map(|job| (job.id, job.status, job.error))
         .collect();
-    let [(old, cancelled), (_, queued)] = checks.try_into().unwrap();
+    let [(old, cancelled, why), (_, queued, _)] = checks.try_into().unwrap();
     assert_eq!(old, stale.id);
     assert_eq!(cancelled, DeliveryJobStatus::Cancelled);
+    // It says why it never ran.
+    assert!(why.is_some_and(|why| why.contains("sincronizar")));
     assert_eq!(queued, DeliveryJobStatus::Queued);
 }
 

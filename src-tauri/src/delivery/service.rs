@@ -2410,11 +2410,18 @@ impl DeliveryService {
     }
 
     pub fn cancel(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
+        self.cancel_because(job_id, "Cancelado por el usuario.")
+    }
+
+    /// Cancels a job; a queued one keeps `reason` as its error. A running
+    /// one ends as cancelled by the user once its process stops.
+    pub fn cancel_because(&self, job_id: &str, reason: &str) -> Result<DeliveryJob, DeliveryError> {
         let mut job = self.job(job_id)?;
         match job.status {
             DeliveryJobStatus::Queued => {
                 let store = self.store()?;
                 job.status = DeliveryJobStatus::Cancelled;
+                job.error = Some(reason.to_string());
                 job.ended_at_ms = Some(now_ms());
                 store.put_job(&job)?;
                 settle_lease(&store, &job, false, &[])?;
@@ -2423,7 +2430,7 @@ impl DeliveryService {
                     "job_cancelled",
                     Some(&job.task_id),
                     Some(&job.id),
-                    "",
+                    reason,
                 )?;
                 drop(store);
                 self.tick();
@@ -2455,7 +2462,8 @@ impl DeliveryService {
             {
                 let store = self.store()?;
                 job.status = DeliveryJobStatus::Cancelled;
-                job.error = Some("Pausado y cancelado por el usuario.".to_string());
+                let reason = "Pausado y cancelado por el usuario.";
+                job.error = Some(reason.to_string());
                 store.put_job(&job)?;
                 settle_lease(&store, &job, true, &[])?;
                 store.record_event(
@@ -2463,7 +2471,7 @@ impl DeliveryService {
                     "job_cancelled",
                     Some(&job.task_id),
                     Some(&job.id),
-                    "",
+                    reason,
                 )?;
                 drop(store);
                 self.tick();
@@ -3758,9 +3766,9 @@ impl DeliveryService {
         let Some(mut job) = store.job(job_id)? else {
             return Ok(());
         };
+        let reason = "Cancelado por el usuario mientras Tinto preparaba el entorno de QA.";
         job.status = DeliveryJobStatus::Cancelled;
-        job.error =
-            Some("Cancelado por el usuario mientras Tinto preparaba el entorno de QA.".to_string());
+        job.error = Some(reason.to_string());
         job.ended_at_ms = Some(now_ms());
         job.current_command = None;
         job.current_command_at_ms = None;
@@ -3771,7 +3779,7 @@ impl DeliveryService {
             "job_cancelled",
             Some(&job.task_id),
             Some(&job.id),
-            "",
+            reason,
         )
     }
 
@@ -4030,7 +4038,10 @@ impl DeliveryService {
         let jobs = self.store()?.task_jobs(task_id)?;
         for job in jobs {
             if is_check(&job) && job.status.is_open() {
-                let _ = self.cancel(&job.id);
+                let _ = self.cancel_because(
+                    &job.id,
+                    "Cancelado para sincronizar la tarea; vuelve a correr después.",
+                );
             }
         }
         Ok(self

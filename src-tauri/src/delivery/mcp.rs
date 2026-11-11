@@ -688,7 +688,7 @@ fn run_tool(
                 _ => None,
             };
             let job = match name {
-                "cancel_job" => service.cancel(&job.id)?,
+                "cancel_job" => service.cancel_because(&job.id, "Cancelado por el coordinador.")?,
                 "retry_job" => service.retry(&job.id, minutes())?,
                 _ => service.continue_job(&job.id, minutes())?,
             };
