@@ -72,6 +72,18 @@ pub const RESULT_SCHEMA: &str = r#"{
   "additionalProperties": false
 }"#;
 
+/// The result schema Claude Code is given. Claude checks the result itself
+/// and sent it back for each property left out (`blocked_by`,
+/// `changed_paths`, `commit_plan`...), a turn each, while Tinto reads a
+/// missing one as empty; so it only requires status and summary. Codex and
+/// Muse keep `RESULT_SCHEMA`: strict structured outputs need every property
+/// required.
+fn claude_result_schema() -> String {
+    let mut schema: Value = serde_json::from_str(RESULT_SCHEMA).expect("result schema");
+    schema["required"] = serde_json::json!(["status", "summary"]);
+    schema.to_string()
+}
+
 /// Files a job writes under `<config>/delivery/jobs/<job id>/`.
 #[derive(Debug, Clone)]
 pub struct JobPaths {
@@ -1292,7 +1304,7 @@ fn claude_launch(
             session_flag,
             &session_id,
             "--json-schema",
-            RESULT_SCHEMA,
+            &claude_result_schema(),
             // None of the user's MCP servers: only those the job is given
             // (QA's browser), never Drive, Docs or Tinto's own.
             "--strict-mcp-config",
@@ -1405,9 +1417,9 @@ fn claude_launch(
         .map(|value| format!(" {}", sh_quote(value)))
         .collect();
     let script = format!(
-        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} {session_flag} {} --json-schema \"$(cat {})\" --strict-mcp-config{model}{effort}{qa}{allowed}{denied}",
+        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} {session_flag} {} --json-schema {} --strict-mcp-config{model}{effort}{qa}{allowed}{denied}",
         sh_quote(&session_id),
-        sh_quote(&wsl_path(&paths.schema)?)
+        sh_quote(&claude_result_schema())
     );
     let mut launch = wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)?;
     launch.files = files;
@@ -4078,6 +4090,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn claude_may_leave_out_empty_result_fields() {
+        // Claude is asked only for status and summary; the strict schema
+        // Codex and Muse get still requires every property.
+        let claude: Value = serde_json::from_str(&claude_result_schema()).unwrap();
+        assert_eq!(claude["required"], serde_json::json!(["status", "summary"]));
+        let strict: Value = serde_json::from_str(RESULT_SCHEMA).unwrap();
+        let properties = strict["properties"].as_object().unwrap();
+        assert_eq!(
+            strict["required"].as_array().unwrap().len(),
+            properties.len()
+        );
+        // What Claude leaves out reads as empty.
+        let result = parse_result(&serde_json::json!({"status": "pass", "summary": "ok"})).unwrap();
+        assert!(result.changed_paths.is_empty());
+        assert!(result.checks.is_empty());
+        assert!(result.findings.is_empty());
+        assert!(result.addressed.is_empty());
+        assert!(result.commit_plan.is_empty());
+        assert_eq!(result.blocked_by, "");
+    }
+
+    #[test]
     fn a_result_says_what_blocked_the_job() {
         let schema: Value = serde_json::from_str(RESULT_SCHEMA).unwrap();
         assert_eq!(
@@ -4093,9 +4127,6 @@ pub(crate) mod tests {
         }))
         .unwrap();
         assert_eq!(result.blocked_by, "sandbox");
-        // Results from before the field existed still read.
-        let old = parse_result(&serde_json::json!({"status": "pass", "summary": "ok"})).unwrap();
-        assert_eq!(old.blocked_by, "");
         // An assignment that asks to stage gets Tinto's rule after it: git's
         // index is Tinto's, and a check the sandbox cannot start blocks nothing.
         let mut job = sample_job(DeliveryAgent::Codex);
