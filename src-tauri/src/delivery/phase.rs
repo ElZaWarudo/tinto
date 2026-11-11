@@ -1139,6 +1139,66 @@ fn round_at(phase: &DeliveryTaskPhase) -> String {
     }
 }
 
+/// The facts besides the phase itself that decide who some phases wait on.
+struct WaiterFacts {
+    /// Past its run's brainstorm, what the coordinator can act on does not
+    /// wait for the user.
+    unattended: bool,
+    /// Nothing of its batch waits on the user's answer: the coordinator
+    /// checks the environment and releases a quarantined resource.
+    releases_quarantine: bool,
+    /// One of its open blockers is in Tinto (a task, a decision).
+    blocked_inside: bool,
+    /// Replies to reviewers wait for the user's approval.
+    replies_pending: bool,
+}
+
+/// Who a phase waits on. Every phase is named, so a new one has to say.
+fn waiter(phase: &Phase, facts: &WaiterFacts) -> Waiter {
+    match phase {
+        Phase::Decisions { .. }
+        | Phase::QaProblems { .. }
+        | Phase::Approval { .. }
+        | Phase::Paused { .. }
+        | Phase::BatchPaused { .. }
+        | Phase::WaitsEnvironment { .. }
+        | Phase::Quarantined { .. }
+        | Phase::SettingsProposal
+        | Phase::MergeMixed { .. } => Waiter::User,
+        Phase::StepRunning { .. } | Phase::Delivered => Waiter::Nobody,
+        Phase::Record { .. }
+        | Phase::SetupFailed { .. }
+        | Phase::Unblocked { .. }
+        | Phase::Broken { .. }
+        | Phase::WaitsMergeCommit { .. }
+        | Phase::MergedFailingCi { .. }
+        | Phase::NextStage { .. } => Waiter::Coordinator,
+        // A push is put right by asking for it again, which the
+        // coordinator does, and so are the PR and Jira steps past the
+        // brainstorm; the other steps wait on the user.
+        Phase::Drifted { rung, .. } => match rung {
+            DeliveryRung::Push => Waiter::Coordinator,
+            DeliveryRung::Pr | DeliveryRung::Jira if facts.unattended => Waiter::Coordinator,
+            _ => Waiter::User,
+        },
+        Phase::Running { .. } => Waiter::Agent,
+        Phase::Queued { .. } => Waiter::Queue,
+        Phase::WaitsQuarantine { .. } if facts.releases_quarantine => Waiter::Coordinator,
+        Phase::WaitsQuarantine { .. } => Waiter::User,
+        Phase::Blocked { .. } if facts.blocked_inside => Waiter::Dependency,
+        Phase::Blocked { .. } => Waiter::External,
+        Phase::PrWaitsPredecessor { .. } => Waiter::Dependency,
+        Phase::Pr { wait, .. } => wait.waiter(facts.unattended),
+        // The PR step on an open PR is refused until every thread has a
+        // reply: while replies wait for approval, it waits on the user.
+        Phase::NextStep {
+            rung: DeliveryRung::Pr,
+            ..
+        } if facts.replies_pending => Waiter::User,
+        Phase::NextStep { .. } => Waiter::Coordinator,
+    }
+}
+
 fn phase_in_round(
     task: &DeliveryTask,
     facts: &Facts<'_>,
@@ -1224,14 +1284,23 @@ fn phase_in_round(
         })
         .map(|approval| approval.reply_to())
         .collect();
-    let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
-        waits_on: match &phase {
-            Phase::NextStep {
-                rung: DeliveryRung::Pr,
-                ..
-            } if !replies.is_empty() => Waiter::User,
-            _ => waits_on,
-        },
+    let open: Vec<&DeliveryBlocker> = task.blockers.iter().filter(|b| b.is_open()).collect();
+    let waiter_facts = WaiterFacts {
+        unattended,
+        releases_quarantine: task
+            .run_id
+            .as_ref()
+            .is_some_and(|run| facts.releasable_runs.contains(run)),
+        blocked_inside: open.iter().any(|blocker| {
+            matches!(
+                blocker.kind,
+                DeliveryBlockerKind::Task { .. } | DeliveryBlockerKind::Decision { .. }
+            )
+        }),
+        replies_pending: !replies.is_empty(),
+    };
+    let phase = |phase: Phase| DeliveryTaskPhase {
+        waits_on: waiter(&phase, &waiter_facts),
         phase,
         next_stage: next.clone(),
         steps: steps.clone(),
@@ -1250,19 +1319,16 @@ fn phase_in_round(
         })
         .count();
     if decisions > 0 {
-        return phase(Phase::Decisions { count: decisions }, Waiter::User);
+        return phase(Phase::Decisions { count: decisions });
     }
     if let Some(step) = approvals
         .iter()
         .find(|approval| approval.status == DeliveryApprovalStatus::Pending)
     {
-        return phase(
-            Phase::Approval {
-                rung: step.rung,
-                stage: stage_of(step),
-            },
-            Waiter::User,
-        );
+        return phase(Phase::Approval {
+            rung: step.rung,
+            stage: stage_of(step),
+        });
     }
     // What Tinto itself waits on the user for comes before any blocker: the
     // QA problems the user decides, and replies to reviewers (a push to the
@@ -1275,7 +1341,7 @@ fn phase_in_round(
         })
         .count();
     if problems > 0 {
-        return phase(Phase::QaProblems { count: problems }, Waiter::User);
+        return phase(Phase::QaProblems { count: problems });
     }
 
     // Approved, or done and still cleaning up after it (its branch).
@@ -1288,47 +1354,30 @@ fn phase_in_round(
         .flatten()
         .map(|progress| (approval, progress))
     }) {
-        return phase(
-            Phase::StepRunning {
-                rung: step.rung,
-                step: progress.step.clone(),
-                since_ms: progress.since_ms,
-            },
-            Waiter::Nobody,
-        );
+        return phase(Phase::StepRunning {
+            rung: step.rung,
+            step: progress.step.clone(),
+            since_ms: progress.since_ms,
+        });
     }
     if let Some(step) = approvals
         .iter()
         .find(|approval| approval.status == DeliveryApprovalStatus::Approved)
     {
-        return phase(
-            Phase::Record {
-                rung: step.rung,
-                stage: stage_of(step),
-            },
-            Waiter::Coordinator,
-        );
+        return phase(Phase::Record {
+            rung: step.rung,
+            stage: stage_of(step),
+        });
     }
     if let Some(step) = approvals.iter().find(|approval| {
         approval.status == DeliveryApprovalStatus::Drifted
             && latest_step(&approvals, approval.rung, stage_of(approval).as_deref())
                 .is_some_and(|latest| latest.id == approval.id)
     }) {
-        // A push is put right by asking for it again, which the
-        // coordinator does, and so are the PR and Jira steps past the
-        // brainstorm; the other steps wait on the user.
-        let waits_on = match step.rung {
-            DeliveryRung::Push => Waiter::Coordinator,
-            DeliveryRung::Pr | DeliveryRung::Jira if unattended => Waiter::Coordinator,
-            _ => Waiter::User,
-        };
-        return phase(
-            Phase::Drifted {
-                rung: step.rung,
-                stage: stage_of(step),
-            },
-            waits_on,
-        );
+        return phase(Phase::Drifted {
+            rung: step.rung,
+            stage: stage_of(step),
+        });
     }
     if let Some(job) = jobs.iter().find(|job| {
         matches!(
@@ -1336,61 +1385,46 @@ fn phase_in_round(
             DeliveryJobStatus::Pending | DeliveryJobStatus::Started
         )
     }) {
-        return phase(
-            Phase::Running {
-                job_id: job.id.clone(),
-                role: job.role.clone(),
-            },
-            Waiter::Agent,
-        );
+        return phase(Phase::Running {
+            job_id: job.id.clone(),
+            role: job.role.clone(),
+        });
     }
     if let Some(job) = paused_job(&jobs) {
-        return phase(
-            Phase::Paused {
-                job_id: job.id.clone(),
-                role: job.role.clone(),
-            },
-            Waiter::User,
-        );
+        return phase(Phase::Paused {
+            job_id: job.id.clone(),
+            role: job.role.clone(),
+        });
     }
     if let Some(job) = current_setup(&task.setup, &jobs)
         .into_iter()
         .find(|job| !job.status.is_open() && job.status != DeliveryJobStatus::Finished)
     {
-        return phase(
-            Phase::SetupFailed {
-                job_id: job.id.clone(),
-                command: job.prompt.clone(),
-            },
-            Waiter::Coordinator,
-        );
+        return phase(Phase::SetupFailed {
+            job_id: job.id.clone(),
+            command: job.prompt.clone(),
+        });
     }
     if let Some(job) = jobs
         .iter()
         .find(|job| job.status == DeliveryJobStatus::Queued)
     {
         if let Some(problem) = &job.waits_environment {
-            return phase(
-                Phase::WaitsEnvironment {
-                    job_id: job.id.clone(),
-                    role: job.role.clone(),
-                    problem: problem.clone(),
-                },
-                Waiter::User,
-            );
+            return phase(Phase::WaitsEnvironment {
+                job_id: job.id.clone(),
+                role: job.role.clone(),
+                problem: problem.clone(),
+            });
         }
         let run_paused = facts
             .runs
             .iter()
             .any(|run| Some(&run.id) == task.run_id.as_ref() && run.paused);
         if run_paused {
-            return phase(
-                Phase::BatchPaused {
-                    job_id: job.id.clone(),
-                    role: job.role.clone(),
-                },
-                Waiter::User,
-            );
+            return phase(Phase::BatchPaused {
+                job_id: job.id.clone(),
+                role: job.role.clone(),
+            });
         }
         let lease = facts
             .leases
@@ -1413,19 +1447,10 @@ fn phase_in_round(
         if let Some(lease) = wanted
             .filter(|lease| lease.state == DeliveryLeaseState::Quarantined && !takes_over(lease))
         {
-            // Once nothing of the batch waits on the user, the coordinator
-            // checks the environment and releases it.
-            let releases = match task.run_id.as_ref() {
-                Some(run) if facts.releasable_runs.contains(run) => Waiter::Coordinator,
-                _ => Waiter::User,
-            };
-            return phase(
-                Phase::WaitsQuarantine {
-                    job_id: job.id.clone(),
-                    lease: lease.name.clone(),
-                },
-                releases,
-            );
+            return phase(Phase::WaitsQuarantine {
+                job_id: job.id.clone(),
+                lease: lease.name.clone(),
+            });
         }
         let position = match lease {
             Some(lease) => {
@@ -1456,77 +1481,51 @@ fn phase_in_round(
             }
         };
         let wait = facts.queued.get(&job.id);
-        return phase(
-            Phase::Queued {
-                job_id: job.id.clone(),
-                role: job.role.clone(),
-                lease: lease.map(|lease| lease.name.clone()),
-                position,
-                reason: wait.map(|wait| wait.reason.clone()),
-                since_ms: wait.map(|wait| wait.since_ms),
-            },
-            Waiter::Queue,
-        );
+        return phase(Phase::Queued {
+            job_id: job.id.clone(),
+            role: job.role.clone(),
+            lease: lease.map(|lease| lease.name.clone()),
+            position,
+            reason: wait.map(|wait| wait.reason.clone()),
+            since_ms: wait.map(|wait| wait.since_ms),
+        });
     }
     if let Some(lease) = facts.leases.iter().find(|lease| {
         lease.state == DeliveryLeaseState::Quarantined
             && lease.holder_task_id.as_deref() == Some(task.id.as_str())
     }) {
-        return phase(
-            Phase::Quarantined {
-                lease: lease.name.clone(),
-            },
-            Waiter::User,
-        );
+        return phase(Phase::Quarantined {
+            lease: lease.name.clone(),
+        });
     }
     if facts
         .settings_proposals
         .iter()
         .any(|proposal| proposal.task_id == task.id)
     {
-        return phase(Phase::SettingsProposal, Waiter::User);
+        return phase(Phase::SettingsProposal);
     }
-    let open: Vec<&DeliveryBlocker> = task.blockers.iter().filter(|b| b.is_open()).collect();
     if !open.is_empty() {
-        let inside = open.iter().any(|blocker| {
-            matches!(
-                blocker.kind,
-                DeliveryBlockerKind::Task { .. } | DeliveryBlockerKind::Decision { .. }
-            )
-        });
-        return phase(
-            Phase::Blocked { open: open.len() },
-            if inside {
-                Waiter::Dependency
-            } else {
-                Waiter::External
-            },
-        );
+        return phase(Phase::Blocked { open: open.len() });
     }
     if let Some(unblock) = &task.unblocked {
-        return phase(
-            Phase::Unblocked {
-                cleared: unblock.cleared.clone(),
-                by: unblock.by.clone(),
-                at_ms: unblock.at_ms,
-            },
-            Waiter::Coordinator,
-        );
+        return phase(Phase::Unblocked {
+            cleared: unblock.cleared.clone(),
+            by: unblock.by.clone(),
+            at_ms: unblock.at_ms,
+        });
     }
     let latest = jobs
         .iter()
         .rev()
         .find(|job| job.agent != DeliveryAgent::Shell && is_live(job));
     if let Some(job) = latest.filter(|job| is_broken(job)) {
-        return phase(
-            Phase::Broken {
-                job_id: job.id.clone(),
-                role: job.role.clone(),
-                attempt: job.attempt,
-                blocked: job.status == DeliveryJobStatus::Finished,
-            },
-            Waiter::Coordinator,
-        );
+        return phase(Phase::Broken {
+            job_id: job.id.clone(),
+            role: job.role.clone(),
+            attempt: job.attempt,
+            blocked: job.status == DeliveryJobStatus::Finished,
+        });
     }
     if let Some(sync) = merge {
         let task_rounds: Vec<&DeliveryRound> = facts
@@ -1536,12 +1535,9 @@ fn phase_in_round(
             .collect();
         let mixed = mixed_into_merge(&task_rounds, &jobs, sync);
         if !mixed.is_empty() {
-            return phase(
-                Phase::MergeMixed {
-                    mixed_rounds: mixed.iter().map(|round| round.number).collect(),
-                },
-                Waiter::User,
-            );
+            return phase(Phase::MergeMixed {
+                mixed_rounds: mixed.iter().map(|round| round.number).collect(),
+            });
         }
         if !resolving {
             let waiting = task_rounds
@@ -1549,12 +1545,9 @@ fn phase_in_round(
                 .rev()
                 .find(|round| round.is_open() && round.waits_merge_commit)
                 .map(|round| round.number);
-            return phase(
-                Phase::WaitsMergeCommit {
-                    waiting_round: waiting,
-                },
-                Waiter::Coordinator,
-            );
+            return phase(Phase::WaitsMergeCommit {
+                waiting_round: waiting,
+            });
         }
     }
     if let Some(pr) = facts
@@ -1563,40 +1556,34 @@ fn phase_in_round(
         .find(|pr| pr.task_id == task.id && round.is_some_and(|round| round.kind == "ci"))
     {
         if let Some(why) = &pr.merged_failing_ci {
-            return phase(
-                Phase::MergedFailingCi {
-                    number: pr.number,
-                    why: why.clone(),
-                },
-                Waiter::Coordinator,
-            );
+            return phase(Phase::MergedFailingCi {
+                number: pr.number,
+                why: why.clone(),
+            });
         }
     }
     let step = next_step(task, &approvals);
     let Some((rung, stage)) = step else {
-        return phase(Phase::Delivered, Waiter::Nobody);
+        return phase(Phase::Delivered);
     };
     // Work sent back comes before the PR's wait: the round's stages, then
     // its commit and push.
     if let Some(round) = round {
         if let Some(role) = next.clone() {
-            return phase(Phase::NextStage { role }, Waiter::Coordinator);
+            return phase(Phase::NextStage { role });
         }
         if let Some(rung) = round_step(round, &approvals) {
-            return phase(Phase::NextStep { rung, stage: None }, Waiter::Coordinator);
+            return phase(Phase::NextStep { rung, stage: None });
         }
     }
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         // A merged PR waits on nothing: the step left is what the task
         // waits on, named, so the coordinator sees it among the idle ones.
         if pr.state == "merged" {
-            return phase(
-                Phase::NextStep {
-                    rung,
-                    stage: stage.map(str::to_string),
-                },
-                Waiter::Coordinator,
-            );
+            return phase(Phase::NextStep {
+                rung,
+                stage: stage.map(str::to_string),
+            });
         }
         // Replies to reviewers are outside the ladder, but waiting for the
         // user's approval they are what the PR waits on.
@@ -1615,27 +1602,20 @@ fn phase_in_round(
             &to_answer,
             facts.review_optional.contains(&task.id),
         );
-        let waits_on = wait.waiter(unattended);
-        return phase(
-            Phase::Pr {
-                number: pr.number,
-                ci: pr.ci,
-                wait,
-            },
-            waits_on,
-        );
+        return phase(Phase::Pr {
+            number: pr.number,
+            ci: pr.ci,
+            wait,
+        });
     }
     if let Some(role) = next.clone() {
-        return phase(Phase::NextStage { role }, Waiter::Coordinator);
+        return phase(Phase::NextStage { role });
     }
     if rung == DeliveryRung::Pr {
         if let Some(package) = facts.pr_waits.get(&task.id) {
-            return phase(
-                Phase::PrWaitsPredecessor {
-                    package: package.clone(),
-                },
-                Waiter::Dependency,
-            );
+            return phase(Phase::PrWaitsPredecessor {
+                package: package.clone(),
+            });
         }
         // That package merged: the restack onto its base comes first.
         let gated = task
@@ -1643,22 +1623,16 @@ fn phase_in_round(
             .as_ref()
             .is_some_and(|package| package.pr_after_merge);
         if gated && task.restack_from.is_some() {
-            return phase(
-                Phase::NextStep {
-                    rung: DeliveryRung::Sync,
-                    stage: None,
-                },
-                Waiter::Coordinator,
-            );
+            return phase(Phase::NextStep {
+                rung: DeliveryRung::Sync,
+                stage: None,
+            });
         }
     }
-    phase(
-        Phase::NextStep {
-            rung,
-            stage: stage.map(str::to_string),
-        },
-        Waiter::Coordinator,
-    )
+    phase(Phase::NextStep {
+        rung,
+        stage: stage.map(str::to_string),
+    })
 }
 
 #[cfg(test)]
