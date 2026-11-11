@@ -15,6 +15,7 @@ import {
   attemptOutcome,
   reviewerBlock,
   batchName,
+  costOf,
   historyKey,
   isDelivered,
   entryTasks,
@@ -724,6 +725,33 @@ describe("latestOfRole and batchName", () => {
     expect(batchName("Lote de octubre")).toBe("Lote de octubre");
     expect(batchName("Octubre")).toBe("Lote Octubre");
     expect(batchName("Loteria")).toBe("Lote Loteria");
+  });
+});
+
+describe("costOf", () => {
+  const usage = (cost: number | null) => ({
+    input_tokens: 1,
+    cached_tokens: 0,
+    output_tokens: 1,
+    cost_micro_usd: cost,
+  });
+
+  it("adds the costs the agents reported, and marks the total partial when one did not", () => {
+    const claude = job({ agent: "claude", usage: usage(4_200_000) });
+    const free = job({ agent: "opencode", usage: usage(0) });
+    const check = job({ agent: "shell" });
+    const queued = job({ agent: "claude", status: "queued", started_at_ms: null });
+    expect(costOf([claude, free, check, queued])).toEqual({ label: "$4.20", partial: false });
+    const codex = job({ agent: "codex", usage: usage(null) });
+    const running = job({ agent: "claude", status: "started" });
+    for (const unknown of [codex, running]) {
+      expect(costOf([claude, unknown])).toEqual({ label: "≥ $4.20", partial: true });
+    }
+  });
+
+  it("is nothing when no job reported a cost", () => {
+    expect(costOf([job({ agent: "codex", usage: usage(null) }), job()])).toBeNull();
+    expect(costOf([])).toBeNull();
   });
 });
 

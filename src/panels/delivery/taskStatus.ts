@@ -226,6 +226,26 @@ export function jobsOf(overview: DeliveryOverview, taskId: string): DeliveryJob[
   return overview.jobs.filter((job) => job.task_id === taskId);
 }
 
+/** Millionths of a dollar as the view shows them: `$0.42`. */
+export function dollars(microUsd: number): string {
+  return `$${(microUsd / 1_000_000).toFixed(2)}`;
+}
+
+/** What the jobs cost together, from those whose agent reported it: null when
+ *  none did; `partial` when an agent job that started has no cost (Codex never
+ *  reports one, a running job not yet). Checks (shell) cost nothing. */
+export function costOf(jobs: DeliveryJob[]): { label: string; partial: boolean } | null {
+  let total: number | null = null;
+  let partial = false;
+  for (const job of jobs) {
+    const cost = job.usage?.cost_micro_usd;
+    if (cost != null) total = (total ?? 0) + cost;
+    else if (job.agent !== "shell" && job.started_at_ms !== null) partial = true;
+  }
+  if (total === null) return null;
+  return { label: `${partial ? "≥ " : ""}${dollars(total)}`, partial };
+}
+
 /** The stage's latest attempt that still counts; stale or undone ones only as a fallback. */
 export function latestOfRole(jobs: DeliveryJob[], role: string): DeliveryJob | undefined {
   const ofRole = jobs.filter((job) => job.role === role).reverse();

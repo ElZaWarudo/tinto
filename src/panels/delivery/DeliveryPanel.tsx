@@ -148,6 +148,8 @@ import {
   attemptOutcome,
   batchName,
   byCommand,
+  costOf,
+  dollars,
   historyKey,
   isBroken,
   isDelivered,
@@ -517,10 +519,12 @@ function tokens(count: number): string {
   return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
 }
 
+/** Why a task's or batch's cost reads "≥": some of its agents did not say theirs. */
+const COST_PARTIAL = "Suma de los agentes que informan su costo; algunos no lo informan";
+
 /** What a job used: tokens in, read from cache and out, and the cost when known. */
 function usageLabel(usage: DeliveryUsage): string {
-  const cost =
-    usage.cost_micro_usd === null ? "" : ` · $${(usage.cost_micro_usd / 1_000_000).toFixed(2)}`;
+  const cost = usage.cost_micro_usd === null ? "" : ` · ${dollars(usage.cost_micro_usd)}`;
   return `Consumo: ${tokens(usage.input_tokens)} de entrada · ${tokens(usage.cached_tokens)} en caché · ${tokens(usage.output_tokens)} de salida${cost}`;
 }
 
@@ -1930,6 +1934,13 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   };
   // The bar's batch, when the repo has one, and what acts on it.
   const active = activeRuns.length === 1 ? activeRuns[0] : null;
+  const activeCost =
+    active &&
+    costOf(
+      (overview?.jobs ?? []).filter((job) =>
+        tasks.some((task) => task.id === job.task_id && task.run_id === active.id),
+      ),
+    );
   const takeable = !!active?.owner && active.owner !== "user";
   const pauseTitle = active?.paused
     ? "Lo que está en cola vuelve a arrancar"
@@ -2001,6 +2012,14 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                     title="Tinto le escribe en Agents lo que espera de él"
                   >
                     · coordinador avisado {ago(active.notified_at_ms, now)}
+                  </span>
+                )}
+                {activeCost && (
+                  <span
+                    className="delivery-muted"
+                    title={activeCost.partial ? COST_PARTIAL : undefined}
+                  >
+                    · costo {activeCost.label}
                   </span>
                 )}
                 {repoStalls.map((stall) => (
@@ -2415,6 +2434,7 @@ function TaskDetail({
   onCloseContext: () => void;
 }) {
   const jobs = jobsOf(overview, task.id);
+  const cost = costOf(jobs);
   // The latest QA's visual changes page: what the user reviews before the PR.
   const qaRecord = latestOfRole(jobs, "qa");
   const qaProblems = (overview.qa_problems ?? []).filter((problem) => problem.task_id === task.id);
@@ -2875,6 +2895,9 @@ function TaskDetail({
             <span title={delivered ? undefined : "Lo fija quien coordina la tarea"}>
               Estado: {stateLabel}
             </span>
+            {cost && (
+              <span title={cost.partial ? COST_PARTIAL : undefined}>Costo: {cost.label}</span>
+            )}
             {!task.distro && (
               <ActionButton
                 className="delivery-link-button"
