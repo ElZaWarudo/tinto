@@ -45,6 +45,11 @@ function changeKeys(changes: DeliverySettingsChanges): string[] {
   if (changes.qa_browser != null) keys.push(key("qa_browser", ""));
   if (changes.verification != null) keys.push(key("verification", ""));
   for (const name of Object.keys(changes.check_env ?? {})) keys.push(key("check_env", name));
+  if (changes.jira_after_pr != null) keys.push(key("jira_after_pr", ""));
+  if (changes.jira_after_merge != null) keys.push(key("jira_after_merge", ""));
+  for (const name of Object.keys(changes.jira_transition_fields ?? {})) {
+    keys.push(key("jira_transition_fields", name));
+  }
   return keys;
 }
 
@@ -77,6 +82,16 @@ function accepted(
     selected.has(key("check_env", name)),
   );
   if (env.length > 0) part.check_env = Object.fromEntries(env);
+  if (changes.jira_after_pr != null && selected.has(key("jira_after_pr", ""))) {
+    part.jira_after_pr = changes.jira_after_pr;
+  }
+  if (changes.jira_after_merge != null && selected.has(key("jira_after_merge", ""))) {
+    part.jira_after_merge = changes.jira_after_merge;
+  }
+  const fields = Object.entries(changes.jira_transition_fields ?? {}).filter(([name]) =>
+    selected.has(key("jira_transition_fields", name)),
+  );
+  if (fields.length > 0) part.jira_transition_fields = Object.fromEntries(fields);
   return part;
 }
 
@@ -308,6 +323,44 @@ function ProposalCard({ proposal }: { proposal: DeliverySettingsProposal }) {
           <span>
             <strong>Variable {name}</strong>: {current?.check_env?.[name] || "(sin definir)"} →{" "}
             {value || "(vacío)"}
+          </span>
+        </label>
+      ))}
+      {changes.jira_after_pr != null && (
+        <ValueChange
+          title="Estados de Jira tras el PR"
+          field="jira_after_pr"
+          before={(current?.jira?.after_pr ?? []).join(" → ")}
+          after={changes.jira_after_pr.join(" → ")}
+          selected={selected}
+          toggle={toggle}
+        />
+      )}
+      {changes.jira_after_merge != null && (
+        <ValueChange
+          title="Estados de Jira tras la fusión"
+          field="jira_after_merge"
+          before={(current?.jira?.after_merge ?? []).join(" → ")}
+          after={changes.jira_after_merge.join(" → ")}
+          selected={selected}
+          toggle={toggle}
+        />
+      )}
+      {Object.entries(changes.jira_transition_fields ?? {}).map(([name, fields]) => (
+        <label key={name} className="delivery-settings-diff__value">
+          <Toggle
+            label={`Cambiar los campos de la transición ${name}`}
+            checked={selected.has(key("jira_transition_fields", name))}
+            onChange={() => toggle(key("jira_transition_fields", name))}
+          />
+          <span>
+            <strong>Campos de la transición {name}</strong>:{" "}
+            <code>
+              {current?.jira?.transition_fields?.[name] != null
+                ? JSON.stringify(current.jira.transition_fields[name])
+                : "(sin definir)"}
+            </code>{" "}
+            → <code>{JSON.stringify(fields)}</code>
           </span>
         </label>
       ))}
