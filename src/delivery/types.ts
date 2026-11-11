@@ -822,6 +822,11 @@ export interface DeliverySettingsChanges {
   verification?: string | null;
   /** Variables for checks, by name, each set to the value given. */
   check_env?: Record<string, string>;
+  /** The repo's Jira statuses once the PR is open / merged, replacing them. */
+  jira_after_pr?: string[] | null;
+  jira_after_merge?: string[] | null;
+  /** Fields a Jira transition gets, by transition id, name or target status. */
+  jira_transition_fields?: Record<string, unknown>;
 }
 
 /** Settings changes a coordinator asks for; nothing changes until the user approves. */

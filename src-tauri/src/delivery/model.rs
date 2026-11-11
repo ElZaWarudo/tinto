@@ -1422,6 +1422,16 @@ pub struct DeliverySettingsChanges {
     /// Variables for checks, by name, each set to the value given.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub check_env: BTreeMap<String, String>,
+    /// The repo's Jira statuses once the PR is open, replacing them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira_after_pr: Option<Vec<String>>,
+    /// The repo's Jira statuses once the PR is merged, replacing them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira_after_merge: Option<Vec<String>>,
+    /// Fields a Jira transition gets, by transition id, name or target
+    /// status, each set to the fields given (adding or replacing it).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub jira_transition_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

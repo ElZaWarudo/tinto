@@ -190,8 +190,19 @@ pub fn run_step(
             Some(fields) => json!({"transition": {"id": id}, "fields": fields}),
             None => json!({"transition": {"id": id}}),
         };
-        jira.call(site, "POST", &format!("{base}/transitions"), Some(&body))
-            .map_err(|error| stop(&done, error))?;
+        if let Err(error) = jira.call(site, "POST", &format!("{base}/transitions"), Some(&body)) {
+            let error = match missing_fields(jira, site, &base, id, fields) {
+                Some(missing) => DeliveryError::new(
+                    error.category,
+                    format!(
+                        "{} La transición «{name}» (id {id}) pide campos que no se enviaron: {missing}.",
+                        error.message
+                    ),
+                ),
+                None => error,
+            };
+            return Err(stop(&done, error));
+        }
         done.push(format!(
             "{current} → {} ({})",
             to(transition),
@@ -212,6 +223,46 @@ pub fn run_step(
     }
     done.push(format!("Estado verificado en {issue}: {reached}"));
     Ok(done.join(". "))
+}
+
+/// The fields transition `id` requires that `sent` lacks, as Jira describes
+/// them: «name» (id; valores: …). `None` when it requires none or Jira does
+/// not say.
+fn missing_fields(
+    jira: &dyn Jira,
+    site: &JiraSite,
+    base: &str,
+    id: &str,
+    sent: Option<&Value>,
+) -> Option<String> {
+    let path = format!("{base}/transitions?transitionId={id}&expand=transitions.fields");
+    let transitions = jira.call(site, "GET", &path, None).ok()?;
+    let transition = transitions["transitions"]
+        .as_array()?
+        .iter()
+        .find(|transition| transition["id"].as_str() == Some(id))?;
+    let missing: Vec<String> = transition["fields"]
+        .as_object()?
+        .iter()
+        .filter(|(key, field)| {
+            field["required"].as_bool() == Some(true)
+                && sent.and_then(|sent| sent.get(key.as_str())).is_none()
+        })
+        .map(|(key, field)| {
+            let allowed: Vec<&str> = field["allowedValues"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value["value"].as_str().or(value["name"].as_str()))
+                .collect();
+            let name = field["name"].as_str().unwrap_or(key);
+            match allowed.is_empty() {
+                true => format!("«{name}» ({key})"),
+                false => format!("«{name}» ({key}; valores: {})", allowed.join(", ")),
+            }
+        })
+        .collect();
+    (!missing.is_empty()).then(|| missing.join(", "))
 }
 
 /// A task's issue as Tinto shows it: the fields that matter to the work,
@@ -473,6 +524,89 @@ fn skill_jira_host(repo: &std::path::Path) -> Option<String> {
         .find_map(|line| line.trim().strip_prefix("JIRA_HOST="))
         .map(|host| host.trim().trim_matches(['"', '\'']).to_string())
         .filter(|host| host.starts_with("https://") || host.starts_with("http://"))
+}
+
+#[cfg(test)]
+mod run_step_tests {
+    use super::*;
+
+    /// An issue in «Por hacer» whose only transition, «Start Work», requires
+    /// «Requiere QA Funcional»; Jira refuses it without that field.
+    struct RequiresField;
+
+    impl Jira for RequiresField {
+        fn call(
+            &self,
+            _: &JiraSite,
+            method: &str,
+            path: &str,
+            _: Option<&Value>,
+        ) -> Result<Value, DeliveryError> {
+            let transition =
+                json!({"id": "11", "name": "Start Work", "to": {"name": "En ejecución"}});
+            match (method, path) {
+                ("GET", "/rest/api/2/issue/AGOS-1?fields=status") => {
+                    Ok(json!({"fields": {"status": {"name": "Por hacer"}}}))
+                }
+                ("GET", "/rest/api/2/issue/AGOS-1/transitions") => {
+                    Ok(json!({"transitions": [transition]}))
+                }
+                (
+                    "GET",
+                    "/rest/api/2/issue/AGOS-1/transitions?transitionId=11&expand=transitions.fields",
+                ) => {
+                    let mut transition = transition;
+                    transition["fields"] = json!({"customfield_10617": {
+                        "required": true,
+                        "name": "Requiere QA Funcional",
+                        "allowedValues": [{"id": "1", "value": "SI"}, {"id": "2", "value": "NO"}]
+                    }});
+                    Ok(json!({"transitions": [transition]}))
+                }
+                ("POST", "/rest/api/2/issue/AGOS-1/transitions") => Err(DeliveryError::new(
+                    "jira_failed",
+                    "Jira respondió 400 Bad Request: {\"errors\":{\"customfield_10617\":\"Requiere QA Funcional is required.\"}}",
+                )),
+                _ => panic!("{method} {path}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_failing_step_says_what_the_settings_need() {
+        let site = JiraSite {
+            host: "https://jira.test".into(),
+            token: "secret".into(),
+        };
+        for (target, expected) in [
+            // No transition: where the issue can go from where it is.
+            (
+                "In Review",
+                &["«Por hacer»", "«In Review»", "En ejecución"][..],
+            ),
+            // A required field: its name, id and allowed values.
+            (
+                "En ejecución",
+                &[
+                    "«Start Work» (id 11)",
+                    "«Requiere QA Funcional» (customfield_10617; valores: SI, NO)",
+                ][..],
+            ),
+        ] {
+            let error = run_step(
+                &RequiresField,
+                &site,
+                "AGOS-1",
+                None,
+                &[target.to_string()],
+                &BTreeMap::new(),
+            )
+            .unwrap_err();
+            for text in expected {
+                assert!(error.message.contains(text), "{}", error.message);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
