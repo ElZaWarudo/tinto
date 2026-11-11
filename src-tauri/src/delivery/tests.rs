@@ -13203,6 +13203,21 @@ fn a_commit_step_survives_tintos_own_restack_and_the_push_goes_on() {
         .request_approval(step(&task, DeliveryRung::Commit, "Add own"))
         .unwrap();
     let commit = h.service.decide_approval(&commit.id, true, None).unwrap();
+    // While a step runs git in the worktree (the restack, before its sync
+    // step is saved), a reader takes no rewritten commit for an outside one.
+    let committed = in_worktree(&task, &["rev-parse", "HEAD"]);
+    let lock = super::service::keyed_lock(&h.service.inner.git_work, &task.id);
+    {
+        let _running = lock.lock().unwrap();
+        write_files(&task, &["more.txt"]);
+        git(&task.worktree, &["add", "--all"]);
+        git(
+            &task.worktree,
+            &["commit", "-q", "--amend", "-m", "Rewritten"],
+        );
+        assert!(!h.service.commits_lost(&task).unwrap());
+    }
+    git(&task.worktree, &["reset", "-q", "--hard", &committed]);
     let asked = h
         .service
         .request_approval(step(&task, DeliveryRung::Sync, "Restack"))
