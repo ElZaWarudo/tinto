@@ -683,6 +683,7 @@ impl DeliveryService {
             returned_cursor: start,
             notified_cursor: 0,
             notified_at_ms: None,
+            owner_seen_at_ms: None,
         };
         store.put_run(&run)?;
         store.record_event(now, "run_created", None, None, &run.id)?;
@@ -701,13 +702,32 @@ impl DeliveryService {
     pub fn acquire_run(&self, run_id: &str, owner: &str) -> Result<DeliveryRun, DeliveryError> {
         let mut run = self.active_run(run_id)?;
         match run.owner.as_deref() {
-            Some(current) if current != owner => Err(DeliveryError::new(
-                "run_locked",
-                format!(
-                    "la ejecución la coordina {current} (generación {}); si el usuario te pidió coordinarla, o ese coordinador se detuvo, tómala con takeover_run",
-                    run.generation
-                ),
-            )),
+            Some(current) if current != owner => {
+                // Whether that coordinator still answers, so the caller
+                // need not ask the user.
+                let state = self
+                    .coordinator_states()?
+                    .into_iter()
+                    .find(|state| state.run_id == run.id);
+                let waiting = state.as_ref().is_some_and(|state| state.waiting);
+                let seen = match (
+                    run.owner_seen_at_ms,
+                    state.and_then(|state| state.owner_seen_seconds_ago),
+                ) {
+                    (Some(at), Some(ago)) => {
+                        format!("su último wait_run respondió hace {ago} s (owner_seen_at_ms {at})")
+                    }
+                    _ => "aún no llamó a wait_run".to_string(),
+                };
+                Err(DeliveryError::new(
+                    "run_locked",
+                    format!(
+                        "la ejecución la coordina {current} (generación {}); {seen} y {} esperando en wait_run; si el usuario te pidió coordinarla, o ese coordinador se detuvo, tómala con takeover_run",
+                        run.generation,
+                        if waiting { "ahora está" } else { "no está" }
+                    ),
+                ))
+            }
             Some(_) => Ok(run),
             None => {
                 run.owner = Some(owner.to_string());

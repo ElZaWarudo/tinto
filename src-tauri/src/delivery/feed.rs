@@ -415,13 +415,14 @@ impl DeliveryService {
         Ok(())
     }
 
+    /// Also notes its owner as heard from now. A quiet write: no event,
+    /// so it wakes no waiter.
     fn record_returned_cursor(&self, run_id: &str, cursor: u64) -> Result<(), DeliveryError> {
         let store = self.store()?;
         if let Some(mut run) = store.run(run_id)? {
-            if run.returned_cursor < cursor {
-                run.returned_cursor = cursor;
-                store.put_run(&run)?;
-            }
+            run.returned_cursor = run.returned_cursor.max(cursor);
+            run.owner_seen_at_ms = Some(now_ms());
+            store.put_run(&run)?;
         }
         Ok(())
     }
@@ -547,6 +548,7 @@ impl DeliveryService {
             .map(|waiting| waiting.clone())
             .unwrap_or_default();
         let mut states = Vec::new();
+        let now = now_ms();
         for run in runs.into_iter().filter(|run| run.status == "active") {
             let after = handed_cursor(&run);
             let (events, _) = self.coordinator_events(&run.id, after)?;
@@ -554,6 +556,9 @@ impl DeliveryService {
                 waiting: waiting.get(&run.id).is_some_and(|count| *count > 0),
                 unread: events.len() as u32,
                 unread_since_ms: events.first().and_then(|event| event["at_ms"].as_u64()),
+                owner_seen_seconds_ago: run
+                    .owner_seen_at_ms
+                    .map(|seen| now.saturating_sub(seen) / 1000),
                 run_id: run.id,
             });
         }
@@ -757,4 +762,55 @@ fn run_list(runs: &[DeliveryRun]) -> String {
         .map(|run| format!("«{}» (run_id {})", run.title, run.id))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::super::store::DeliveryStore;
+    use super::DeliveryService;
+    use crate::agent_console::checkpoint::CheckpointConfig;
+
+    #[test]
+    fn another_coordinator_hears_when_the_owner_last_waited() {
+        let store = DeliveryStore::open_in_memory().unwrap();
+        let run = serde_json::from_value(json!({
+            "id": "r", "repo": "/repo", "title": "B", "status": "active", "generation": 1,
+            "owner": "a", "created_at_ms": 1, "updated_at_ms": 1
+        }))
+        .unwrap();
+        store.put_run(&run).unwrap();
+        let service = DeliveryService::with_parts(
+            store,
+            Arc::new(|_, _, _| unreachable!("no job runs")),
+            Arc::new(|_| unreachable!("no job runs")),
+            CheckpointConfig::default(),
+        )
+        .unwrap();
+        let refusal = || service.acquire_run("r", "b").unwrap_err().message;
+        assert!(
+            refusal().contains("aún no llamó a wait_run"),
+            "{}",
+            refusal()
+        );
+
+        let events = service.store().unwrap().last_event_seq().unwrap();
+        service
+            .wait_run(&["r".to_string()], None, Duration::from_secs(1), true)
+            .unwrap();
+        assert!(service.run("r").unwrap().owner_seen_at_ms.is_some());
+        let state = &service.coordinator_states().unwrap()[0];
+        assert_eq!(state.owner_seen_seconds_ago, Some(0));
+        let refused = refusal();
+        assert!(
+            refused.contains("respondió hace 0 s") && refused.contains("no está esperando"),
+            "{refused}"
+        );
+        // Noted quietly: no event, so no waiter wakes for it.
+        assert_eq!(service.store().unwrap().last_event_seq().unwrap(), events);
+    }
 }
