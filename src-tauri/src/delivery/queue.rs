@@ -24,6 +24,11 @@ use super::DeliveryError;
 /// so few, but not one, or every task's checks queue behind the others'.
 const CHECKS_AT_ONCE: usize = 2;
 
+/// A job queued longer than this says in its `job_started` event how long
+/// it waited and what held it last: `queued_reason` is only ever computed
+/// when read, so without it a long wait leaves no trace.
+const LONG_WAIT_MS: u64 = 5 * 60_000;
+
 /// One of Tinto's own checks: a verification command run on a stage's
 /// result.
 fn is_check(job: &DeliveryJob) -> bool {
@@ -237,6 +242,48 @@ impl Queue {
             plan.push((job.id.clone(), hold));
         }
         (plan, leases)
+    }
+
+    /// Keeps `notes` from one scheduling tick to the next: for each job
+    /// `plan` holds, why; for each it starts after a long wait, what its
+    /// `job_started` event says, from the reason the tick before left.
+    /// Notes of jobs no longer queued nor about to start are dropped.
+    pub(super) fn note_waits(
+        &self,
+        plan: &[(String, Option<Hold>)],
+        now: u64,
+        notes: &mut HashMap<String, String>,
+    ) {
+        notes.retain(|id, _| {
+            self.job(id).is_some_and(|job| {
+                matches!(
+                    job.status,
+                    DeliveryJobStatus::Queued | DeliveryJobStatus::Pending
+                )
+            })
+        });
+        for (id, hold) in plan {
+            let Some(job) = self.job(id) else { continue };
+            match hold {
+                Some(hold) => {
+                    notes.insert(id.clone(), self.explain(job, hold, now).0);
+                }
+                None => {
+                    let last = notes.remove(id);
+                    let waited = now.saturating_sub(job.created_at_ms);
+                    if waited > LONG_WAIT_MS {
+                        let why = match last {
+                            Some(reason) => format!("lo último que lo retenía: {reason}"),
+                            None => "sin motivo anotado desde que Tinto arrancó".to_string(),
+                        };
+                        notes.insert(
+                            id.clone(),
+                            format!("esperó {} min en la cola; {why}", waited / 60_000),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn hold(
@@ -935,5 +982,42 @@ mod tests {
             order.push(id);
         }
         assert_eq!(order, ["new", "build", "suite"]);
+    }
+
+    #[test]
+    fn a_job_started_after_a_long_wait_keeps_what_held_it_last() {
+        let minute = 60_000;
+        let mut long = job("long", "t1", DeliveryAgent::Claude);
+        long.created_at_ms = 0;
+        let mut short = job("short", "t2", DeliveryAgent::Claude);
+        short.created_at_ms = 9 * minute;
+        let mut unseen = job("unseen", "t3", DeliveryAgent::Claude);
+        unseen.created_at_ms = 0;
+        let mut gone = job("gone", "t4", DeliveryAgent::Claude);
+        gone.status = DeliveryJobStatus::Cancelled;
+        let mut queue = queue(vec![long, short, unseen, gone], Vec::new(), 100);
+        let mut notes = HashMap::from([("gone".to_string(), "old".to_string())]);
+        // A tick that holds the first two, before "unseen" was known.
+        queue.capacity = 0;
+        let (plan, _) = queue.plan(minute);
+        queue.note_waits(&plan[..2], minute, &mut notes);
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        // The tick that starts them all.
+        queue.capacity = 8;
+        let (plan, _) = queue.plan(10 * minute);
+        queue.note_waits(&plan, 10 * minute, &mut notes);
+        assert_eq!(
+            notes,
+            HashMap::from([
+                (
+                    "long".to_string(),
+                    "esperó 10 min en la cola; lo último que lo retenía: capacidad llena: corren 0 de 0 trabajos a la vez".to_string()
+                ),
+                (
+                    "unseen".to_string(),
+                    "esperó 10 min en la cola; sin motivo anotado desde que Tinto arrancó".to_string()
+                ),
+            ])
+        );
     }
 }
