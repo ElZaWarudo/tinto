@@ -1,9 +1,13 @@
 //! The "Entorno" check of a repo's batch bar: whether what its jobs need
 //! outside the worktree answers now. Docker, when the repo uses it, and the
 //! verification commands the user marked as environment probes (a database
-//! ping…), each run where the repo's jobs run, with a time limit.
+//! ping…), each run where the repo's jobs run, with a time limit; and the
+//! services its check environment names by URL (`TEST_DB_MONGO_URL`), each
+//! connected to.
 
+use std::collections::BTreeMap;
 use std::io::Read;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -16,12 +20,14 @@ use super::tasks::plain_path;
 
 /// How long a probe gets before it counts as not answering.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a service of the check environment gets to accept a connection.
+const SERVICE_TIMEOUT: Duration = Duration::from_secs(3);
 /// The end of a probe's output, shown on hover.
 const OUTPUT_CHARS: usize = 2000;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DeliveryEnvironmentCheck {
-    /// `Docker` or the probe's command.
+    /// `Docker`, the probe's command, or the service's variable and address.
     pub name: String,
     pub ok: bool,
     /// What it printed (its end), or why it failed.
@@ -58,6 +64,7 @@ fn check_within(
             .filter(|probe| settings.checks.contains(probe))
             .map(Some),
     );
+    let services = services(&settings.check_env);
     std::thread::scope(|scope| {
         let running: Vec<_> = names
             .into_iter()
@@ -75,12 +82,78 @@ fn check_within(
                 })
             })
             .collect();
+        let connecting: Vec<_> = services
+            .iter()
+            .map(|(name, address)| {
+                scope.spawn(move || connect(name, address, timeout.min(SERVICE_TIMEOUT)))
+            })
+            .collect();
         running
             .into_iter()
+            .chain(connecting)
             .filter_map(|handle| handle.join().ok())
             .chain(found)
             .collect()
     })
+}
+
+/// Whether a failed check of the repo may be its environment's: it uses
+/// Docker, has probes, or its check environment names a service.
+pub(super) fn may_be_down(
+    repo: &Path,
+    distro: Option<&str>,
+    settings: &DeliveryRepoSettings,
+) -> bool {
+    !settings.environment_probes.is_empty()
+        || !services(&settings.check_env).is_empty()
+        || uses_docker(repo, distro, settings)
+}
+
+/// The services the check environment names by URL with a host and port
+/// (`mongodb://user:pass@localhost:27017/db`): each variable and its
+/// `host:port`. A URL without a port, with several hosts, or whose host
+/// depends on the task (`{task}`) is left out.
+fn services(check_env: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    check_env
+        .iter()
+        .filter_map(|(name, value)| Some((name.clone(), address(value)?)))
+        .collect()
+}
+
+fn address(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, at)| at);
+    let (host, port) = host_port.rsplit_once(':')?;
+    let bracketed = host.starts_with('[') && host.ends_with(']');
+    let plain = !host.is_empty() && !host.contains([':', '[', ']']);
+    (port.parse::<u16>().is_ok() && (bracketed || plain) && !host.contains([',', '{']))
+        .then(|| host_port.to_string())
+}
+
+/// Opens a TCP connection to the service, from Tinto itself.
+fn connect(name: &str, address: &str, timeout: Duration) -> DeliveryEnvironmentCheck {
+    let connected = address
+        .to_socket_addrs()
+        .map_err(|error| error.to_string())
+        .and_then(|addrs| {
+            let mut last = format!("{address} no tiene dirección");
+            for addr in addrs {
+                match TcpStream::connect_timeout(&addr, timeout) {
+                    Ok(_) => return Ok(()),
+                    Err(error) => last = error.to_string(),
+                }
+            }
+            Err(last)
+        });
+    DeliveryEnvironmentCheck {
+        name: format!("{name} ({address})"),
+        ok: connected.is_ok(),
+        output: match connected {
+            Ok(()) => format!("{address} acepta conexiones."),
+            Err(error) => format!("{address} no acepta conexiones: {error}"),
+        },
+    }
 }
 
 /// How long a command that starts the environment gets.
@@ -151,11 +224,7 @@ fn free_bytes(_path: &Path) -> Option<u64> {
 
 /// A compose file or Dockerfile at the repo's root, or a command of its
 /// settings that calls `docker`.
-pub(super) fn uses_docker(
-    repo: &Path,
-    distro: Option<&str>,
-    settings: &DeliveryRepoSettings,
-) -> bool {
+fn uses_docker(repo: &Path, distro: Option<&str>, settings: &DeliveryRepoSettings) -> bool {
     const FILES: &[&str] = &[
         "compose.yaml",
         "compose.yml",
@@ -410,6 +479,57 @@ mod tests {
         );
         let disk = results.iter().find(|result| result.name == "Disco");
         assert_eq!(disk.is_some(), cfg!(windows), "{results:?}");
+    }
+
+    #[test]
+    fn the_check_environment_names_services_by_host_and_port() {
+        let env: BTreeMap<String, String> = [
+            (
+                "MONGO",
+                "mongodb://user:p@ss@localhost:27017/agos{task}?x=1",
+            ),
+            ("QDRANT", "http://127.0.0.1:6333"),
+            ("V6", "redis://[::1]:6379/0"),
+            ("NO_PORT", "postgres://db.local/app"),
+            ("REPLICA", "mongodb://a:1,b:2/db"),
+            ("PER_TASK", "http://{task}.local:80"),
+            ("PLAIN", "true"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+        assert_eq!(
+            services(&env),
+            [
+                ("MONGO".to_string(), "localhost:27017".to_string()),
+                ("QDRANT".to_string(), "127.0.0.1:6333".to_string()),
+                ("V6".to_string(), "[::1]:6379".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_service_of_the_check_environment_that_refuses_is_the_environment_down() {
+        let repo = tempfile::tempdir().unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut settings = settings(&["npm test"], &[]);
+        assert!(!may_be_down(repo.path(), None, &settings));
+        settings.check_env.insert(
+            "TEST_DB_MONGO_URL".into(),
+            format!("mongodb://127.0.0.1:{port}/test"),
+        );
+        assert!(may_be_down(repo.path(), None, &settings));
+        let results = check_within(repo.path(), None, &settings, Duration::from_secs(20));
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(
+            results[0].name,
+            format!("TEST_DB_MONGO_URL (127.0.0.1:{port})")
+        );
+        assert!(!results[0].ok);
     }
 
     #[test]

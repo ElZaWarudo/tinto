@@ -4765,7 +4765,7 @@ fn killed(job: &DeliveryJob) -> bool {
 
 /// A failed check of Tinto's whose failure may not be the code's: its first
 /// failure on this code, killed, or in a repo whose jobs need an
-/// environment (Docker, probes) that may be down.
+/// environment (Docker, probes, services) that may be down.
 fn doubtful_check(
     job: &DeliveryJob,
     task: &DeliveryTask,
@@ -4794,8 +4794,7 @@ fn doubtful_check(
     }
     killed(job)
         || store.repo_settings(&task.repo).is_ok_and(|settings| {
-            !settings.environment_probes.is_empty()
-                || super::environment::uses_docker(&task.repo, task.distro.as_deref(), &settings)
+            super::environment::may_be_down(&task.repo, task.distro.as_deref(), &settings)
         })
 }
 
