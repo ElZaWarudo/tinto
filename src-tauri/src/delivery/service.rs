@@ -195,6 +195,17 @@ const MONITOR_TICK: Duration = if cfg!(test) {
     Duration::from_millis(200)
 };
 
+/// The longest gap between two looks at a running job that counts towards
+/// its timeout. Looks come every [`MONITOR_TICK`]: a far longer gap is the
+/// computer asleep, not the job running.
+const COUNTED_GAP_MS: u64 = 60_000;
+
+/// `ran_ms` plus what of the time from `last_ms` to `now_ms` the job could
+/// run. A clock set back counts nothing.
+fn ran_until(ran_ms: u64, last_ms: u64, now_ms: u64) -> u64 {
+    ran_ms + now_ms.saturating_sub(last_ms).min(COUNTED_GAP_MS)
+}
+
 /// The end of a failed check's output its next stage reads.
 const CHECK_TAIL_CHARS: usize = 2_000;
 
@@ -3368,8 +3379,11 @@ impl DeliveryService {
             .ok()
             .and_then(|cancels| cancels.get(&job.id).cloned())
             .unwrap_or_default();
-        let deadline_ms =
-            job.started_at_ms.unwrap_or_else(now_ms) + u64::from(job.timeout_minutes) * 60_000;
+        let budget_ms = u64::from(job.timeout_minutes) * 60_000;
+        // A job adopted after a restart counts all the time since it
+        // started, Tinto closed or not; from here on, only time it can run.
+        let mut looked_ms = now_ms();
+        let mut ran_ms = looked_ms.saturating_sub(job.started_at_ms.unwrap_or(looked_ms));
         let mut cancelled = false;
         let mut timed_out = false;
         // When the job is being stopped: kill it outright once this passes.
@@ -3385,10 +3399,13 @@ impl DeliveryService {
                 Ok(None) => {}
                 Err(_) => break None,
             }
+            let now = now_ms();
+            ran_ms = ran_until(ran_ms, looked_ms, now);
+            looked_ms = now;
             if !cancelled && !timed_out {
                 if cancel.load(Ordering::SeqCst) {
                     cancelled = true;
-                } else if now_ms() >= deadline_ms {
+                } else if ran_ms >= budget_ms {
                     timed_out = true;
                 }
                 if cancelled || timed_out {
@@ -5185,6 +5202,24 @@ mod tests {
     fn each_package_of_an_issue_gets_its_own_task_slug() {
         assert_eq!(task_slug("AGOS-129", None), "agos_129");
         assert_eq!(task_slug("AGOS-129", Some(3)), "agos_129_p3");
+    }
+
+    #[test]
+    fn time_asleep_does_not_count_towards_a_jobs_timeout() {
+        // Looked at every 200 ms for a minute: all of it counts.
+        let mut ran = 0;
+        for at in (200..=60_000).step_by(200) {
+            ran = ran_until(ran, at - 200, at);
+        }
+        assert_eq!(ran, 60_000);
+        // A night asleep between two looks counts no more than the cap.
+        let night = 10 * 60 * 60_000;
+        assert_eq!(
+            ran_until(ran, 60_000, 60_000 + night),
+            60_000 + COUNTED_GAP_MS
+        );
+        // A clock set back counts nothing.
+        assert_eq!(ran_until(ran, 60_000, 50_000), 60_000);
     }
 
     #[test]
