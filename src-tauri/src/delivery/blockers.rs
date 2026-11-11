@@ -514,6 +514,9 @@ impl DeliveryService {
                     }) {
                         eprintln!("tinto: delivery could not record its resume: {error}");
                     }
+                    // Nothing else wakes the scheduler after a suspend: start
+                    // what was left queued instead of waiting for an event.
+                    service.tick();
                 }
                 if let Err(error) = service.settle_blockers() {
                     eprintln!("tinto: delivery could not settle the blocked tasks: {error}");

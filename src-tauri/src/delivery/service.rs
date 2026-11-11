@@ -2995,7 +2995,8 @@ impl DeliveryService {
 
     // ---- scheduling ----
 
-    /// Starts every queued job that can run now, in FIFO order: one job per
+    /// Starts every queued job that can run now, oldest first (a task's own
+    /// checks quickest first): one job per
     /// task at a time, up to the capacity, and exclusive resources in the
     /// order they were requested.
     pub fn tick(&self) {
