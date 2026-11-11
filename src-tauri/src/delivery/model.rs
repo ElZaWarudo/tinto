@@ -1512,6 +1512,10 @@ pub struct DeliveryRun {
     /// When Tinto last woke it.
     #[serde(default)]
     pub notified_at_ms: Option<u64>,
+    /// When its owner was last heard from: the last reply wait_run handed
+    /// it. A coordinator about to take the batch over reads it.
+    #[serde(default)]
+    pub owner_seen_at_ms: Option<u64>,
 }
 
 /// One entry of Delivery's audit trail; `seq` is the cursor of wait_run.
@@ -1963,6 +1967,9 @@ pub struct DeliveryCoordinatorState {
     pub unread: u32,
     /// When the oldest of them happened.
     pub unread_since_ms: Option<u64>,
+    /// How long ago its owner was last heard from (the run's
+    /// `owner_seen_at_ms`); `None` before its first wait_run.
+    pub owner_seen_seconds_ago: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
