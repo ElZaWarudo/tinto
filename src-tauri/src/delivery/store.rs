@@ -2,6 +2,7 @@
 //! the Agents journal so the two never share migrations. Each record is
 //! stored as JSON next to the few columns that are queried.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -551,6 +552,19 @@ impl DeliveryStore {
             .conn
             .query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))?;
         Ok(seq.unwrap_or(0) as u64)
+    }
+
+    /// The detail of each task's newest entry of `kind`, by task.
+    pub fn latest_task_details(
+        &self,
+        kind: &str,
+    ) -> Result<HashMap<String, String>, DeliveryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, detail FROM events WHERE seq IN \
+             (SELECT MAX(seq) FROM events WHERE kind = ?1 AND task_id IS NOT NULL GROUP BY task_id)",
+        )?;
+        let rows = stmt.query_map([kind], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<Result<HashMap<String, String>, _>>()?)
     }
 
     #[cfg(test)]
