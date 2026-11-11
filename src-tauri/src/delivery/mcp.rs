@@ -82,7 +82,7 @@ const COORDINATOR_INSTRUCTIONS: &str = r#"Tinto Delivery: create a run, create t
 - A check that fails only on tests the user marked as known environment failures (read_settings `known_failures`: check command, test name, reason) opens no round and is settled with a note (event check_known_failures).
 - When a check keeps failing on a test only because of this machine (a Windows run without /proc, a flaky test), do not fix or resolve it each time: tell the user and ask them to add it in Ajustes → Fallos conocidos del entorno.
 - A stage that changes the code replaces a check still running on the code before (a queued one keeps its place: it runs on the code as it is); a sync cancels the task's checks and runs them again on what it leaves; a setup job cancels the checks running beside it and queues them again behind it.
-- Skipped and neutral checks never block, and a cancelled run counts as not run.
+- Skipped and neutral checks never block, and a cancelled run counts as not run unless another run of the same check on the head has a state of its own.
 
 ## Push, sync and merge
 - When a push drifts (the remote branch moved or is gone), check the branch and ask for the push step again (request_approval) to publish it.

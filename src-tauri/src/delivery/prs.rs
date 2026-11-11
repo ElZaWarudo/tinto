@@ -743,9 +743,10 @@ fn check_state(check: &Value) -> &'static str {
         return "pending";
     }
     match upper("conclusion").as_str() {
-        // A run cancelled (by Tinto, the coordinator or a newer push) did
-        // not test the head: it never ran, it did not fail.
-        "CANCELLED" => "not_run",
+        // A run cancelled (by Tinto, the coordinator, a newer push or a
+        // concurrency group) did not test the head: it never ran, it did not
+        // fail. `head_checks` decides whether another run of it did.
+        "CANCELLED" => "cancelled",
         "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failing",
         "SKIPPED" | "NEUTRAL" => "skipped",
         _ => "passing",
@@ -764,6 +765,7 @@ pub(super) fn head_checks(snapshot: &Value) -> PrChecks {
         .collect();
     let mut checks = PrChecks::default();
     let mut seen: Vec<String> = Vec::new();
+    let mut cancelled: Vec<String> = Vec::new();
     for check in snapshot["statusCheckRollup"]
         .as_array()
         .into_iter()
@@ -782,9 +784,21 @@ pub(super) fn head_checks(snapshot: &Value) -> PrChecks {
             "failing" => checks.failing += 1,
             "skipped" => checks.skipped += 1,
             "not_run" => checks.not_run.push(name.clone()),
+            "cancelled" => {
+                cancelled.push(name);
+                continue;
+            }
             _ => checks.pending += 1,
         }
         seen.push(name);
+    }
+    // A cancelled run yields to another run of the same check on the head
+    // (a workflow concurrency group cancels one and keeps the other); only a
+    // check whose every run was cancelled is not run.
+    for name in cancelled {
+        if !seen.contains(&name) && !checks.not_run.contains(&name) {
+            checks.not_run.push(name);
+        }
     }
     for name in &required {
         if !seen.contains(name) && !checks.not_run.contains(name) {
@@ -3790,13 +3804,42 @@ mod tests {
                 CiState::NotRun,
                 vec!["e2e"],
             ),
-            // Cancelled tested nothing: not run, not failing.
+            // Cancelled tested nothing: not run, not failing, unless another
+            // run of the same check has a state of its own.
             (
                 "cancelled",
                 json!([run("build", "COMPLETED", "CANCELLED")]),
                 json!([]),
                 CiState::NotRun,
                 vec!["build"],
+            ),
+            (
+                "cancelled beside a pass of the same check",
+                json!([run("build", "COMPLETED", "CANCELLED"), ok()]),
+                json!(["build"]),
+                CiState::Passing,
+                vec![],
+            ),
+            (
+                "cancelled beside a run of the same check still going",
+                json!([
+                    run("build", "IN_PROGRESS", ""),
+                    run("build", "COMPLETED", "CANCELLED")
+                ]),
+                json!([]),
+                CiState::Pending,
+                vec![],
+            ),
+            (
+                "every run of the check cancelled",
+                json!([
+                    ok(),
+                    run("e2e", "COMPLETED", "CANCELLED"),
+                    run("e2e", "COMPLETED", "CANCELLED")
+                ]),
+                json!([]),
+                CiState::NotRun,
+                vec!["e2e"],
             ),
         ];
         for (case, rollup, required, state, not_run) in cases {
