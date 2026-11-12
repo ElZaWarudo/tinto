@@ -8,6 +8,7 @@ import {
   rejectDeliverySettingsProposal,
 } from "../../delivery/client";
 import type {
+  DeliveryKnownFailure,
   DeliveryRepoSettings,
   DeliverySettingsChanges,
   DeliverySettingsProposal,
@@ -35,6 +36,11 @@ const LIST_FIELDS: ListField[] = [
 
 const key = (field: string, value: string) => `${field}\u0000${value}`;
 
+type FailureField = "known_failures_add" | "known_failures_remove";
+const FAILURE_FIELDS: FailureField[] = ["known_failures_add", "known_failures_remove"];
+const failureKey = (field: FailureField, failure: DeliveryKnownFailure) =>
+  key(field, `${failure.check}\u0000${failure.test}`);
+
 /** Every change of the proposal, by key. */
 function changeKeys(changes: DeliverySettingsChanges): string[] {
   const keys: string[] = [];
@@ -49,6 +55,9 @@ function changeKeys(changes: DeliverySettingsChanges): string[] {
   if (changes.jira_after_merge != null) keys.push(key("jira_after_merge", ""));
   for (const name of Object.keys(changes.jira_transition_fields ?? {})) {
     keys.push(key("jira_transition_fields", name));
+  }
+  for (const field of FAILURE_FIELDS) {
+    for (const failure of changes[field] ?? []) keys.push(failureKey(field, failure));
   }
   return keys;
 }
@@ -92,6 +101,12 @@ function accepted(
     selected.has(key("jira_transition_fields", name)),
   );
   if (fields.length > 0) part.jira_transition_fields = Object.fromEntries(fields);
+  for (const field of FAILURE_FIELDS) {
+    const failures = (changes[field] ?? []).filter((failure) =>
+      selected.has(failureKey(field, failure)),
+    );
+    if (failures.length > 0) part[field] = failures;
+  }
   return part;
 }
 
@@ -364,6 +379,25 @@ function ProposalCard({ proposal }: { proposal: DeliverySettingsProposal }) {
           </span>
         </label>
       ))}
+      {FAILURE_FIELDS.flatMap((field) =>
+        (changes[field] ?? []).map((failure) => {
+          const adds = field === "known_failures_add";
+          return (
+            <label key={failureKey(field, failure)} className="delivery-settings-diff__value">
+              <Toggle
+                label={`${adds ? "Marcar" : "Desmarcar"} el fallo conocido ${failure.test}`}
+                checked={selected.has(failureKey(field, failure))}
+                onChange={() => toggle(failureKey(field, failure))}
+              />
+              <span>
+                <strong>{adds ? "Fallo conocido del entorno" : "Ya no es fallo conocido"}</strong>:{" "}
+                {failure.test} en <code>{failure.check}</code>
+                {adds && failure.reason ? ` (${failure.reason})` : ""}
+              </span>
+            </label>
+          );
+        }),
+      )}
       <ActionGroup>
         <div className="delivery-actions">
           <ActionButton

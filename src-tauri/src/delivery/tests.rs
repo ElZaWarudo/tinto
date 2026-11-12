@@ -26,6 +26,8 @@ const CODEX_OK: &str = include_str!("fixtures/codex-ok.jsonl");
 const CODEX_FAILED: &str = include_str!("fixtures/codex-failed.jsonl");
 const CODEX_LIMIT: &str = include_str!("fixtures/codex-limit.jsonl");
 const CLAUDE_OK: &str = include_str!("fixtures/claude-ok.jsonl");
+/// A mocha run whose only failure is session-executor's /proc test on Windows.
+const MOCHA_PROC: &str = "  1 passing (2s)\n  1 failing\n\n  1) Context images\n       LoadImage tool\n         tells apart images of the same size in its result:\n\n      AssertionError [ERR_ASSERTION]: \"ENOENT: realpath 'C:\\\\proc\\\\self\\\\fd\\\\3'\" != \"ENOENT: realpath 'C:\\\\proc\\\\self\\\\fd\\\\3'\"\n";
 /// How often a test looks again at what it waits for.
 const POLL: Duration = Duration::from_millis(20);
 
@@ -43,6 +45,7 @@ fn fake_launcher() -> Launcher {
             Some("codex-failed") => CODEX_FAILED,
             Some("codex-limit") => CODEX_LIMIT,
             Some("claude-ok") => CLAUDE_OK,
+            Some("mocha-proc") => MOCHA_PROC,
             _ => "",
         };
         std::fs::create_dir_all(&paths.dir).unwrap();
@@ -10636,6 +10639,65 @@ fn a_failing_check_opens_a_round_the_fix_is_told_about() {
         (2, "implementation")
     );
     assert_eq!(h.service.overview().unwrap().rounds.len(), 1);
+}
+
+#[test]
+fn a_check_failing_only_on_a_proposed_known_failure_opens_no_round() {
+    let h = harness();
+    let fence = coordinated_run(&h);
+    let created = tool(
+        &h,
+        "create_task",
+        with(
+            &fence,
+            json!({"repo": plain_path(h.repo.path()), "key": "R-5", "title": "x"}),
+        ),
+    );
+    let task = h
+        .service
+        .task(created["structuredContent"]["id"].as_str().unwrap())
+        .unwrap();
+    let check = "events=mocha-proc exit=1";
+    let known = json!({"check": check, "test": "LoadImage tool tells apart images of the same size in its result", "reason": "No hay /proc en Windows"});
+    let proposed = tool(
+        &h,
+        "propose_settings",
+        with(
+            &fence,
+            json!({"task_id": task.id, "reason": "r", "checks_add": [check], "known_failures_add": [known]}),
+        ),
+    );
+    let proposal = &proposed["structuredContent"];
+    let changes: DeliverySettingsChanges =
+        serde_json::from_value(proposal["changes"].clone()).unwrap();
+    h.service
+        .approve_settings_proposal(proposal["id"].as_str().unwrap(), changes, "user")
+        .unwrap();
+    let settings = tool(&h, "read_settings", json!({"task_id": task.id}));
+    assert_eq!(
+        settings["structuredContent"]["known_failures"],
+        json!([known])
+    );
+
+    h.service
+        .set_task_checks(&task.id, vec![check.into()])
+        .unwrap();
+    let implementation = h.dispatch(&task, "implementation", "events=codex-ok touch=code.txt");
+    h.wait(&implementation.id);
+    let ended = ended_checks(&h, &task, 1);
+    assert!(
+        ended[0]
+            .resolved_note
+            .as_deref()
+            .is_some_and(|note| note.contains("No hay /proc en Windows")),
+        "{:?}",
+        ended[0]
+    );
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert!(phase.failing_checks.is_empty());
+    assert!(phase.round.is_none());
+    let jobs = h.service.store().unwrap().task_jobs(&task.id).unwrap();
+    assert_eq!(jobs.len(), 2, "no job started for it: {jobs:?}");
 }
 
 #[test]

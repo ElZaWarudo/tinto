@@ -1482,6 +1482,12 @@ pub struct DeliverySettingsChanges {
     /// status, each set to the fields given (adding or replacing it).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub jira_transition_fields: BTreeMap<String, serde_json::Value>,
+    /// Tests to mark as failing only because of the environment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_failures_add: Vec<DeliveryKnownFailure>,
+    /// Known failures to unmark, by check and test (the reason is ignored).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_failures_remove: Vec<DeliveryKnownFailure>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1743,7 +1749,8 @@ pub struct DeliveryRepoSettings {
 pub struct DeliveryKnownFailure {
     /// The verification command, exactly as in `checks`.
     pub check: String,
-    /// The test's name, as the command's output shows it.
+    /// The test's name, as the command's output shows it: its title, or its
+    /// suites and title (spaces, `›` or `>` between them).
     pub test: String,
     /// Why it fails here, in the user's words.
     #[serde(default)]

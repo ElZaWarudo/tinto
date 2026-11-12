@@ -195,7 +195,7 @@ pub fn run_step(
                 Some(missing) => DeliveryError::new(
                     error.category,
                     format!(
-                        "{} La transición «{name}» (id {id}) pide campos que no se enviaron: {missing}.",
+                        "{} La transición «{name}» (id {id}) pide campos que no se enviaron: {missing}. Dales valor en Ajustes → Jira → Campos por transición (o propón jira_transition_fields con la clave «{id}»).",
                         error.message
                     ),
                 ),
@@ -532,7 +532,10 @@ mod run_step_tests {
 
     /// An issue in «Por hacer» whose only transition, «Start Work», requires
     /// «Requiere QA Funcional»; Jira refuses it without that field.
-    struct RequiresField;
+    #[derive(Default)]
+    struct RequiresField {
+        started: std::sync::Mutex<bool>,
+    }
 
     impl Jira for RequiresField {
         fn call(
@@ -540,13 +543,25 @@ mod run_step_tests {
             _: &JiraSite,
             method: &str,
             path: &str,
-            _: Option<&Value>,
+            body: Option<&Value>,
         ) -> Result<Value, DeliveryError> {
             let transition =
                 json!({"id": "11", "name": "Start Work", "to": {"name": "En ejecución"}});
+            let status = match *self.started.lock().unwrap() {
+                true => "En ejecución",
+                false => "Por hacer",
+            };
             match (method, path) {
                 ("GET", "/rest/api/2/issue/AGOS-1?fields=status") => {
-                    Ok(json!({"fields": {"status": {"name": "Por hacer"}}}))
+                    Ok(json!({"fields": {"status": {"name": status}}}))
+                }
+                ("POST", "/rest/api/2/issue/AGOS-1/transitions")
+                    if body.is_some_and(|body| {
+                        body["fields"]["customfield_10617"]["value"] == "NO"
+                    }) =>
+                {
+                    *self.started.lock().unwrap() = true;
+                    Ok(Value::Null)
                 }
                 ("GET", "/rest/api/2/issue/AGOS-1/transitions") => {
                     Ok(json!({"transitions": [transition]}))
@@ -590,11 +605,12 @@ mod run_step_tests {
                 &[
                     "«Start Work» (id 11)",
                     "«Requiere QA Funcional» (customfield_10617; valores: SI, NO)",
+                    "jira_transition_fields con la clave «11»",
                 ][..],
             ),
         ] {
             let error = run_step(
-                &RequiresField,
+                &RequiresField::default(),
                 &site,
                 "AGOS-1",
                 None,
@@ -605,6 +621,30 @@ mod run_step_tests {
             for text in expected {
                 assert!(error.message.contains(text), "{}", error.message);
             }
+        }
+    }
+
+    #[test]
+    fn transition_fields_are_found_by_id_name_or_target_status() {
+        let site = JiraSite {
+            host: "https://jira.test".into(),
+            token: "secret".into(),
+        };
+        for key in ["11", "start work", "En ejecución"] {
+            let fields = [(
+                key.to_string(),
+                json!({"customfield_10617": {"value": "NO"}}),
+            )]
+            .into();
+            let done = run_step(
+                &RequiresField::default(),
+                &site,
+                "AGOS-1",
+                None,
+                &["En ejecución".to_string()],
+                &fields,
+            );
+            assert!(done.is_ok(), "{key}: {done:?}");
         }
     }
 }
