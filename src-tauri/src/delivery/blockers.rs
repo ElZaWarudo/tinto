@@ -10,8 +10,8 @@ use super::model::{
     DeliveryDecisionStatus, DeliveryPrMilestone, DeliveryRung, DeliveryTask, DeliveryTaskMilestone,
     DeliveryUnblock, NewBlocker,
 };
-use super::phase::{is_delivered, step_done};
-use super::prs::{parse_pr_url, DeliveryPr, DeliveryPrState};
+use super::phase::{is_delivered, is_merged, step_done};
+use super::prs::{parse_pr_url, DeliveryPr};
 use super::service::DeliveryService;
 use super::{now_ms, DeliveryError};
 
@@ -84,11 +84,10 @@ fn blocker_state(blocker: &DeliveryBlocker, world: &World<'_>) -> (String, bool)
                 .filter(|approval| approval.task_id == *task_id)
                 .collect();
             let pr = world.prs.iter().find(|pr| pr.task_id == *task_id);
-            let reached = if is_delivered(other, &approvals) {
+            let merged = is_merged(&approvals, pr);
+            let reached = if is_delivered(other, &approvals, merged) {
                 Some(DeliveryTaskMilestone::Delivered)
-            } else if step_done(&approvals, DeliveryRung::Merge)
-                || pr.is_some_and(|pr| pr.state == DeliveryPrState::Merged)
-            {
+            } else if merged {
                 Some(DeliveryTaskMilestone::Merged)
             } else if step_done(&approvals, DeliveryRung::Pr) || pr.is_some() {
                 Some(DeliveryTaskMilestone::PrOpened)

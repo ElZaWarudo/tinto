@@ -170,6 +170,9 @@ pub enum Phase {
     /// other stage. `waiting_round` is the round waiting for it, if any.
     WaitsMergeCommit {
         waiting_round: Option<u32>,
+        /// Why a restack whose conflicts are resolved could not go on yet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notice: Option<String>,
     },
     /// Stages of these rounds changed the code while a sync's merge was
     /// in progress: the user decides how to commit it.
@@ -611,13 +614,15 @@ pub fn open_merge<'a>(
     })?;
     let at = sync.executed_at_ms.unwrap_or(0);
     // Concluded by a commit step, or outside Tinto (the sync then records
-    // the commit that did).
-    let concluded = !sync.created.is_empty()
-        || approvals.iter().any(|approval| {
-            approval.rung == DeliveryRung::Commit
-                && approval.status == DeliveryApprovalStatus::Executed
-                && approval.executed_at_ms.unwrap_or(0) > at
-        });
+    // the commit that did). A restack paused on conflicts is concluded by
+    // no commit: it is open until its rebase ends, which clears them.
+    let concluded = !sync.restack
+        && (!sync.created.is_empty()
+            || approvals.iter().any(|approval| {
+                approval.rung == DeliveryRung::Commit
+                    && approval.status == DeliveryApprovalStatus::Executed
+                    && approval.executed_at_ms.unwrap_or(0) > at
+            }));
     (!concluded).then_some(sync)
 }
 
@@ -794,19 +799,40 @@ pub fn steps_for(task: &DeliveryTask) -> Vec<(DeliveryRung, Option<DeliveryJiraS
         .collect()
 }
 
-/// Every step of the task's ladder done: the task is delivered.
-pub fn is_delivered(task: &DeliveryTask, approvals: &[&DeliveryApproval]) -> bool {
-    next_step(task, approvals).is_none()
+/// Whether the task's PR was merged: by its merge step, or on GitHub.
+pub fn is_merged(approvals: &[&DeliveryApproval], pr: Option<&DeliveryPr>) -> bool {
+    step_done(approvals, DeliveryRung::Merge)
+        || pr.is_some_and(|pr| pr.state == DeliveryPrState::Merged)
 }
 
-/// The first ladder step not done; `None` once every step is.
+/// Every step of the task's ladder done: the task is delivered.
+pub fn is_delivered(task: &DeliveryTask, approvals: &[&DeliveryApproval], merged: bool) -> bool {
+    next_step(task, approvals, merged).is_none()
+}
+
+/// The first ladder step not done; `None` once every step is. Once the PR
+/// is `merged` the steps that led to it are settled, whatever its branch
+/// did since (a commit step undone, a push that failed), and the Jira step
+/// after the merge, which links the PR too, stands for the one after the PR.
 pub(super) fn next_step(
     task: &DeliveryTask,
     approvals: &[&DeliveryApproval],
+    merged: bool,
 ) -> Option<(DeliveryRung, Option<DeliveryJiraStage>)> {
+    let done = |rung: DeliveryRung, stage: Option<DeliveryJiraStage>| {
+        latest_step(approvals, rung, stage)
+            .is_some_and(|step| step.status == DeliveryApprovalStatus::Executed)
+    };
     steps_for(task).into_iter().find(|(rung, stage)| {
-        latest_step(approvals, *rung, *stage)
-            .is_none_or(|step| step.status != DeliveryApprovalStatus::Executed)
+        let settled = merged
+            && match (rung, stage) {
+                (DeliveryRung::Jira, Some(DeliveryJiraStage::AfterPr)) => {
+                    done(DeliveryRung::Jira, Some(DeliveryJiraStage::AfterMerge))
+                }
+                (DeliveryRung::Jira, _) => false,
+                _ => true,
+            };
+        !settled && !done(*rung, *stage)
     })
 }
 
@@ -1158,8 +1184,10 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         .iter()
         .filter(|approval| approval.task_id == task.id)
         .collect();
-    phase.next_step = next_step(task, &approvals).map(|(rung, stage)| DeliveryStep { rung, stage });
-    if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
+    let pr = facts.prs.iter().find(|pr| pr.task_id == task.id);
+    phase.next_step = next_step(task, &approvals, is_merged(&approvals, pr))
+        .map(|(rung, stage)| DeliveryStep { rung, stage });
+    if let Some(pr) = pr {
         phase.threads_unanswered = pr.unanswered().count();
         phase.threads_to_answer = threads_to_answer(pr, &approvals)
             .iter()
@@ -1595,6 +1623,7 @@ fn phase_in_round(
                 .map(|round| round.number);
             return phase(Phase::WaitsMergeCommit {
                 waiting_round: waiting,
+                notice: sync.notice.clone(),
             });
         }
     }
@@ -1608,10 +1637,18 @@ fn phase_in_round(
             });
         }
     }
-    let step = next_step(task, &approvals);
+    let pr = facts.prs.iter().find(|pr| pr.task_id == task.id);
+    let merged = is_merged(&approvals, pr);
+    let step = next_step(task, &approvals, merged);
     let Some((rung, stage)) = step else {
         return phase(Phase::Delivered);
     };
+    // A merged PR waits on nothing and its branch no longer matters (a
+    // round, commits made since): the step left is what the task waits on,
+    // named, so the coordinator sees it among the idle ones.
+    if merged {
+        return phase(Phase::NextStep { rung, stage });
+    }
     // Work sent back comes before the PR's wait: the round's stages, then
     // its commit and push.
     if let Some(round) = round {
@@ -1622,12 +1659,7 @@ fn phase_in_round(
             return phase(Phase::NextStep { rung, stage: None });
         }
     }
-    if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
-        // A merged PR waits on nothing: the step left is what the task
-        // waits on, named, so the coordinator sees it among the idle ones.
-        if pr.state == DeliveryPrState::Merged {
-            return phase(Phase::NextStep { rung, stage });
-        }
+    if let Some(pr) = pr {
         // Replies to reviewers are outside the ladder, but waiting for the
         // user's approval they are what the PR waits on.
         let all: Vec<&DeliveryApproval> = facts

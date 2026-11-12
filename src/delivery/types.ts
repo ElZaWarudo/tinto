@@ -909,7 +909,12 @@ export type DeliveryPhase =
   | { kind: "delivered" }
   | { kind: "pr"; number: number; ci?: DeliveryCiState | null; wait: DeliveryPrWait }
   /** A sync's merge is in progress and its commit comes first; `waiting_round` waits for it. */
-  | { kind: "waits_merge_commit"; waiting_round: number | null }
+  | {
+      kind: "waits_merge_commit";
+      waiting_round: number | null;
+      /** Why git could not continue a restack paused on conflicts, once they were resolved. */
+      notice?: string;
+    }
   /** Stages of these rounds changed the code during a merge: the user decides how to commit it. */
   | { kind: "merge_mixed"; mixed_rounds: number[] }
   /** Its PR opens once this package (its label) merged; Tinto then restacks it. */

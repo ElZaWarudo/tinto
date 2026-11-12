@@ -565,6 +565,8 @@ describe("a followed PR", () => {
     const waits = status({ kind: "waits_merge_commit", waiting_round: 4 });
     expect(waits.label).toBe("Espera el commit del merge");
     expect(waits.detail).toContain("La ronda 4 corre encima del commit del merge");
+    const notice = "git no pudo continuar el rebase: falta un archivo.";
+    expect(status({ kind: "waits_merge_commit", waiting_round: null, notice }).detail).toBe(notice);
     const mixed = status({ kind: "merge_mixed", mixed_rounds: [3] });
     expect(mixed.group).toBe("attention");
     expect(mixed.detail).toContain("la ronda 3");

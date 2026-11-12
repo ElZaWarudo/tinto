@@ -486,6 +486,32 @@ impl DeliveryService {
                 .is_some_and(|pr| pr.state == DeliveryPrState::Merged))
     }
 
+    /// Why a merged task takes no commit, sync or push, with the step it
+    /// does have left.
+    fn merged_refusal(&self, task: &DeliveryTask) -> Result<String, DeliveryError> {
+        let approvals: Vec<DeliveryApproval> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|approval| approval.task_id == task.id)
+            .collect();
+        let approvals: Vec<&DeliveryApproval> = approvals.iter().collect();
+        let left = match super::phase::next_step(task, &approvals, true) {
+            Some((DeliveryRung::Jira, Some(stage))) => {
+                format!("le falta el paso jira {}", stage.as_str())
+            }
+            Some((rung, _)) => format!(
+                "le falta el paso {}",
+                format!("{rung:?}").to_ascii_lowercase()
+            ),
+            None => "está entregada: archívala con archive_task".to_string(),
+        };
+        Ok(format!(
+            "el PR de {} ya está fusionado y su rama ya no cuenta: no se le piden commit, sync ni push; {left}",
+            task.label()
+        ))
+    }
+
     /// Jira steps from when a task had a single one get their moment: done
     /// before the merge, it was the PR's (AGOS-455 moved the issue to review
     /// before merge existed); after it, the merge's.
@@ -523,7 +549,8 @@ impl DeliveryService {
             .filter(|approval| approval.task_id == task_id)
             .collect();
         let approvals: Vec<&DeliveryApproval> = approvals.iter().collect();
-        Ok(super::phase::is_delivered(&task, &approvals))
+        let merged = self.task_merged(&task)?;
+        Ok(super::phase::is_delivered(&task, &approvals, merged))
     }
 
     /// Archives a delivered task: its worktree and local branch go (what it
@@ -1063,6 +1090,15 @@ impl DeliveryService {
     ) -> Result<(DeliveryApproval, bool), DeliveryError> {
         let task = self.task(&request.task_id)?;
         let place = Place::of(task.distro.as_deref());
+        // A merged PR has its branch behind it (GitHub deleted it): nothing
+        // is committed, synced or published on it any more.
+        if matches!(
+            request.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
+        ) && self.task_merged(&task)?
+        {
+            return Err(DeliveryError::new("pr_merged", self.merged_refusal(&task)?));
+        }
         let planned = request.rung == DeliveryRung::Commit && !request.commits.is_empty();
         let reply = request.rung == DeliveryRung::PrReply;
         // A merge's text defaults to the PR's approved title.
@@ -1247,7 +1283,7 @@ impl DeliveryService {
         {
             return Err(DeliveryError::new(
                 "restack_in_progress",
-                "hay un restack en pausa por conflictos: Tinto lo sigue en cuanto se resuelven (implementation y review), sin paso commit; para abandonarlo, deshaz su paso sync",
+                "hay un restack en pausa por conflictos: Tinto lo sigue en cuanto se resuelven (implementation y review), sin paso commit; continue_restack lo sigue ahora o dice qué falta; para abandonarlo, deshaz su paso sync",
             ));
         }
         // The user sees who the commits will be by, as git's config says:
@@ -2334,7 +2370,12 @@ impl DeliveryService {
                     .is_some_and(|approval| approval.status == DeliveryApprovalStatus::Failed)
             };
             let autonomy = self.autonomy(task)?;
-            if task.restack_from.is_some() {
+            // A merged task's branch takes no restack, commit or push.
+            let merged = super::phase::is_merged(
+                &approvals,
+                overview.prs.iter().find(|pr| pr.task_id == task.id),
+            );
+            if task.restack_from.is_some() && !merged {
                 // A restack Tinto left paused, that drifted, failed or was
                 // abandoned is the user's or the coordinator's: Tinto never
                 // starts it again on its own.
@@ -2377,7 +2418,7 @@ impl DeliveryService {
                     None,
                     format!("Publicar {}", task.branch),
                 ),
-                _ => match super::phase::next_step(task, &approvals) {
+                _ => match super::phase::next_step(task, &approvals, merged) {
                     Some((DeliveryRung::Jira, Some(stage)))
                         if autonomy.jira
                             && self.jira_site(&task.repo)?.is_some()
@@ -2508,7 +2549,7 @@ impl DeliveryService {
         if tasks::sync_in_progress(place, &task.worktree) {
             return refuse(
                 "merge_in_progress",
-                "ya hay un merge o un restack en curso en el worktree: un merge se concluye con el paso commit; un restack sigue solo cuando se resuelven sus conflictos, o se abandona deshaciendo su paso sync",
+                "ya hay un merge o un restack en curso en el worktree: un merge se concluye con el paso commit; un restack sigue solo cuando se resuelven sus conflictos (continue_restack lo sigue ahora o dice qué falta), o se abandona deshaciendo su paso sync",
             );
         }
         if tasks::worktree_state(place, &task.worktree, &task.base_commit)?.dirty {
@@ -2793,8 +2834,14 @@ impl DeliveryService {
         task: &DeliveryTask,
         mut sync: DeliveryApproval,
     ) -> Result<(), DeliveryError> {
+        // Whoever runs git in the worktree now goes first: the restack is
+        // looked at again on every evaluation, so nothing is missed.
         let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
-        let _git_work = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _git_work = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
+        };
         // Another reader may have continued this stop meanwhile.
         let place = Place::of(task.distro.as_deref());
         let now = self.approval(&sync.id)?;
@@ -2809,10 +2856,15 @@ impl DeliveryService {
         }
         match tasks::continue_restack(place, &task.worktree, &sync.conflicts) {
             Err(error) => {
-                sync.notice = Some(format!(
-                    "El restack no pudo seguir y sigue en pausa, con los conflictos resueltos: {}",
+                let notice = format!(
+                    "El restack no pudo seguir y sigue en pausa, con los conflictos resueltos: {}. Tinto lo reintenta solo; continue_restack lo reintenta ahora, y deshacer el paso sync lo abandona.",
                     error.message
-                ));
+                );
+                // Tried again on every evaluation: said once.
+                if sync.notice.as_deref() == Some(notice.as_str()) {
+                    return Ok(());
+                }
+                sync.notice = Some(notice);
                 self.save_approval(&sync, "restack_blocked")
             }
             Ok(Err(files)) => self.restack_stopped(task, sync, files, "conflictos resueltos"),
@@ -3019,6 +3071,15 @@ impl DeliveryService {
         if resolving {
             return Ok(());
         }
+        if sync.restack {
+            return Err(DeliveryError::new(
+                "merge_in_progress",
+                format!(
+                    "hay un restack en pausa ({}): solo implementation y review resuelven sus conflictos, y Tinto sigue el rebase cuando pasan, sin paso commit; si no puede seguir, el motivo está en el `notice` de su paso sync y continue_restack lo reintenta. {role} corre después",
+                    sync.title
+                ),
+            ));
+        }
         Err(DeliveryError::new(
             "merge_in_progress",
             format!(
@@ -3026,6 +3087,63 @@ impl DeliveryService {
                 sync.title
             ),
         ))
+    }
+
+    /// Continues the task's paused restack when the stages that resolve its
+    /// conflicts passed since it paused; says whether they had. It looks at
+    /// the state, not at what just happened, so it is safe to call on every
+    /// evaluation: a continuation missed once (Tinto closed, an event lost)
+    /// happens on the next.
+    fn continue_resolved_restack(&self, task: &DeliveryTask) -> Result<bool, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        if tasks::rebase_head(place, &task.worktree).is_none() {
+            return Ok(false);
+        }
+        let Some(sync) = self.task_open_merge(task)?.filter(|sync| sync.restack) else {
+            return Ok(false);
+        };
+        let jobs = self.store()?.task_jobs(&task.id)?;
+        let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
+        // Halfway through a rebase the code is not the branch's yet: the
+        // checks run once it ends, not on each stop.
+        if !super::phase::merge_resolved(&[], &jobs, &sync) {
+            return Ok(false);
+        }
+        self.continue_paused_restack(task, sync)?;
+        Ok(true)
+    }
+
+    /// The coordinator's way on with a paused restack: continues it now, or
+    /// says what it waits for. Returns its sync step as it is left: done,
+    /// or stopped on the next commit's conflicts.
+    pub fn continue_restack(&self, task_id: &str) -> Result<DeliveryApproval, DeliveryError> {
+        let task = self.task(task_id)?;
+        let place = Place::of(task.distro.as_deref());
+        let paused = self
+            .task_open_merge(&task)?
+            .filter(|sync| sync.restack && tasks::rebase_head(place, &task.worktree).is_some());
+        let Some(paused) = paused else {
+            return Err(DeliveryError::new(
+                "no_restack",
+                "la tarea no tiene un restack en pausa que seguir",
+            ));
+        };
+        if !self.continue_resolved_restack(&task)? {
+            return Err(DeliveryError::new(
+                "restack_unresolved",
+                format!(
+                    "los conflictos del restack ({}) no están resueltos y revisados desde que se detuvo: despacha implementation, que los resuelve, y después review, sin jobs en curso; Tinto sigue el rebase en cuanto pasan. Deshacer el paso sync lo abandona",
+                    paused.conflicts.join(", ")
+                ),
+            ));
+        }
+        let sync = self.approval(&paused.id)?;
+        match &sync.notice {
+            Some(why) if tasks::rebase_head(place, &task.worktree).is_some() => {
+                Err(DeliveryError::new("restack_blocked", why.clone()))
+            }
+            _ => Ok(sync),
+        }
     }
 
     /// After a job ended or a decision was answered: once the stages that
@@ -3039,19 +3157,13 @@ impl DeliveryService {
             let store = self.store()?;
             return super::rounds::release_waiting(&store, task_id);
         };
-        let store = self.store()?;
-        let jobs = store.task_jobs(task_id)?;
         let place = Place::of(task.distro.as_deref());
         if tasks::rebase_head(place, &task.worktree).is_some() {
-            drop(store);
-            let job_refs: Vec<&DeliveryJob> = jobs.iter().collect();
-            // Halfway through a rebase the code is not the branch's yet: the
-            // checks run once it ends, not on each stop.
-            if super::phase::merge_resolved(&[], &job_refs, &sync) {
-                self.continue_paused_restack(&task, sync)?;
-            }
+            self.continue_resolved_restack(&task)?;
             return Ok(());
         }
+        let store = self.store()?;
+        let jobs = store.task_jobs(task_id)?;
         let rounds = store.task_rounds(task_id)?;
         let decisions = store.task_decisions(task_id)?;
         let asking = store.approvals()?.into_iter().any(|approval| {
@@ -3457,14 +3569,25 @@ impl DeliveryService {
         let place = Place::of(task.distro.as_deref());
         let base = self.sync_base(task)?;
         let (_, tip) = tasks::base_tip(place, &task.worktree, &base, false)?;
+        // A restack's commits are copies of the ones a commit step made, and
+        // that step answers for them while it stands. Once it is undone
+        // (`commit_missing`) no step does: they are there to record, so the
+        // push's refusal and this list never both say there is nothing.
+        let commit_stands = self
+            .latest_approval(&task.id, DeliveryRung::Commit)?
+            .is_some_and(|commit| commit.status == DeliveryApprovalStatus::Executed);
         let known: Vec<String> = self
             .store()?
             .approvals()?
             .into_iter()
             .filter(|step| {
                 step.task_id == task.id
-                    && matches!(step.rung, DeliveryRung::Commit | DeliveryRung::Sync)
                     && step.status.was_done()
+                    && match step.rung {
+                        DeliveryRung::Commit => true,
+                        DeliveryRung::Sync => commit_stands || !step.restack,
+                        _ => false,
+                    }
             })
             .flat_map(|step| created_commits(&step))
             .collect();
@@ -3557,34 +3680,33 @@ impl DeliveryService {
         {
             return Ok(false);
         }
-        // Tinto's own restack rewrote them, after the step: the step stands
-        // on the commits the restack left, while the branch has them.
-        let carried = self
-            .store()?
-            .approvals()?
-            .into_iter()
-            .rev()
-            .find(|sync| {
-                sync.task_id == task.id
-                    && sync.rung == DeliveryRung::Sync
-                    && sync.restack
-                    && sync.status == DeliveryApprovalStatus::Executed
-                    && sync.executed_at_ms >= approval.executed_at_ms
-            })
-            .filter(|sync| {
-                !sync.created.is_empty()
-                    && sync
-                        .created
+        // Tinto's own restacks rewrote them, after the step: the step stands
+        // on the commits the last one left, while the branch has them. Each
+        // restack that started from the commits the step stood on moves it
+        // to the ones it created, one after another.
+        let mut standing = created.clone();
+        for sync in self.store()?.approvals()? {
+            let replayed = sync.task_id == task.id
+                && sync.rung == DeliveryRung::Sync
+                && sync.restack
+                && sync.status == DeliveryApprovalStatus::Executed
+                && sync.executed_at_ms >= approval.executed_at_ms
+                && !sync.created.is_empty()
+                && sync.before.as_deref().is_some_and(|before| {
+                    standing
                         .iter()
-                        .all(|commit| tasks::on_branch(place, &task.worktree, commit))
-                    && sync.before.as_deref().is_some_and(|before| {
-                        created
-                            .iter()
-                            .all(|commit| tasks::is_ancestor(place, &task.worktree, commit, before))
-                    })
-            });
-        if let Some(sync) = carried {
-            approval.created = sync.created;
+                        .all(|commit| tasks::is_ancestor(place, &task.worktree, commit, before))
+                });
+            if replayed {
+                standing = sync.created;
+            }
+        }
+        if standing != created
+            && standing
+                .iter()
+                .all(|commit| tasks::on_branch(place, &task.worktree, commit))
+        {
+            approval.created = standing;
             self.save_approval(&approval, "commit_rewritten")?;
             return Ok(false);
         }
@@ -3783,6 +3905,21 @@ impl DeliveryService {
             });
             if restack {
                 self.settle_restack(&task)?;
+            }
+            // A restack paused on conflicts the stages already resolved:
+            // whatever missed its continuation, it goes on now.
+            let paused = latest(DeliveryRung::Sync).is_some_and(|sync| {
+                sync.restack
+                    && sync.status == DeliveryApprovalStatus::Executed
+                    && !sync.conflicts.is_empty()
+            });
+            if paused {
+                if let Err(error) = self.continue_resolved_restack(&task) {
+                    eprintln!(
+                        "tinto: delivery could not continue the restack of {}: {error}",
+                        task.key
+                    );
+                }
             }
             // A sync's merge committed by hand, its round still open.
             let store = self.store()?;

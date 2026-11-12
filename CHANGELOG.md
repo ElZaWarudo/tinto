@@ -4,6 +4,20 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.3.3] - 2026-11-12
+
+### Features
+
+- **delivery:** let the coordinator continue a paused restack with continue_restack
+
+### Fixes
+
+- **delivery:** continue a paused restack once its conflicts are resolved, also after a restart
+- **delivery:** keep the commit step through several restacks, and let record take a restack's commits once it is undone
+- **delivery:** refuse commit, sync and push with pr_merged once a task's PR is merged
+- **delivery:** deliver a merged task on its Jira steps alone, whatever its branch did since
+- **delivery:** let the Jira step after the merge stand for the one after the PR
+
 ## [1.3.2] - 2026-11-12
 
 ### Fixes

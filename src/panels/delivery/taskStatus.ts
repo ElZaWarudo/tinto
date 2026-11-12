@@ -893,9 +893,10 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
       return {
         ...waiting("Espera el commit del merge"),
         detail:
-          phase.waiting_round === null
+          phase.notice ??
+          (phase.waiting_round === null
             ? "Hay un merge de la base en curso: se confirma antes de cualquier otra etapa."
-            : `La ronda ${phase.waiting_round} corre encima del commit del merge, en commits aparte.`,
+            : `La ronda ${phase.waiting_round} corre encima del commit del merge, en commits aparte.`),
       };
     case "merge_mixed":
       return {

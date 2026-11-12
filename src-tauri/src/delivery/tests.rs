@@ -12047,7 +12047,8 @@ fn a_round_opened_during_a_merge_waits_for_its_commit_and_runs_on_top_of_it() {
     assert_eq!(
         phase.phase,
         super::phase::Phase::WaitsMergeCommit {
-            waiting_round: Some(waiting.number)
+            waiting_round: Some(waiting.number),
+            notice: None,
         }
     );
     assert_eq!(phase.next_stage, None);
@@ -14614,4 +14615,224 @@ fn new_dependencies_queue_the_setup_of_their_package_again() {
     ended_jobs(&h, &task, "setup", 3);
     assert_eq!(again(&["package.json"]), [a, b]);
     ended_jobs(&h, &task, "setup", 5);
+}
+
+#[test]
+fn a_paused_restack_whose_conflicts_were_resolved_continues_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delivery.sqlite");
+    let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+    let _origin = bare_origin(&h);
+    let task = squashed_under(
+        &h,
+        "RR-1",
+        &["notes.txt"],
+        &[("notes.txt", "main's notes\n")],
+    );
+    let asked = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Sync, "Restack"))
+        .unwrap();
+    let paused = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(paused.conflicts, ["notes.txt"], "{:?}", paused.outcome);
+    let place = super::tasks::Place::Native;
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_some());
+    let open_sync_rounds = || {
+        h.service
+            .store()
+            .unwrap()
+            .task_rounds(&task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|round| round.kind == DeliveryRoundKind::Sync && round.is_open())
+            .count()
+    };
+    // Looking while it is paused takes it for no merge concluded outside.
+    h.service.overview().unwrap();
+    assert!(h.service.approval(&paused.id).unwrap().created.is_empty());
+    assert_eq!(open_sync_rounds(), 1);
+
+    // Its git work held, this Tinto misses the continuation and closes.
+    let lock = super::service::keyed_lock(&h.service.inner.git_work, &task.id);
+    let _held = lock.lock().unwrap();
+    let job = h.dispatch(&task, "implementation", "events=codex-ok");
+    std::fs::write(task.worktree.join("notes.txt"), "notes.txt from both\n").unwrap();
+    h.wait(&job.id);
+    h.wait(&h.dispatch(&task, "review", "events=codex-ok").id);
+    close_tinto(&h.service);
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_some());
+
+    let restarted = reopen(&path, &h);
+    restarted.overview().unwrap();
+    eventually(|| {
+        let sync = restarted.approval(&paused.id).unwrap();
+        (sync.conflicts.is_empty() && !sync.created.is_empty()).then_some(())
+    });
+    assert!(super::tasks::rebase_head(place, &task.worktree).is_none());
+    assert_eq!(restarted.task(&task.id).unwrap().restack_from, None);
+}
+
+#[test]
+fn a_commit_step_carried_by_tintos_restacks_lets_the_push_go_and_record_takes_what_it_lost() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let main_moves = |name: &str| {
+        let repo = h.repo.path();
+        std::fs::write(repo.join(name), format!("{name}\n")).unwrap();
+        git(repo, &["add", "--all"]);
+        git(repo, &["commit", "-q", "-m", name]);
+        git(repo, &["push", "-q", "origin", "main"]);
+    };
+    let restack = |task: &DeliveryTask| {
+        let from = in_worktree(task, &["rev-parse", "HEAD~1"]);
+        h.service.set_restack_from(&task.id, &from).unwrap();
+        let asked = h
+            .service
+            .request_approval(step(task, DeliveryRung::Sync, "Restack"))
+            .unwrap();
+        let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+        assert_eq!(
+            done.status,
+            DeliveryApprovalStatus::Executed,
+            "{:?}",
+            done.outcome
+        );
+        assert!(done.conflicts.is_empty(), "{:?}", done.outcome);
+        done
+    };
+    let commit = |task: &DeliveryTask, title: &str| {
+        let asked = h
+            .service
+            .request_approval(step(task, DeliveryRung::Commit, title))
+            .unwrap();
+        h.service.decide_approval(&asked.id, true, None).unwrap()
+    };
+    let push = |task: &DeliveryTask| {
+        h.service
+            .request_approval(step(task, DeliveryRung::Push, "Publish"))
+    };
+
+    // Two restacks in a row carry the commit step to the last one's commits.
+    let task = h.task("RT-1");
+    write_files(&task, &["a.txt"]);
+    let committed = commit(&task, "Add a");
+    main_moves("main1.txt");
+    restack(&task);
+    main_moves("main2.txt");
+    let last = restack(&task);
+    assert!(push(&task).is_ok());
+    let committed = h.service.approval(&committed.id).unwrap();
+    assert_eq!(committed.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(committed.created, last.created);
+
+    // Amended by hand before the restack: the push misses the commit step's
+    // work, and record takes the restacked commit.
+    let other = h.task("RT-2");
+    write_files(&other, &["b.txt"]);
+    commit(&other, "Add b");
+    write_files(&other, &["c.txt"]);
+    git(&other.worktree, &["add", "--all"]);
+    git(
+        &other.worktree,
+        &["commit", "-q", "--amend", "-m", "Add b and c"],
+    );
+    main_moves("main3.txt");
+    restack(&other);
+    assert_eq!(push(&other).unwrap_err().category, "commit_missing");
+    let mut record = step(&other, DeliveryRung::Commit, "");
+    record.record = true;
+    let asked = h.service.request_approval(record);
+    assert!(asked.is_ok(), "{:?}", asked.err());
+    let recorded = h
+        .service
+        .decide_approval(&asked.unwrap().id, true, None)
+        .unwrap();
+    assert_eq!(
+        recorded.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        recorded.outcome
+    );
+    assert!(push(&other).is_ok());
+}
+
+/// A step put straight in the store, `at` ordering it among the others.
+fn stored_step(
+    h: &Harness,
+    task: &DeliveryTask,
+    rung: &str,
+    stage: Option<&str>,
+    status: &str,
+    at: u64,
+) {
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": format!("{}-{rung}-{at}", task.id), "task_id": task.id, "rung": rung,
+        "stage": stage, "title": rung, "body": "", "status": status, "requested_by": "user",
+        "requested_at_ms": at, "decided_at_ms": at, "executed_at_ms": at, "outcome": "hecho"
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&step).unwrap();
+}
+
+#[test]
+fn a_merged_package_with_a_later_local_commit_is_delivered_and_takes_no_commit_sync_or_push() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let task = package(&h, "MP-1", 1, None).unwrap();
+    write_files(&task, &["a.txt"]);
+    commit_and_push(&h, &task, "Add a");
+    for (rung, stage, status, at) in [
+        ("pr", None, "executed", 10),
+        ("jira", Some("after_pr"), "executed", 11),
+        ("merge", None, "executed", 12),
+        ("push", None, "failed", 13),
+        ("sync", None, "executed", 14),
+    ] {
+        stored_step(&h, &task, rung, stage, status, at);
+    }
+    // A sync run after the merge left a commit on the branch.
+    write_files(&task, &["synced.txt"]);
+    commit_outside(&task, "sync after merge");
+
+    let overview = h.service.overview().unwrap();
+    assert_eq!(
+        overview.phases[&task.id].phase,
+        super::phase::Phase::Delivered
+    );
+    for rung in [DeliveryRung::Commit, DeliveryRung::Sync, DeliveryRung::Push] {
+        let error = h
+            .service
+            .request_approval(step(&task, rung, "x"))
+            .unwrap_err();
+        assert_eq!(error.category, "pr_merged", "{rung:?}: {error}");
+    }
+}
+
+#[test]
+fn a_pr_merged_outside_tinto_is_delivered_by_its_jira_step_after_the_merge() {
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let task = h.task("MO-1");
+    write_files(&task, &["a.txt"]);
+    commit_and_push(&h, &task, "Add a");
+    stored_step(&h, &task, "pr", None, "executed", 10);
+    let mut pr = super::prs::DeliveryPr::linked(
+        &task.id,
+        &super::prs::parse_pr_url("https://github.com/o/r/pull/7").unwrap(),
+    );
+    pr.state = super::prs::DeliveryPrState::Merged;
+    pr.head = Some(in_worktree(&task, &["rev-parse", "HEAD"]));
+    h.service.store().unwrap().put_pr(&pr).unwrap();
+    let phase = || h.service.overview().unwrap().phases[&task.id].phase.clone();
+    assert_eq!(
+        phase(),
+        super::phase::Phase::NextStep {
+            rung: DeliveryRung::Jira,
+            stage: Some(super::model::DeliveryJiraStage::AfterPr),
+        }
+    );
+
+    stored_step(&h, &task, "jira", Some("after_merge"), "executed", 11);
+    assert_eq!(phase(), super::phase::Phase::Delivered);
+    h.service.archive_task(&task.id).unwrap();
 }
