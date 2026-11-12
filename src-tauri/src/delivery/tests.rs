@@ -13728,7 +13728,7 @@ fn past_the_brainstorm_a_failing_checks_round_gets_its_fix_stage_from_tinto() {
     settings.stages.insert(
         "implementation".into(),
         DeliveryStageAgent {
-            agent: DeliveryAgent::Codex,
+            agent: DeliveryAgent::Claude,
             model: None,
             reasoning: None,
             timeout_minutes: None,
@@ -13741,7 +13741,7 @@ fn past_the_brainstorm_a_failing_checks_round_gets_its_fix_stage_from_tinto() {
         .set_repo_settings(h.repo.path(), &settings)
         .unwrap();
     h.service.end_brainstorm(&coordinator.run_id).unwrap();
-    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    let mut implementation = put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
     let at = super::now_ms();
     let check: DeliveryJob = serde_json::from_value(json!({
         "id": "c1", "task_id": task.id, "role": "checks", "attempt": 1, "agent": "shell",
@@ -13759,19 +13759,32 @@ fn past_the_brainstorm_a_failing_checks_round_gets_its_fix_stage_from_tinto() {
         round_now(&h, &task).unwrap().round.kind,
         DeliveryRoundKind::Checks
     );
+    let fixes = || -> Vec<DeliveryJob> {
+        h.service
+            .store()
+            .unwrap()
+            .task_jobs(&task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|job| job.role == "implementation" && job.id != "i1")
+            .collect()
+    };
 
+    // With no model fixed anywhere, never the agent's default: the stage
+    // stays the coordinator's.
     h.service.advance_ladders().unwrap();
-    let fixes: Vec<DeliveryJob> = h
-        .service
-        .store()
-        .unwrap()
-        .task_jobs(&task.id)
-        .unwrap()
-        .into_iter()
-        .filter(|job| job.role == "implementation" && job.id != "i1")
-        .collect();
+    assert!(fixes().is_empty());
+    // The model the coordinator dispatched the stage with, under a stage
+    // setting that fixes none.
+    implementation.model = Some("opus".into());
+    implementation.reasoning = Some("high".into());
+    h.service.store().unwrap().put_job(&implementation).unwrap();
+    h.service.advance_ladders().unwrap();
+    let fixes = fixes();
     assert_eq!(fixes.len(), 1);
-    assert_eq!(fixes[0].agent, DeliveryAgent::Codex);
+    assert_eq!(fixes[0].agent, DeliveryAgent::Claude);
+    assert_eq!(fixes[0].model.as_deref(), Some("opus"));
+    assert_eq!(fixes[0].reasoning.as_deref(), Some("high"));
     assert!(
         fixes[0].prompt.contains("failing checks"),
         "{}",

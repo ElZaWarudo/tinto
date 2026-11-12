@@ -2611,13 +2611,17 @@ impl DeliveryService {
         // A stage the user configured runs as it is configured now, whatever
         // the attempt being repeated ran with: a model changed in Ajustes
         // applies to the next attempt.
-        let (mut agent, mut model, mut reasoning) = (job.agent, job.model, job.reasoning);
         let repo = self.task(&job.task_id)?.repo;
         let stage = self.store()?.repo_settings(&repo)?.stages.remove(&job.role);
-        let follows_stage = stage.is_some() || job.stage_default;
-        if let Some(stage) = stage {
-            (agent, model, reasoning) = (stage.agent, stage.model, stage.reasoning);
-        }
+        let (agent, model, reasoning, follows_stage) = match stage {
+            Some(stage) => on_stage(stage, Some(&job)),
+            None => (
+                job.agent,
+                job.model.clone(),
+                job.reasoning.clone(),
+                job.stage_default,
+            ),
+        };
         Ok(NewJob {
             task_id: job.task_id,
             role: job.role,
@@ -5138,6 +5142,28 @@ fn not_safe_to_repeat(job: &DeliveryJob) -> Option<String> {
 
 /// The start of the error of a job that ran out of time.
 const TIMED_OUT: &str = "Se agotó el tiempo máximo";
+
+/// The agent, model and reasoning a job Tinto starts by itself for a stage
+/// runs on (a retry, a round's fix): the stage the user fixed in Ajustes
+/// over the stage's last attempt. On the attempt's agent, what the stage
+/// leaves unset keeps the attempt's, such as the model the coordinator
+/// dispatched it with; an attempt that ran on the stage's settings, or on
+/// another agent, gives way to the stage as it is now. The last value says
+/// whether the model is the stage's (the job's `stage_default`).
+pub(super) fn on_stage(
+    stage: super::model::DeliveryStageAgent,
+    attempt: Option<&DeliveryJob>,
+) -> (DeliveryAgent, Option<String>, Option<String>, bool) {
+    match attempt {
+        Some(job) if job.agent == stage.agent && !job.stage_default => (
+            stage.agent,
+            stage.model.clone().or_else(|| job.model.clone()),
+            stage.reasoning.or_else(|| job.reasoning.clone()),
+            stage.model.is_some(),
+        ),
+        _ => (stage.agent, stage.model, stage.reasoning, true),
+    }
+}
 
 /// A stopped job's assignment again, to go on in its agent session.
 fn in_same_session(job: &DeliveryJob) -> NewJob {
