@@ -876,13 +876,25 @@ impl DeliveryApprovalStatus {
         matches!(self, Self::Executed | Self::Drifted)
     }
 
-    /// Where a step goes on `event`, or `None` when the event cannot happen
-    /// to a step in this status. Rejected and undone steps are final, and
-    /// failed ones but for undoing what they left: the step is asked again
-    /// as a new one.
-    pub fn on(self, event: StepEvent) -> Option<Self> {
+    /// Where a `rung` step goes on `event`, or `None` when the event cannot
+    /// happen to that rung or to a step in this status. Rejected and undone
+    /// steps are final, and failed ones but for undoing what they left: the
+    /// step is asked again as a new one.
+    pub fn on(self, rung: DeliveryRung, event: StepEvent) -> Option<Self> {
         use DeliveryApprovalStatus::*;
         use StepEvent::*;
+        // Only commits are taken back (a sync's with its paused restack),
+        // only a PR or its merge gets done on GitHub, and only the push and
+        // the PR are checked against what git and GitHub show.
+        let takes = match event {
+            Approve | Reject | Ran { .. } => true,
+            Undo => matches!(rung, DeliveryRung::Commit | DeliveryRung::Sync),
+            DoneOutside => matches!(rung, DeliveryRung::Pr | DeliveryRung::Merge),
+            Drift | Holds => matches!(rung, DeliveryRung::Push | DeliveryRung::Pr),
+        };
+        if !takes {
+            return None;
+        }
         match (self, event) {
             (Pending, Approve) => Some(Approved),
             (Pending, Reject) => Some(Rejected),
@@ -1081,10 +1093,10 @@ pub struct DeliveryProgress {
 }
 
 impl DeliveryApproval {
-    /// Moves the step on `event`, refusing an event its status does not
-    /// allow (see [`DeliveryApprovalStatus::on`]).
+    /// Moves the step on `event`, refusing an event its rung or status does
+    /// not allow (see [`DeliveryApprovalStatus::on`]).
     pub fn advance(&mut self, event: StepEvent) -> Result<(), super::DeliveryError> {
-        let next = self.status.on(event).ok_or_else(|| {
+        let next = self.status.on(self.rung, event).ok_or_else(|| {
             super::DeliveryError::new(
                 "step_transition",
                 format!(
@@ -2011,17 +2023,43 @@ mod tests {
 
     #[test]
     fn a_step_moves_only_through_its_lifecycle() {
-        // Approved, then run; a done step drifts and holds again.
-        assert_eq!(Pending.on(Approve), Some(Approved));
-        assert_eq!(Approved.on(Ran { ok: false }), Some(Failed));
-        assert_eq!(Executed.on(Drift).and_then(|s| s.on(Holds)), Some(Executed));
-        // Done on GitHub while waiting for the user.
-        assert_eq!(Pending.on(DoneOutside), Some(Executed));
+        use super::DeliveryRung::{self, *};
+        // Approved, then run; a done push drifts and holds again.
+        assert_eq!(Pending.on(Jira, Approve), Some(Approved));
+        assert_eq!(Approved.on(Jira, Ran { ok: false }), Some(Failed));
+        assert_eq!(
+            Executed.on(Push, Drift).and_then(|s| s.on(Push, Holds)),
+            Some(Executed)
+        );
+        // Merged on GitHub while waiting for the user.
+        assert_eq!(Pending.on(Merge, DoneOutside), Some(Executed));
         // Nothing runs or is reported before the user approves it.
-        assert_eq!(Pending.on(Ran { ok: true }), None);
+        assert_eq!(Pending.on(Jira, Ran { ok: true }), None);
         // A commit plan that failed halfway can be undone; a push cannot.
-        assert_eq!(Failed.on(Undo), Some(Undone));
-        assert_eq!(Pending.on(Undo), None);
+        assert_eq!(Failed.on(Commit, Undo), Some(Undone));
+        assert_eq!(Failed.on(Push, Undo), None);
+        assert_eq!(Pending.on(Commit, Undo), None);
+        // Each rung takes only the events that can happen to it.
+        let all = [Commit, Sync, Push, Pr, Merge, Jira, PrReply];
+        let takers: [(
+            super::StepEvent,
+            super::DeliveryApprovalStatus,
+            &[DeliveryRung],
+        ); 4] = [
+            (Undo, Executed, &[Commit, Sync]),
+            (DoneOutside, Pending, &[Pr, Merge]),
+            (Drift, Executed, &[Push, Pr]),
+            (Holds, Drifted, &[Push, Pr]),
+        ];
+        for (event, from, rungs) in takers {
+            for rung in all {
+                assert_eq!(
+                    from.on(rung, event).is_some(),
+                    rungs.contains(&rung),
+                    "{rung:?} {event:?}"
+                );
+            }
+        }
         // Rejected and undone steps are asked again as new ones.
         for event in [
             Approve,
@@ -2032,8 +2070,10 @@ mod tests {
             Holds,
             Undo,
         ] {
-            assert_eq!(Rejected.on(event), None, "{event:?}");
-            assert_eq!(Undone.on(event), None, "{event:?}");
+            for rung in all {
+                assert_eq!(Rejected.on(rung, event), None, "{rung:?} {event:?}");
+                assert_eq!(Undone.on(rung, event), None, "{rung:?} {event:?}");
+            }
         }
     }
 }
