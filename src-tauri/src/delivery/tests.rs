@@ -5081,6 +5081,8 @@ struct FakeGitHub {
     feed_calls: std::sync::atomic::AtomicUsize,
     mentioned: Vec<String>,
     merged: std::sync::Mutex<Vec<String>>,
+    /// What the next merges answer before one goes through, in order.
+    merge_errors: std::sync::Mutex<Vec<String>>,
     /// `<url> <logins>` of every review request.
     reviews: std::sync::Mutex<Vec<String>>,
     /// What `gh pr list --head <branch>` answers, for any branch.
@@ -5105,6 +5107,7 @@ impl FakeGitHub {
             feed_calls: std::sync::atomic::AtomicUsize::new(0),
             mentioned: Vec::new(),
             merged: std::sync::Mutex::new(Vec::new()),
+            merge_errors: std::sync::Mutex::new(Vec::new()),
             reviews: std::sync::Mutex::new(Vec::new()),
             branch_prs: std::sync::Mutex::new(branch_prs),
             actions: std::sync::Mutex::new(Vec::new()),
@@ -5157,6 +5160,11 @@ impl super::prs::GitHub for FakeGitHub {
         delete_branch: bool,
         _head: Option<&str>,
     ) -> Result<(), super::DeliveryError> {
+        let mut errors = self.merge_errors.lock().unwrap();
+        if !errors.is_empty() {
+            return Err(super::DeliveryError::new("gh_failed", errors.remove(0)));
+        }
+        drop(errors);
         self.merged.lock().unwrap().push(match delete_branch {
             true => format!("{url} {method} {subject}"),
             false => format!("{url} {method} {subject} (branch kept)"),
@@ -5350,6 +5358,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         feed_calls: std::sync::atomic::AtomicUsize::new(0),
         mentioned: vec!["o/r#5".into()],
         merged: std::sync::Mutex::new(Vec::new()),
+        merge_errors: std::sync::Mutex::new(Vec::new()),
         reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
         actions: std::sync::Mutex::new(Vec::new()),
@@ -5426,6 +5435,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         feed_calls: std::sync::atomic::AtomicUsize::new(0),
         mentioned: Vec::new(),
         merged: std::sync::Mutex::new(Vec::new()),
+        merge_errors: std::sync::Mutex::new(Vec::new()),
         reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
         actions: std::sync::Mutex::new(Vec::new()),
@@ -5526,6 +5536,12 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     h.service
         .set_step_text(&asked.id, Some("P-2: paginate (#5)".into()), None, None)
         .unwrap();
+    // Another PR merged into the base just before: GitHub refuses the first
+    // try and Tinto tries once more.
+    github.merge_errors.lock().unwrap().push(
+        "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)"
+            .into(),
+    );
     // Approving returns at once; the merge runs apart and says what it does.
     let approved = h.service.decide_approval(&asked.id, true, None).unwrap();
     assert_eq!(approved.status, DeliveryApprovalStatus::Approved);
@@ -5828,6 +5844,25 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         h.service.approval(&again.id).unwrap().status,
         DeliveryApprovalStatus::Executed
     );
+
+    // With its PR open the branch gone is still a drift; once GitHub says
+    // the PR merged (it deletes the branch), before Tinto read it so, not.
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "mergeable": "MERGEABLE", "statusCheckRollup": [], "reviews": [], "comments": []}),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/7").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    git(remote.path(), &["update-ref", "-d", &branch]);
+    let status = || h.service.approval(&again.id).unwrap().status;
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(status(), DeliveryApprovalStatus::Drifted);
+    github.snapshot.lock().unwrap()["state"] = json!("MERGED");
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().state, "open");
+    assert_eq!(status(), DeliveryApprovalStatus::Executed);
 }
 
 #[test]
@@ -11536,6 +11571,27 @@ fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
     // The base moved after the green run, without conflicts: it merges
     // without a sync and a new run first.
     assert!(refused(green).is_none());
+
+    // While it waits for the user, checks running again leave it asked;
+    // conflicts with the base take it back and tell the coordinator.
+    let merge = || {
+        h.service
+            .latest_approval(&task.id, DeliveryRung::Merge)
+            .unwrap()
+    };
+    github.snapshot.lock().unwrap()["statusCheckRollup"] = json!([check("ci", "IN_PROGRESS", "")]);
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(merge().unwrap().status, DeliveryApprovalStatus::Pending);
+    github.snapshot.lock().unwrap()["mergeable"] = json!("CONFLICTING");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert!(merge().is_none());
+    let withdrawn = h
+        .service
+        .store()
+        .unwrap()
+        .event_details("step_withdrawn")
+        .unwrap();
+    assert!(withdrawn[0].starts_with("merge: el PR #7 tiene conflictos con su base"));
 }
 
 #[test]
