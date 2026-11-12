@@ -4,6 +4,38 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.3.1] - 2026-11-12
+
+### Features
+
+- **delivery:** record when a task's phase changes
+- **delivery:** tell a coordinator when the batch's owner was last heard from
+- **delivery:** say in job_started why a job waited long, and record resumes
+- **delivery:** propose the Jira settings a failed Jira step needs
+- **delivery:** show the coordinator which open tasks change the same files
+- **delivery:** let the coordinator archive a delivered task
+- **delivery:** show what a task and its batch have cost
+
+### Fixes
+
+- **delivery:** do not drift a push whose branch GitHub deleted when its PR merged
+- **delivery:** retry a merge once when GitHub says its base branch was modified
+- **delivery:** withdraw a pending merge whose PR got conflicts or was closed
+- **delivery:** the review GitHub wraps a thread reply in answers no other reviewer
+- **delivery:** a reply in a review thread answers only the reviewer who opened it
+- **delivery:** start what was left queued when the machine resumes
+- **delivery:** say why a queued job was cancelled
+- **delivery:** keep the commit step through Tinto's own restack
+- **delivery:** treat services named in the check environment as environment probes
+- **delivery:** do not count time the computer slept against a job's timeout
+- **delivery:** let Claude jobs leave out empty result fields
+- **delivery:** do not report the console host as a leftover process
+- **delivery:** let a cancelled CI run yield to another run of the same check
+
+### Performance
+
+- **delivery:** start a task's quickest check first
+
 ## [1.3.0] - 2026-11-10
 
 ### Features
