@@ -77,6 +77,8 @@ import {
   getDeliveryOverview,
   getOpencodeModels,
   getDeliveryRepoSettings,
+  getDeliveryReviewRequests,
+  REVIEW_REQUESTS_EVERY_MS,
   onDeliveryChanged,
   openDeliveryJobInAgents,
   openDeliveryTaskInAgents,
@@ -97,6 +99,7 @@ import {
 import type {
   DeliveryApproval,
   DeliveryQaScreenshot,
+  DeliveryReviewRequest,
   DeliveryReplyImage,
   DeliveryFixCommit,
   DeliveryEnvironmentCheck,
@@ -145,7 +148,6 @@ import { PrSection } from "./DeliveryPr";
 import { GitHubLog, MergeChecks, MergeFailed, MergeRunning } from "./DeliveryMerge";
 import {
   STEPS,
-  TASK_STATE_LABEL,
   attemptOutcome,
   batchName,
   byCommand,
@@ -180,12 +182,14 @@ import {
   taskLabel,
   issueProgress,
   entryTasks,
+  issueRowId,
   packageState,
   splitIssueOf,
   taskListGroups,
   type TaskListEntry,
   stepName,
   stepOf,
+  taskAsks,
   type DeliveryCurrentRound,
   type DeliveryStep,
   nowLine,
@@ -199,7 +203,9 @@ import {
   qaProblemsToDecide as problemsToDecide,
   verdictsOf,
   trackSteps,
-  type StatusGroup,
+  type ListGroup,
+  listGroup,
+  searchTasks,
   type StatusIcon,
   type TaskStatus,
   type Tone,
@@ -228,7 +234,7 @@ type Dialog =
 interface ListView {
   lot: string | null;
   parent: string | null;
-  folded: StatusGroup[];
+  folded: ListGroup[];
   openIssues: string[];
 }
 
@@ -1042,6 +1048,23 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     needsParts.length > 1
       ? `${needsParts.slice(0, -1).join(", ")} y ${needsParts.at(-1)}`
       : needsParts.join("");
+  // The PRs that wait for the user's review, wherever they are: read on
+  // opening and every so often, and left out while GitHub cannot be read.
+  const [reviewRequests, setReviewRequests] = useState<DeliveryReviewRequest[]>([]);
+  useEffect(() => {
+    let live = true;
+    const read = () =>
+      getDeliveryReviewRequests().then(
+        (found) => live && setReviewRequests(found),
+        () => {},
+      );
+    void read();
+    const clock = setInterval(() => void read(), REVIEW_REQUESTS_EVERY_MS);
+    return () => {
+      live = false;
+      clearInterval(clock);
+    };
+  }, []);
   const needsTrigger = (
     <>
       <Icon name="flag" />
@@ -1124,6 +1147,37 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             <h1>Delivery</h1>
             {only && <span className="delivery-muted">{busStore.displayName(only)}</span>}
             <span className="delivery-panel__spacer" />
+            {reviewRequests.length > 0 && (
+              <Menu
+                listClassName="delivery-needs"
+                trigger={
+                  <>
+                    <Icon name="pull" />
+                    {reviewRequests.length} PR por revisar
+                  </>
+                }
+              >
+                {(close) =>
+                  reviewRequests.map((request) => (
+                    <button
+                      key={request.url}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        void openDeliveryUrl(request.url).catch(() => {});
+                      }}
+                    >
+                      <span className="delivery-needs__title">{request.title}</span>
+                      <small>
+                        {request.repo} #{request.number} · {request.author}
+                        {request.draft && " · borrador"}
+                      </small>
+                    </button>
+                  ))
+                }
+              </Menu>
+            )}
             {/* One thing waiting: straight to it; several: the list of them. */}
             {asks.length === 1 && (
               <button type="button" className="delivery-attention" onClick={asks[0].go}>
@@ -1154,24 +1208,27 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
                 }
               </Menu>
             )}
-            <span className="delivery-load">
-              Agentes
-              {capacity === UNLIMITED_CAPACITY ? (
-                <>{running.length} en marcha, sin límite</>
-              ) : (
-                <>
-                  <span className="delivery-meter" aria-hidden>
-                    {Array.from({ length: capacity }, (_, index) => (
-                      <i key={index} className={index < running.length ? "on" : undefined} />
-                    ))}
-                  </span>
-                  {running.length} de {capacity}
-                </>
-              )}
-              {queued.length > 0 && (
-                <span className="delivery-muted">· {queued.length} en cola</span>
-              )}
-            </span>
+            {/* Shown while it says something: an idle queue and a free QA do not. */}
+            {(running.length > 0 || queued.length > 0) && (
+              <span className="delivery-load">
+                Agentes
+                {capacity === UNLIMITED_CAPACITY ? (
+                  <>{running.length} en marcha, sin límite</>
+                ) : (
+                  <>
+                    <span className="delivery-meter" aria-hidden>
+                      {Array.from({ length: capacity }, (_, index) => (
+                        <i key={index} className={index < running.length ? "on" : undefined} />
+                      ))}
+                    </span>
+                    {running.length} de {capacity}
+                  </>
+                )}
+                {queued.length > 0 && (
+                  <span className="delivery-muted">· {queued.length} en cola</span>
+                )}
+              </span>
+            )}
             {qa?.state === "quarantined" ? (
               <button
                 type="button"
@@ -1185,28 +1242,30 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
                 )}
               </button>
             ) : (
-              (qaActive.length > 0 ? qaActive : qa ? [qa] : []).map((lease) => {
-                const holder = tasks.find((task) => task.id === lease.holder_task_id);
-                return (
-                  <span
-                    key={lease.name}
-                    className={`delivery-lease delivery-lease--${lease.state}`}
-                    title={
-                      lease.state === "active" && holder
-                        ? `En QA${qaPlace(lease.name)}: ${taskLabel(holder)} · ${holder.title}`
-                        : (lease.note ?? undefined)
-                    }
-                  >
-                    {lease.state === "active" && <Icon name="photo" />}
-                    {lease.state === "active"
-                      ? `En QA${qaPlace(lease.name)}: ${holder ? taskLabel(holder) : "ocupado"}`
-                      : "QA libre"}
-                    {lease.queue.length > 0 && (
-                      <span className="delivery-muted">· {lease.queue.length} esperando</span>
-                    )}
-                  </span>
-                );
-              })
+              (qaActive.length > 0 ? qaActive : qa && qa.queue.length > 0 ? [qa] : []).map(
+                (lease) => {
+                  const holder = tasks.find((task) => task.id === lease.holder_task_id);
+                  return (
+                    <span
+                      key={lease.name}
+                      className={`delivery-lease delivery-lease--${lease.state}`}
+                      title={
+                        lease.state === "active" && holder
+                          ? `En QA${qaPlace(lease.name)}: ${taskLabel(holder)} · ${holder.title}`
+                          : (lease.note ?? undefined)
+                      }
+                    >
+                      {lease.state === "active" && <Icon name="photo" />}
+                      {lease.state === "active"
+                        ? `En QA${qaPlace(lease.name)}: ${holder ? taskLabel(holder) : "ocupado"}`
+                        : "QA libre"}
+                      {lease.queue.length > 0 && (
+                        <span className="delivery-muted">· {lease.queue.length} esperando</span>
+                      )}
+                    </span>
+                  );
+                },
+              )
             )}
             <button type="button" onClick={() => setDialog({ kind: "archived" })}>
               Archivadas…
@@ -1223,7 +1282,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             </button>
             <button
               type="button"
-              className="delivery-button--primary"
+              className={asks.length === 0 ? "delivery-button--primary" : undefined}
               disabled={repos.length === 0}
               onClick={() => setDialog({ kind: "new-task" })}
             >
@@ -1611,6 +1670,8 @@ function EnvironmentStatus({ repo, distro }: { repo: string; distro: string | nu
               `${item.ok ? "Responde" : "Falla"} · ${item.name}${item.output ? `\n${item.output}` : ""}`,
           )
           .join("\n\n");
+  // With nothing to check there is nothing to say.
+  if (!checking && !failure && checks?.length === 0) return null;
   return (
     <button
       type="button"
@@ -1699,7 +1760,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   );
   const chooseParent = (next: string | null) => setListView((view) => ({ ...view, parent: next }));
   // What needs the user is never folded.
-  const isFolded = (group: StatusGroup) => group !== "attention" && listView.folded.includes(group);
+  const isFolded = (group: ListGroup) => group !== "attention" && listView.folded.includes(group);
   const needsYou = (task: DeliveryTask) => statuses.get(task.id)?.group === "attention";
   const issueFolded = (entry: Extract<TaskListEntry, { kind: "issue" }>) =>
     !listView.openIssues.includes(entry.id) && !entry.packages.some(needsYou);
@@ -1708,6 +1769,47 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     (group) => ({ ...group, tasks: entryTasks(group.entries) }),
   );
   const ordered = groups.flatMap((group) => (isFolded(group.group) ? [] : group.tasks));
+  // The search finds a task by its issue or its PR among all the repo's
+  // tasks, whatever the list is narrowed to or has folded.
+  const [query, setQuery] = useState("");
+  const found = searchTasks(tasks, overview?.prs ?? [], query);
+  // The row the list scrolls to once it shows it.
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const listRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!scrollTo) return;
+    const row = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? [])].find(
+      (candidate) => candidate.dataset.taskId === scrollTo,
+    );
+    const list = listRef.current;
+    if (!row || !list) return;
+    // Only the list scrolls, to leave the row in its middle.
+    const [at, within] = [row.getBoundingClientRect(), list.getBoundingClientRect()];
+    list.scrollTop += at.top - within.top - (list.clientHeight - at.height) / 2;
+    row.focus({ preventScroll: true });
+    setScrollTo(null);
+    // After the list shows it: the same change unfolds its group.
+  }, [scrollTo, listView]);
+  // Goes to a found task: the list stops hiding it (its batch or parent
+  // filter, its folded group, its folded issue) and scrolls to its row.
+  const goToFound = (task: DeliveryTask) => {
+    const group = taskListGroups(tasks, (one) => statuses.get(one.id)?.group ?? "idle").find(
+      (candidate) => entryTasks(candidate.entries).includes(task),
+    )?.group;
+    setListView((view) => ({
+      ...view,
+      lot: view.lot && view.lot !== task.run_id ? null : view.lot,
+      parent: view.parent && view.parent !== task.parent?.key ? null : view.parent,
+      folded: view.folded.filter((candidate) => candidate !== group),
+      openIssues:
+        task.package && !view.openIssues.includes(issueRowId(task))
+          ? [...view.openIssues, issueRowId(task)]
+          : view.openIssues,
+    }));
+    select(repo, task.id);
+    setQuery("");
+    setScrollTo(task.id);
+  };
   // A split issue's row shows its plan.
   const selectedIssue =
     groups
@@ -1753,7 +1855,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     if (selectedTask && delivered.includes(selectedTask)) select(repo, null);
     if (failed.length > 0) throw new Error(`No se archivaron ${failed.join("; ")}`);
   };
-  const toggleGroup = (group: StatusGroup) => {
+  const toggleGroup = (group: ListGroup) => {
     const folding = !listView.folded.includes(group);
     setListView((view) => ({
       ...view,
@@ -1761,7 +1863,11 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         ? [...view.folded, group]
         : view.folded.filter((candidate) => candidate !== group),
     }));
-    if (folding && selectedTask && statuses.get(selectedTask.id)?.group === group) {
+    if (
+      folding &&
+      selectedTask &&
+      listGroup(statuses.get(selectedTask.id)?.group ?? "idle") === group
+    ) {
       select(repo, null);
     }
   };
@@ -1836,6 +1942,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         key={task.id}
         type="button"
         className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}${qaHere === "active" ? " delivery-task-row--qa" : qaHere === "quarantined" ? " delivery-task-row--qa-quarantined" : ""}`}
+        data-task-id={task.id}
         aria-current={selectedTask?.id === task.id ? "true" : undefined}
         onClick={() => select(repo, task.id)}
         onContextMenu={(event) => {
@@ -2185,11 +2292,65 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         />
       ) : (
         <div className="delivery-panel__body">
-          <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">
+          <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery" ref={listRef}>
             {tasks.length === 0 && (
               <p className="delivery-panel__empty">
                 Crea una tarea para trabajar un issue en su propio worktree y rama.
               </p>
+            )}
+            {tasks.length > 0 && (
+              <div className="delivery-search">
+                <input
+                  type="search"
+                  aria-label="Buscar por issue o número de PR"
+                  placeholder="Buscar issue o #PR"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && found[0]) goToFound(found[0]);
+                    if (event.key === "Escape") setQuery("");
+                  }}
+                />
+                {query.trim() && (
+                  <ul className="delivery-search__results" aria-label="Resultados de la búsqueda">
+                    {found.length === 0 && (
+                      <li className="delivery-muted">Ninguna tarea coincide.</li>
+                    )}
+                    {found.map((task) => {
+                      const pr = (overview?.prs ?? []).find(
+                        (candidate) => candidate.task_id === task.id,
+                      );
+                      return (
+                        <li key={task.id}>
+                          <button type="button" onClick={() => goToFound(task)}>
+                            <span className="delivery-task-row__key">
+                              {taskLabel(task)}
+                              {task.package &&
+                                ` · paquete ${task.package.index}/${task.package.of}`}
+                              {pr && (
+                                <span className="delivery-task-row__pr">
+                                  PR #{pr.number} · {lower(prSummary(pr).label)}
+                                </span>
+                              )}
+                            </span>
+                            <span className="delivery-search__title">
+                              {task.package?.title || task.title || task.branch}
+                            </span>
+                            <StatusLine
+                              status={statuses.get(task.id)!}
+                              who={overview ? waitsOnLabel(overview, task.id) : null}
+                            />
+                            <span className="delivery-muted">
+                              <code>{task.branch}</code>
+                              {task.parent && ` · ↳ ${task.parent.key}`}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
             )}
             {activeRuns.length > 1 && (
               <label className="delivery-lot-filter">
@@ -2560,22 +2721,19 @@ function TaskDetail({
   // What «te necesita» goes to here, in the order the task's status names it:
   // the card that holds it, opened with its own control (`-open`) and focused.
   const askId = (what: string) => `delivery-ask-${task.id}-${what}`;
-  const pendingApproval = openApprovals.find(
-    (approval) => approval.status === "pending" && approval.rung !== "pr_reply",
-  );
-  const askTarget = blocked
-    ? "decisions"
-    : pendingApproval
-      ? pendingApproval.id
-      : replies.length > 0
-        ? "replies"
-        : qaProblemsToDecide > 0
-          ? "qa"
-          : settingsProposals.length > 0
-            ? "settings"
-            : broken
-              ? "broken"
-              : "now";
+  const asks = taskAsks({
+    decisions: pendingDecisions.length,
+    approvals: openApprovals.filter(
+      (approval) => approval.status === "pending" && approval.rung !== "pr_reply",
+    ),
+    replies: replies.length,
+    qaProblems: qaProblemsToDecide,
+    settingsProposals: settingsProposals.length,
+    broken: broken !== null,
+    pr,
+  });
+  // The one thing to do first: the only primary button among the task's cards.
+  const askTarget = asks[0]?.id ?? "now";
   const { asked, settleAsked } = useDelivery();
   const askedHere = asked?.kind === "task" && asked.taskId === task.id ? asked : null;
   useEffect(() => {
@@ -2592,7 +2750,6 @@ function TaskDetail({
   }, [askedHere]);
   // The coordinator's label stops at the stages; the delivery is Tinto's to know.
   const delivered = !!phaseOf(overview, task.id) && !ladderStep;
-  const stateLabel = delivered ? "Entregada" : (TASK_STATE_LABEL[task.state] ?? task.state);
   // The task's code as its latest stage found or left it.
   const withCode = newestFirst.find((job) => job.end_candidate ?? job.start_candidate);
   const candidate = (withCode?.end_candidate ?? withCode?.start_candidate)?.split(":")[1] ?? null;
@@ -2845,7 +3002,6 @@ function TaskDetail({
                 >
                   <Icon name={pr.state === "merged" ? "merge" : "pull"} />
                   PR #{pr.number}
-                  <span className="delivery-link-chip__state">· {lower(prSummary(pr).label)}</span>
                 </ExternalLink>
               )}
               {qaRecord?.visual_record && (
@@ -2892,9 +3048,6 @@ function TaskDetail({
                 {task.key}: {progress}
               </span>
             )}
-            <span title={delivered ? undefined : "Lo fija quien coordina la tarea"}>
-              Estado: {stateLabel}
-            </span>
             {cost && (
               <span title={cost.partial ? COST_PARTIAL : undefined}>Costo: {cost.label}</span>
             )}
@@ -3026,6 +3179,12 @@ function TaskDetail({
         </Menu>
       </header>
 
+      {asks.length > 1 && (
+        <p className="delivery-asks" role="status">
+          <strong>Te tocan {asks.length} cosas aquí</strong>, en este orden:{" "}
+          {asks.map((ask) => ask.label).join(", ")}.
+        </p>
+      )}
       {/* One line in the task; the cards open on top only when asked for. */}
       {blocked && (
         <div className="delivery-pending-bar" role="status" id={askId("decisions")} tabIndex={-1}>
@@ -3095,8 +3254,6 @@ function TaskDetail({
         </TaskFloat>
       )}
 
-      <PendingSettingsProposals id={askId("settings")} proposals={settingsProposals} />
-
       {openApprovals
         .filter((approval) => approval.rung !== "pr_reply")
         .map((approval) => (
@@ -3105,6 +3262,7 @@ function TaskDetail({
             id={askId(approval.id)}
             approval={approval}
             pr={pr}
+            primary={askTarget === approval.id}
             open={expanded === approval.id}
             onToggle={() => toggleStep(approval.id)}
           >
@@ -3131,7 +3289,7 @@ function TaskDetail({
           }
           button="Revisar"
           buttonLabel="Revisar las respuestas a los revisores"
-          primary
+          primary={askTarget === "replies"}
           open={expanded === "replies"}
           onToggle={() => toggleStep("replies")}
         >
@@ -3148,6 +3306,8 @@ function TaskDetail({
         </ul>
       )}
 
+      <PendingSettingsProposals id={askId("settings")} proposals={settingsProposals} />
+
       {rejected && openApprovals.length === 0 && (
         <RejectedStep task={task} approval={rejected} pr={pr} />
       )}
@@ -3157,6 +3317,7 @@ function TaskDetail({
           key={broken.id}
           id={askId("broken")}
           job={broken}
+          primary={askTarget === "broken"}
           undoable={latestUndoable?.id === broken.id}
           onContinue={() => onContinueJob(broken)}
           onUndo={() => undo(broken)}
@@ -3346,12 +3507,15 @@ const BROKEN_WHY_CHARS = 240;
 function BrokenStage({
   id,
   job,
+  primary,
   undoable,
   onContinue,
   onUndo,
 }: {
   id: string;
   job: DeliveryJob;
+  /** It is what the task asks for first. */
+  primary: boolean;
   undoable: boolean;
   onContinue: () => Promise<unknown>;
   onUndo: () => Promise<unknown>;
@@ -3434,7 +3598,7 @@ function BrokenStage({
         <ActionGroup>
           <div className="delivery-actions">
             <ActionButton
-              className="delivery-button--primary"
+              className={primary ? "delivery-button--primary" : undefined}
               onAction={() => retryDeliveryJob(job.id)}
             >
               Reintentar
@@ -4156,6 +4320,7 @@ function ApprovalBar({
   id,
   approval,
   pr,
+  primary,
   open,
   onToggle,
   children,
@@ -4163,6 +4328,8 @@ function ApprovalBar({
   id: string;
   approval: DeliveryApproval;
   pr: DeliveryPr | null | undefined;
+  /** It is what the task asks for first. */
+  primary: boolean;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
@@ -4171,6 +4338,15 @@ function ApprovalBar({
   const pending = approval.status === "pending";
   const commits = approval.commits ?? [];
   const running = approval.progress ? `Fusionando · ${lower(approval.progress.step)}` : null;
+  // A step with nothing to choose or to read first is approved from its line:
+  // the PR asks for reviewers, the merge shows its checks, and a text the user
+  // edited is approved where they edited it.
+  const direct =
+    pending &&
+    !open &&
+    ["commit", "sync", "push", "jira"].includes(approval.rung) &&
+    !approval.notice &&
+    !stepDrafts.has(approval.id);
   const summary =
     commits.length > 0
       ? `${commits.length === 1 ? "1 commit" : `${commits.length} commits`} · ${files(commits.reduce((sum, commit) => sum + commit.paths.length, 0))}`
@@ -4182,13 +4358,45 @@ function ApprovalBar({
       summary={summary}
       button={pending ? "Revisar" : "Ver"}
       buttonLabel={`${pending ? "Revisar" : "Ver"} ${name}`}
-      primary={pending}
+      primary={primary && !direct}
+      action={
+        direct && (
+          <ActionGroup>
+            <ActionButton
+              className={primary ? "delivery-button--primary" : undefined}
+              onAction={() => decideDeliveryApproval(approval.id, true)}
+            >
+              {approveLabel(approval, pr)}
+            </ActionButton>
+          </ActionGroup>
+        )
+      }
       open={open}
       onToggle={onToggle}
     >
       {children}
     </StepBar>
   );
+}
+
+/** What the button that approves a step says it does. */
+function approveLabel(approval: DeliveryApproval, pr: DeliveryPr | null | undefined): string {
+  switch (approval.rung) {
+    case "commit":
+      return "Aprobar y hacer commit";
+    case "sync":
+      return "Aprobar y sincronizar";
+    case "push":
+      return "Aprobar y publicar";
+    case "merge":
+      return "Aprobar y fusionar";
+    case "pr":
+      return pr?.state === "open"
+        ? `Aprobar y actualizar el PR #${pr.number}`
+        : "Aprobar y abrir el PR";
+    default:
+      return "Aprobar";
+  }
 }
 
 /** A step's line, which opens into its card below it; the chevron folds it. */
@@ -4199,6 +4407,7 @@ function StepBar({
   button,
   buttonLabel,
   primary,
+  action,
   open,
   onToggle,
   children,
@@ -4210,6 +4419,8 @@ function StepBar({
   button: string;
   buttonLabel: string;
   primary?: boolean;
+  /** What the step can do without opening, beside the button that opens it. */
+  action?: ReactNode;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
@@ -4221,17 +4432,20 @@ function StepBar({
           <strong>{title}</strong>
           {summary && <span className="delivery-muted"> · {summary}</span>}
         </span>
-        <button
-          type="button"
-          id={`${id}-open`}
-          className={primary && !open ? "delivery-button--primary" : undefined}
-          aria-label={buttonLabel}
-          aria-expanded={open}
-          onClick={onToggle}
-        >
-          {open ? "Ocultar" : button}
-          <Icon name="down" />
-        </button>
+        <span className="delivery-pending-bar__actions">
+          {action}
+          <button
+            type="button"
+            id={`${id}-open`}
+            className={primary && !open ? "delivery-button--primary" : undefined}
+            aria-label={buttonLabel}
+            aria-expanded={open}
+            onClick={onToggle}
+          >
+            {open ? "Ocultar" : button}
+            <Icon name="down" />
+          </button>
+        </span>
       </div>
       {open && children}
     </div>
@@ -4763,7 +4977,13 @@ function ApprovalBanner({
           where="en la descripción del PR"
         />
       )}
-      {pending && <p className="delivery-muted">{consequence}</p>}
+      {pending && (
+        <details className="delivery-step-consequence">
+          <summary>Qué pasa al aprobar o al rechazar</summary>
+          <p>{consequence}</p>
+          <p>{rejectionScope(approval, task, pr)}</p>
+        </details>
+      )}
       {pending ? (
         <ActionGroup>
           <div className="delivery-actions">
@@ -4795,19 +5015,7 @@ function ApprovalBanner({
                     : decideDeliveryApproval(approval.id, true)
               }
             >
-              {approval.rung === "commit"
-                ? "Aprobar y hacer commit"
-                : approval.rung === "sync"
-                  ? "Aprobar y sincronizar"
-                  : approval.rung === "push"
-                    ? "Aprobar y publicar"
-                    : approval.rung === "merge"
-                      ? "Aprobar y fusionar"
-                      : updatesPr
-                        ? `Aprobar y actualizar el PR #${updatesPr.number}`
-                        : approval.rung === "pr"
-                          ? "Aprobar y abrir el PR"
-                          : "Aprobar"}
+              {approveLabel(approval, pr)}
             </ActionButton>
             <ActionButton
               title={rejectionScope(approval, task, pr)}
@@ -4815,7 +5023,6 @@ function ApprovalBanner({
             >
               Rechazar
             </ActionButton>
-            <span className="delivery-muted">{rejectionScope(approval, task, pr)}</span>
           </div>
         </ActionGroup>
       ) : (

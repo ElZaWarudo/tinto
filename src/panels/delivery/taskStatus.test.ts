@@ -35,8 +35,10 @@ import {
   roundStage,
   scopeActivity,
   scopeOutcome,
+  searchTasks,
   stageLabel,
   stepsOf,
+  taskAsks,
   taskLabel,
   taskStatus,
   type TaskStatus,
@@ -411,6 +413,60 @@ describe("taskStatus words the phase Tinto derives", () => {
       phases: { t1: { kind: "next_stage", role: "qa", waits_on: "coordinator", next_stage: "qa" } },
     });
     expect(nextStageOf(idle, "t1")).toBe("qa");
+  });
+});
+
+describe("taskAsks", () => {
+  it("orders what a task waits on the user for, the first being its primary action", () => {
+    const nothing = {
+      decisions: 0,
+      approvals: [],
+      replies: 0,
+      qaProblems: 0,
+      settingsProposals: 0,
+      broken: false,
+      pr: null,
+    };
+    expect(taskAsks(nothing)).toEqual([]);
+    const asks = taskAsks({
+      decisions: 2,
+      approvals: [approval({ id: "a1", rung: "commit", status: "pending" })],
+      replies: 1,
+      qaProblems: 3,
+      settingsProposals: 1,
+      broken: true,
+      pr: null,
+    });
+    expect(asks.map((ask) => ask.id)).toEqual([
+      "decisions",
+      "a1",
+      "replies",
+      "qa",
+      "settings",
+      "broken",
+    ]);
+    expect(asks[0].label).toBe("2 decisiones");
+    expect(asks[1].label).toBe("aprobar commit");
+    // With nothing ahead of it, a broken stage is the first.
+    expect(taskAsks({ ...nothing, broken: true })[0].id).toBe("broken");
+  });
+});
+
+describe("searchTasks", () => {
+  it("finds a task by its issue key or title, or by its PR number", () => {
+    const tasks = [
+      { ...task, id: "t1", key: "AGOS-501", title: "Reject empty input" },
+      { ...task, id: "t2", key: "AGOS-412", title: "Paginate sessions" },
+    ];
+    const prs = [{ task_id: "t1", number: 412 }] as DeliveryPr[];
+    const ids = (query: string) => searchTasks(tasks, prs, query).map((one) => one.id);
+    expect(ids("agos-50")).toEqual(["t1"]);
+    expect(ids("paginate")).toEqual(["t2"]);
+    // A number finds the PR and the issue; with #, only the PR.
+    expect(ids("412")).toEqual(["t1", "t2"]);
+    expect(ids("#41")).toEqual(["t1"]);
+    expect(ids("  ")).toEqual([]);
+    expect(searchTasks(tasks, prs, "agos", 1)).toHaveLength(1);
   });
 });
 
@@ -829,10 +885,8 @@ describe("an issue delivered in packages", () => {
           entry.kind === "task" ? entry.task.id : entryTasks([entry]).map((one) => one.id),
         ),
       ]),
-    ).toEqual([
-      ["running", [["p1", "p2"]]],
-      ["idle", ["t1"]],
-    ]);
+      // What does not wait on the user is one group, what runs first.
+    ).toEqual([["ongoing", [["p1", "p2"], "t1"]]]);
     expect(issueRowId(backend)).toBe("issue:agos-432");
   });
 

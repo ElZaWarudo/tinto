@@ -89,24 +89,55 @@ export function stepName(step: DeliveryStep, pr: DeliveryPr | null | undefined):
     : lower(step.label);
 }
 
+/** One thing a task waits on the user for. */
+export interface TaskAsk {
+  /** What «te necesita» goes to: the suffix of its card's id. */
+  id: string;
+  label: string;
+}
+
+/** What a task waits on the user for, in the order to attend it: the first
+ *  is the task's one primary action, the rest follow it. */
+export function taskAsks(pending: {
+  decisions: number;
+  /** The steps waiting for approval, replies to reviewers aside. */
+  approvals: DeliveryApproval[];
+  replies: number;
+  qaProblems: number;
+  settingsProposals: number;
+  broken: boolean;
+  pr: DeliveryPr | null | undefined;
+}): TaskAsk[] {
+  const count = (n: number, one: string, many: string) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
+  return [
+    pending.decisions > 0 && {
+      id: "decisions",
+      label: count(pending.decisions, "decisión", "decisiones"),
+    },
+    ...pending.approvals.map((approval) => ({
+      id: approval.id,
+      label: `aprobar ${stepName(stepOf(approval), pending.pr)}`,
+    })),
+    pending.replies > 0 && {
+      id: "replies",
+      label: count(pending.replies, "respuesta al revisor", "respuestas a los revisores"),
+    },
+    pending.qaProblems > 0 && {
+      id: "qa",
+      label: count(pending.qaProblems, "problema de la QA", "problemas de la QA"),
+    },
+    pending.settingsProposals > 0 && {
+      id: "settings",
+      label: count(pending.settingsProposals, "cambio de ajustes", "cambios de ajustes"),
+    },
+    pending.broken && { id: "broken", label: "una etapa rota" },
+  ].filter((ask): ask is TaskAsk => !!ask);
+}
+
 /** A key that tells the two Jira steps apart. */
 export function stepKey(step: DeliveryStep): string {
   return step.stage ? `${step.rung}-${step.stage}` : step.rung;
 }
-
-/** Task states the coordinator sets, in flow order. */
-export const TASK_STATE_LABEL: Record<string, string> = {
-  intake: "Entrada",
-  contract_ready: "Contrato listo",
-  tests: "Tests",
-  implementation: "Implementación",
-  review: "Revisión",
-  qa_ready: "Lista para QA",
-  qa_active: "En QA",
-  changes_requested: "Cambios pedidos",
-  review_ready: "Lista para revisión",
-  blocked: "Bloqueada",
-};
 
 /** `step`: a delivery step (commit, push, PR, merge, Jira) the user acts on,
  *  told apart from blockers (`attention`, `danger`). */
@@ -123,13 +154,22 @@ export interface TaskStatus {
   detail?: string;
 }
 
-export const GROUPS: { group: StatusGroup; label: string }[] = [
+/** The list's groups: whose turn a task is. What does not wait on the user
+ *  is one group, whatever it waits for; each row says that. */
+export type ListGroup = "attention" | "ongoing" | "delivered";
+
+export const GROUPS: { group: ListGroup; label: string }[] = [
   { group: "attention", label: "Te necesitan" },
-  { group: "running", label: "En marcha" },
-  { group: "waiting", label: "En espera" },
-  { group: "idle", label: "Sin actividad" },
+  { group: "ongoing", label: "En curso" },
   { group: "delivered", label: "Entregadas" },
 ];
+
+/** A status's order in the list: within "En curso", what runs comes first. */
+const STATUS_ORDER: StatusGroup[] = ["attention", "running", "waiting", "idle", "delivered"];
+
+export function listGroup(group: StatusGroup): ListGroup {
+  return group === "attention" || group === "delivered" ? group : "ongoing";
+}
 
 export function stageLabel(role: string): string {
   if (role === "bootstrap" || role === "setup") return "Preparación";
@@ -455,26 +495,27 @@ export function issueRowId(task: DeliveryTask): string {
   return `issue:${task.key.toLowerCase()}`;
 }
 
-/** The task list by status group. A split issue is one entry, in the group
- *  of its package that needs the most (the first group among theirs). */
+/** The task list by group. A split issue is one entry, placed by its package
+ *  that needs the most (the first status among theirs). */
 export function taskListGroups(
   tasks: DeliveryTask[],
   groupOf: (task: DeliveryTask) => StatusGroup,
-): { group: StatusGroup; label: string; entries: TaskListEntry[] }[] {
-  const rank = (group: StatusGroup) => GROUPS.findIndex((candidate) => candidate.group === group);
+): { group: ListGroup; label: string; entries: TaskListEntry[] }[] {
+  const rank = (group: StatusGroup) => STATUS_ORDER.indexOf(group);
   const issues = new Map<string, DeliveryTask[]>();
   for (const task of tasks) {
     if (!task.package) continue;
     issues.set(issueRowId(task), [...(issues.get(issueRowId(task)) ?? []), task]);
   }
-  const entryGroup = (task: DeliveryTask) =>
+  const entryRank = (task: DeliveryTask) =>
     task.package
-      ? GROUPS[Math.min(...issues.get(issueRowId(task))!.map((one) => rank(groupOf(one))))].group
-      : groupOf(task);
+      ? Math.min(...issues.get(issueRowId(task))!.map((one) => rank(groupOf(one))))
+      : rank(groupOf(task));
+  const byRank = [...tasks].sort((a, b) => entryRank(a) - entryRank(b));
   return GROUPS.map((group) => {
     const entries: TaskListEntry[] = [];
-    for (const task of tasks) {
-      if (entryGroup(task) !== group.group) continue;
+    for (const task of byRank) {
+      if (listGroup(STATUS_ORDER[entryRank(task)]) !== group.group) continue;
       if (!task.package) {
         entries.push({ kind: "task", task });
         continue;
@@ -486,6 +527,29 @@ export function taskListGroups(
     }
     return { ...group, entries };
   }).filter((group) => group.entries.length > 0);
+}
+
+/** The tasks a search finds, by issue key or title, or by PR number (`#412`
+ *  or `412`, which also finds the issue whose key ends in it): the first
+ *  `limit`, in the order given. */
+export function searchTasks(
+  tasks: DeliveryTask[],
+  prs: DeliveryPr[],
+  query: string,
+  limit = 8,
+): DeliveryTask[] {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted) return [];
+  const number = /^#?\d+$/.test(wanted) ? wanted.replace("#", "") : null;
+  const prOf = (task: DeliveryTask) => prs.find((pr) => pr.task_id === task.id);
+  return tasks
+    .filter((task) => {
+      if (number && String(prOf(task)?.number ?? "").startsWith(number)) return true;
+      if (wanted.startsWith("#")) return false;
+      const title = task.package?.title || task.title;
+      return task.key.toLowerCase().includes(wanted) || title.toLowerCase().includes(wanted);
+    })
+    .slice(0, limit);
 }
 
 /** The tasks of the list's entries, packages in order. */

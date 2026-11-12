@@ -1136,6 +1136,43 @@ pub enum Feed {
 }
 
 /// GitHub as Tinto uses it. The app uses `gh`; tests use fakes.
+/// A PR someone asked the user to review.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReviewRequest {
+    /// `owner/name`.
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    /// When it last changed, as GitHub gives it (ISO 8601).
+    pub updated_at: String,
+    pub draft: bool,
+}
+
+/// The PRs of a `gh search prs --json`, the one that changed last first.
+pub fn review_requests(found: &Value) -> Vec<ReviewRequest> {
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
+    let mut requests: Vec<ReviewRequest> = found
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|pr| {
+            Some(ReviewRequest {
+                repo: text(&pr["repository"]["nameWithOwner"]),
+                number: pr["number"].as_u64()?,
+                title: text(&pr["title"]),
+                url: text(&pr["url"]),
+                author: text(&pr["author"]["login"]),
+                updated_at: text(&pr["updatedAt"]),
+                draft: pr["isDraft"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect();
+    requests.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    requests
+}
+
 pub trait GitHub: Send + Sync {
     fn pr(&self, url: &str) -> Result<Value, DeliveryError>;
     fn me(&self) -> Result<String, DeliveryError>;
@@ -1152,6 +1189,11 @@ pub trait GitHub: Send + Sync {
         Err(offline())
     }
     fn feed(&self, etag: Option<&str>) -> Result<Feed, DeliveryError>;
+    /// `gh search prs --json` of the open PRs, in any repo, that wait for
+    /// the user's review.
+    fn review_requests(&self) -> Result<Value, DeliveryError> {
+        Err(offline())
+    }
     /// Adds `label` to the PR.
     fn add_label(&self, _url: &str, _label: &str) -> Result<(), DeliveryError> {
         Err(offline())
@@ -2125,6 +2167,19 @@ impl GitHub for GhCli {
         .map(|_| ())
     }
 
+    fn review_requests(&self) -> Result<Value, DeliveryError> {
+        Self::json(&[
+            "search",
+            "prs",
+            "--review-requested=@me",
+            "--state=open",
+            "--limit",
+            "50",
+            "--json",
+            "number,title,url,repository,author,updatedAt,isDraft",
+        ])
+    }
+
     fn feed(&self, etag: Option<&str>) -> Result<Feed, DeliveryError> {
         let header = etag.map(|etag| format!("If-None-Match: {etag}"));
         let mut args = vec!["api", "-i", "notifications"];
@@ -3028,6 +3083,11 @@ impl DeliveryService {
             .ok_or_else(|| DeliveryError::new("pr_missing", "la tarea no tiene un PR de GitHub"))
     }
 
+    /// The open PRs, in any repo, that wait for the user's review.
+    pub fn review_requests(&self) -> Result<Vec<ReviewRequest>, DeliveryError> {
+        Ok(review_requests(&self.github().review_requests()?))
+    }
+
     /// Who can review the task's PR: the repo's assignable people, without
     /// the user, who cannot review their own PR.
     pub fn pr_reviewers(&self, task_id: &str) -> Result<Vec<String>, DeliveryError> {
@@ -3603,6 +3663,24 @@ fn pr_changed(before: &DeliveryPr, after: &DeliveryPr) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn review_requests_are_read_from_the_search_newest_first() {
+        let found = json!([
+            {"number": 7, "title": "Old", "url": "https://github.com/o/r/pull/7", "repository": {"nameWithOwner": "o/r"}, "author": {"login": "ana"}, "updatedAt": "2026-11-01T10:00:00Z", "isDraft": false},
+            {"number": 9, "title": "New", "url": "https://github.com/o/s/pull/9", "repository": {"nameWithOwner": "o/s"}, "author": {"login": "luis"}, "updatedAt": "2026-11-10T10:00:00Z", "isDraft": true},
+            {"title": "no number"}
+        ]);
+        let requests = review_requests(&found);
+        assert_eq!(
+            requests.iter().map(|pr| pr.number).collect::<Vec<_>>(),
+            [9, 7]
+        );
+        assert_eq!(requests[0].repo, "o/s");
+        assert_eq!(requests[0].author, "luis");
+        assert!(requests[0].draft);
+        assert!(review_requests(&json!({"message": "not a list"})).is_empty());
+    }
 
     #[test]
     fn a_merge_is_pinned_to_the_head_tinto_checked() {

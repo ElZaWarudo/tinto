@@ -238,6 +238,36 @@
   letter-spacing: normal;
   color: var(--accent-fg);
 }
+/* The search by issue or PR: its results open under it, each a preview of
+   the task it goes to. */
+.delivery-search {
+  margin: 8px 12px 4px;
+}
+.delivery-panel .delivery-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.delivery-search__results {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.delivery-panel .delivery-search__results button {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  border: 1px solid var(--border);
+}
+.delivery-search__title {
+  white-space: normal;
+}
 .delivery-lot-filter {
   display: grid;
   gap: 4px;
@@ -514,12 +544,6 @@
 .delivery-panel .delivery-link-chip--pr-neutral {
   --chip: var(--fg-muted);
 }
-.delivery-panel .delivery-link-chip__state {
-  color: var(--chip);
-}
-.delivery-panel .delivery-link-chip--pr-neutral .delivery-link-chip__state {
-  font-weight: 400;
-}
 .delivery-panel .delivery-link-chip[aria-expanded="true"] {
   color: var(--fg);
   background: var(--active);
@@ -684,6 +708,12 @@
   overflow-wrap: anywhere;
 }
 /* Pending decisions: one line in the task, the cards in a floating panel. */
+/* What the task asks of the user, in order, when it is more than one thing. */
+.delivery-asks {
+  margin: 0;
+  padding: 0 12px;
+  color: var(--fg-muted);
+}
 .delivery-pending-bar {
   display: flex;
   flex-wrap: wrap;
@@ -693,6 +723,22 @@
   padding: 6px 12px;
   border: 1px solid var(--warn);
   background: rgb(from var(--warn) r g b / 0.08);
+}
+.delivery-pending-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+/* What approving or rejecting a step does: there to read, folded. */
+.delivery-step-consequence {
+  color: var(--fg-muted);
+}
+.delivery-step-consequence > summary {
+  cursor: pointer;
+}
+.delivery-step-consequence > p {
+  margin: 4px 0 0;
 }
 /* An open step (commit, push, PR…): the same line, its text and buttons on top. */
 .delivery-pending-bar--step {

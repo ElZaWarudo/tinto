@@ -510,6 +510,54 @@ fn a_job_its_usage_limit_stopped_runs_again_later() {
 }
 
 #[test]
+fn a_job_its_usage_limit_stopped_runs_at_once_on_its_stages_alternative() {
+    use super::model::DeliveryStageFallback;
+    let h = harness();
+    let task = h.task("K-3D");
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.stages.insert(
+        "implementation".into(),
+        DeliveryStageAgent {
+            agent: DeliveryAgent::Codex,
+            model: None,
+            reasoning: None,
+            timeout_minutes: None,
+            fallback: Some(DeliveryStageFallback {
+                agent: DeliveryAgent::Claude,
+                model: None,
+                reasoning: None,
+            }),
+        },
+    );
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let job = h.dispatch(&task, "implementation", "events=codex-limit exit=1");
+    assert_eq!(h.wait(&job.id).status, DeliveryJobStatus::Failed);
+    let retry = eventually(|| {
+        h.service
+            .overview()
+            .unwrap()
+            .jobs
+            .into_iter()
+            .find(|other| other.retry_of.as_deref() == Some(job.id.as_str()))
+    });
+    assert_eq!(retry.agent, DeliveryAgent::Claude);
+    let stopped = h.service.job(&job.id).unwrap().error.unwrap();
+    assert!(
+        stopped.ends_with("Se reintentó con Claude Code, el alternativo de la etapa."),
+        "{stopped}"
+    );
+}
+
+#[test]
 fn a_restart_arms_again_the_usage_limit_retries_whose_stage_did_not_move_on() {
     let h = harness();
     let task = h.task("K-3C");

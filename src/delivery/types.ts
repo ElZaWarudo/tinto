@@ -457,6 +457,18 @@ export interface DeliveryApproval {
 }
 
 /** One gh call Tinto made, for the GitHub log (src-tauri/src/delivery/prs.rs). */
+/** A PR someone asked the user to review, in any repo. */
+export interface DeliveryReviewRequest {
+  /** `owner/name`. */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  updated_at: string;
+  draft: boolean;
+}
+
 export interface DeliveryGhCall {
   at_ms: number;
   command: string;

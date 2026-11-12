@@ -11,6 +11,7 @@ import type {
   DeliveryDecision,
   DeliveryQaProblem,
   DeliveryQaScreenshot,
+  DeliveryReviewRequest,
   DeliveryRepoSettings,
   DeliveryJob,
   DeliveryOverview,
@@ -25,6 +26,8 @@ import { UNLIMITED_CAPACITY } from "../../delivery/types";
 
 const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
+  getDeliveryReviewRequests: vi.fn((): Promise<DeliveryReviewRequest[]> => Promise.resolve([])),
+  REVIEW_REQUESTS_EVERY_MS: 600_000,
   getDeliveryTaskChanges: vi.fn(),
   getDeliveryIssueUrl: vi.fn((): Promise<string | null> => Promise.resolve(null)),
   getDeliveryIssue: vi.fn(),
@@ -284,6 +287,74 @@ beforeEach(() => {
 });
 
 describe("DeliveryPanel", () => {
+  it("finds a task by its issue or PR and goes to its row, unfolding its group", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task(), task({ id: "t2", key: "AGOS-498", title: "Drop the legacy table" })],
+        phases: { t1: NEXT_IMPLEMENTATION, t2: phase({ kind: "delivered" }, "nobody") },
+        prs: [
+          {
+            task_id: "t2",
+            url: "https://github.com/o/r/pull/476",
+            repo: "o/r",
+            number: 476,
+            state: "merged",
+            draft: false,
+            conflicts: false,
+            review_decision: null,
+            checks: { passing: 0, failing: 0, pending: 0 },
+            new_reviews: 0,
+            new_comments: 0,
+            new_authors: [],
+            latest_activity: null,
+            seen_until: null,
+            checked_at_ms: 1,
+            error: null,
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    await screen.findByRole("heading", { name: /AGOS-501/ });
+    // Delivered tasks start folded: its row is not in the list.
+    const list = screen.getByRole("navigation", { name: "Tareas de Delivery" });
+    expect(within(list).queryByText("Drop the legacy table")).toBeNull();
+    await user.type(screen.getByRole("searchbox", { name: /Buscar por issue/ }), "#476");
+    const results = screen.getByRole("list", { name: "Resultados de la búsqueda" });
+    const result = within(results).getByRole("button", { name: /AGOS-498/ });
+    expect(result).toHaveTextContent("PR #476");
+    expect(result).toHaveTextContent("Drop the legacy table");
+    await user.click(result);
+    expect(await screen.findByRole("heading", { name: /AGOS-498/ })).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Resultados de la búsqueda" })).toBeNull();
+    const row = within(list).getByText("Drop the legacy table").closest("button")!;
+    expect(row).toHaveAttribute("aria-current", "true");
+    await waitFor(() => expect(row).toHaveFocus());
+  });
+
+  it("lists the PRs that wait for the user's review and opens the one chosen", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryReviewRequests.mockResolvedValueOnce([
+      {
+        repo: "o/r",
+        number: 9,
+        title: "Rate-limit the export",
+        url: "https://github.com/o/r/pull/9",
+        author: "ana",
+        updated_at: "2026-11-10T10:00:00Z",
+        draft: true,
+      },
+    ]);
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "1 PR por revisar" }));
+    const item = screen.getByRole("menuitem", { name: /Rate-limit the export/ });
+    expect(item).toHaveTextContent("o/r #9 · ana · borrador");
+    await user.click(item);
+    expect(client.openDeliveryUrl).toHaveBeenCalledWith("https://github.com/o/r/pull/9");
+  });
+
   it("gives each repo its own tab with only its tasks", async () => {
     const user = userEvent.setup();
     const other = "C:\\work\\tinto";
@@ -523,6 +594,8 @@ describe("DeliveryPanel", () => {
       overview({
         settings: { capacity: UNLIMITED_CAPACITY, quota_stop_percent: 99 },
         capacity: UNLIMITED_CAPACITY,
+        // With nothing running or queued the header says nothing of agents.
+        jobs: [job({ status: "started", ended_at_ms: null, result: null })],
       }),
     );
     renderPanel();
@@ -1414,9 +1487,11 @@ describe("DeliveryPanel", () => {
     const title = within(group).getByRole("textbox", { name: "Título" });
     await user.clear(title);
     await user.type(title, "AGOS-501: Reject empty input");
-    // Hidden and opened again, the step keeps the edited text.
+    // Hidden and opened again, the step keeps the edited text, and its line
+    // no longer approves it without it.
     await user.click(screen.getByRole("button", { name: "Revisar commit" }));
     expect(screen.queryByRole("group", { name: "Aprobación commit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Aprobar y hacer commit" })).toBeNull();
     await openStep("Revisar commit", "commit");
     group = screen.getByRole("group", { name: "Aprobación commit" });
     expect(within(group).getByRole("textbox", { name: "Título" })).toHaveValue(
@@ -1455,6 +1530,32 @@ describe("DeliveryPanel", () => {
     left_out: ["scratch.log"],
     created: [],
     ...over,
+  });
+
+  it("approves a step from its line, except a PR, which asks for reviewers first", async () => {
+    const user = userEvent.setup();
+    const step = (rung: DeliveryApproval["rung"]): DeliveryApproval => ({
+      id: rung,
+      task_id: "t1",
+      rung,
+      title: "AGOS-501: Fix the thing",
+      body: "",
+      status: "pending",
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: null,
+      executed_at_ms: null,
+      outcome: null,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ approvals: [step("push"), step("pr")] }),
+    );
+    client.decideDeliveryApproval.mockResolvedValue({ ...step("push"), status: "executed" });
+    renderPanel();
+    await screen.findByRole("button", { name: /^Revisar pr$/i });
+    expect(screen.queryByRole("button", { name: "Aprobar y abrir el PR" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Aprobar y publicar" }));
+    await waitFor(() => expect(client.decideDeliveryApproval).toHaveBeenCalledWith("push", true));
   });
 
   it("shows the whole commit plan and who prepared it", async () => {
@@ -1751,8 +1852,53 @@ describe("DeliveryPanel", () => {
     expect(banner).toHaveTextContent("Implementación falló");
     expect(banner).toHaveTextContent("código 1");
     expect(screen.queryByRole("button", { name: "Lanzar implementación" })).toBeNull();
+    // Alone, retrying is the task's primary action.
+    expect(within(banner).getByRole("button", { name: "Reintentar" })).toHaveClass(
+      "delivery-button--primary",
+    );
     await user.click(within(banner).getByRole("button", { name: "Reintentar" }));
     await waitFor(() => expect(client.retryDeliveryJob).toHaveBeenCalledWith("j2"));
+  });
+
+  it("gives a task that asks for several things one primary action, the first", async () => {
+    const asked = {
+      id: "d1",
+      task_id: "t1",
+      kind: "choice",
+      question: "¿Qué carpetas puede reemplazar --force?",
+      detail: "",
+      references: [],
+      options: [],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    } as unknown as DeliveryDecision;
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        decisions: [asked],
+        jobs: [job(), job({ id: "j2", role: "implementation", attempt: 2, status: "failed" })],
+        phases: {
+          t1: { ...phase({ kind: "decisions", count: 1 }), verdicts: { j2: { broken: true } } },
+        },
+      }),
+    );
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Etapa fallida" });
+    expect(screen.getByText(/Te tocan 2 cosas aquí/).parentElement).toHaveTextContent(
+      "1 decisión, una etapa rota",
+    );
+    expect(screen.getByRole("button", { name: "Responder" })).toHaveClass(
+      "delivery-button--primary",
+    );
+    expect(within(banner).getByRole("button", { name: "Reintentar" })).not.toHaveClass(
+      "delivery-button--primary",
+    );
   });
 
   it("clamps a blocked stage's long summary and settles it with a note", async () => {
@@ -1853,7 +1999,6 @@ describe("DeliveryPanel", () => {
     renderPanel();
     await screen.findByRole("heading", { name: /AGOS-501/ });
     expect(screen.queryByRole("combobox", { name: /Estado/ })).toBeNull();
-    expect(screen.getByText("Estado: Tests")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Más acciones de la tarea" }));
     await user.click(screen.getByRole("menuitem", { name: "Eliminar tarea…" }));
     expect(confirmMock).toHaveBeenCalledWith(
@@ -3138,7 +3283,7 @@ describe("DeliveryPanel", () => {
     client.completeDeliveryApproval.mockResolvedValue({});
     renderPanel();
     const banner = await openStep("Ver PR", "pr");
-    expect(screen.getByText("Estado: Entrada")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Ahora" })).not.toHaveTextContent("Entregada");
     const done = within(banner).getByRole("button", { name: "Marcar como hecho" });
     const outcome = within(banner).getByRole("textbox", { name: "Resultado del paso" });
     // Without a URL Tinto looks for the branch's PR; with one it checks it.
@@ -3163,7 +3308,7 @@ describe("DeliveryPanel", () => {
     const ladder = await screen.findByRole("list", { name: "Entrega" });
     expect(within(ladder).getByText("Jira (PR)")).toBeInTheDocument();
     expect(within(ladder).getByText("Jira (merge)")).toBeInTheDocument();
-    expect(screen.getByText("Estado: Entrada")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Ahora" })).not.toHaveTextContent("Entregada");
   });
 
   it("shows a sync with the base in the ladder only once the task has one", async () => {
@@ -3673,12 +3818,14 @@ describe("DeliveryPanel", () => {
           done("a5", "merge"),
           done("a6", "jira", "after_merge"),
         ],
-        phases: nextUp(null),
+        phases: { t1: phase({ kind: "delivered" }, "nobody") },
       }),
     );
     renderPanel();
     // The coordinator never moved its label; the delivery still shows.
-    expect(await screen.findByText("Estado: Entregada")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("group", { name: "Ahora" })).toHaveTextContent("Entregada"),
+    );
   });
 
   it("warns of a PR step done without a linked PR and looks for the branch's PR", async () => {

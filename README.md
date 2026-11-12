@@ -9,23 +9,57 @@ strong and short, drunk throughout the day to stay alert. It's the morning
 ritual, the mid-afternoon pause, the offer you make to any visitor. Drinking
 one is a brief pact: *"I'll be awake a little longer."*
 
-**Tinto** (this app) inherits that pact. It's a desktop application that keeps
-you **awake to the changes in your projects**: it watches what your coding
-agents are doing, in real time, and shows it to you so you decide where to
-look — without opening a heavy editor, without losing the thread.
+**Tinto** (this app) inherits that pact. It's a desktop application for
+working with coding agents without babysitting them. It does two things:
 
-If your Claude Code, Codex, Muse Code, or OpenCode is silently modifying six files,
-Tinto tells you. If it left uncommitted work an hour ago, Tinto flags it.
-If an `.env` changed and nobody told you, Tinto highlights it.
+- **It delivers.** Give it a batch of issues and Claude Code, Codex, Muse
+  Code, or OpenCode take each one from a branch to a merged PR, in its own
+  worktree. You answer the questions that need you and approve what gets
+  published; Tinto follows CI and reviews and sends the fixes back.
+- **It watches.** While agents edit your repos, Tinto shows you what is
+  changing, live. If an agent is silently modifying six files, Tinto tells
+  you. If it left uncommitted work an hour ago, Tinto flags it. If an `.env`
+  changed and nobody told you, Tinto highlights it.
 
 Like the morning coffee: small, brief, useful. And it keeps you awake.
 
 ## What it does
 
-Tinto is a **non-invasive supervisor** for local git repositories. While
-coding agents (Claude Code, Codex, Muse Code, OpenCode, and similar) edit your code,
-Tinto watches, classifies, and shows — without silently mutating your work
-as part of the monitoring loop.
+### Delivery: from an issue to a merged PR
+
+A batch of issues, each in **its own worktree and branch**, taken through
+stages (scope, tests, implementation, review, QA) by headless Codex, Claude
+Code, Muse Code, or OpenCode jobs, from local repos or WSL.
+
+- **A coordinator agent** runs the batch over the `tinto-delivery` MCP
+  server. Tinto wakes it when something changes, and you can take the
+  batch over or hand it to another Agents conversation at any time.
+- **Decisions** wait for you in Tinto: choices, user-facing texts, and
+  permissions. Each one shows the code it is about, like a GitHub review
+  thread.
+- **QA's visual record**: a page with desktop and mobile screenshots of every
+  visual change. Its problems are listed in the task, where you apply the
+  suggested fix, write your own, dismiss one, or report one QA missed. Then
+  you send them to the coordinator, and the next QA checks exactly those.
+- **Approvals** for commit (with a commit plan), push, PR (with reviewers),
+  merge, and Jira, each showing the exact text Tinto will publish. Nothing
+  is committed, pushed, or posted until you approve that exact step, unless
+  you told Tinto to take that kind of step on its own.
+- **Feedback rounds**: Tinto follows the PR's checks, reviews, and comments,
+  and a failing check or a requested change sends the work back to the task.
+- **PRs waiting for your review**, in any repo: listed in Delivery's header,
+  with a notification when someone asks you for a new one.
+- **From your phone**: pair the mobile app to answer and approve through an
+  end-to-end encrypted relay, with no account.
+
+Delivery works only in worktrees it creates. The design is in
+[docs/plans/2026-10-07-001-feat-delivery-mode-plan.md](docs/plans/2026-10-07-001-feat-delivery-mode-plan.md).
+
+### Supervision: awake to what agents change
+
+Tinto is also a **non-invasive supervisor** for local git repositories. While
+coding agents edit your code, Tinto watches, classifies, and shows — without
+silently mutating your work as part of the monitoring loop.
 
 ### What Tinto never does to your repos (the monitoring layer)
 
@@ -48,9 +82,8 @@ the monitoring pipeline** and Tinto will never trigger them on its own:
   (recoverable), copy and move can be undone from the file dock clipboard.
 - **Agent session consoles** for launching and directing supported coding
   agents against a registered repo, with detachable windows when needed.
-- **Delivery** for taking issues from a branch to a merged PR with agents.
-  It works only in worktrees it creates, and it commits, pushes, opens or
-  merges a PR, or touches Jira only after you approve that exact step.
+- **Delivery** (above), which commits, pushes, opens or merges a PR, or
+  touches Jira only after you approve that exact step.
 
 Turning any of these off does not affect monitoring. They are conveniences
 for you, the human.
@@ -60,8 +93,8 @@ for you, the human.
 - **Passive.** Tinto does not approve or reject anything. It surfaces
   signals; you decide what to act on.
 - **Lightweight.** Designed to stay open all day. Low RAM and CPU.
-- **Local.** Only your local filesystem. No cloud, no remote agents
-  reporting in.
+- **Local.** Your repos and agents stay on your machine. No cloud agents,
+  no account, no telemetry.
 - **No interpretation.** Tinto does not summarize your changes with AI. It
   shows the facts: diffs, events, timestamps.
 
@@ -115,31 +148,6 @@ Muse Code) against a registered repo and keep their turns, commands,
 checkpoints, and changed files together. They support **detached windows** so
 you can direct a session on one monitor while watching repository activity or
 a diff on another.
-
-### Delivery
-
-A batch of issues, each in **its own worktree and branch**, taken through
-stages (implementation, tests, review, QA) by headless Codex, Claude Code, or
-Muse Code jobs, from local repos or WSL.
-
-- **A coordinator agent** runs the batch over the `tinto-delivery` MCP
-  server. Tinto wakes it when something changes, and you can take the
-  batch over or hand it to another Agents conversation at any time.
-- **Decisions** wait for you in Tinto: choices, user-facing texts, and
-  permissions. Each one shows the code it is about, like a GitHub review
-  thread.
-- **QA's visual record**: a page with desktop and mobile screenshots of every
-  visual change. Its problems are listed in the task, where you apply the
-  suggested fix, write your own, dismiss one, or report one QA missed. Then
-  you send them to the coordinator, and the next QA checks exactly those.
-- **Approvals** for commit (with a commit plan), push, PR (with reviewers),
-  merge, and Jira, each showing the exact text Tinto will publish. Tinto then
-  follows the PR's checks, reviews, and comments.
-- Every button shows its own progress and result, and only locks the card it
-  belongs to.
-
-The design is in
-[docs/plans/2026-10-07-001-feat-delivery-mode-plan.md](docs/plans/2026-10-07-001-feat-delivery-mode-plan.md).
 
 ### Project explorer
 

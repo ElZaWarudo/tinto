@@ -26,6 +26,7 @@ import type {
   DeliveryQuota,
   DeliveryEnvironmentCheck,
   DeliveryGhCall,
+  DeliveryReviewRequest,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryRung,
@@ -206,6 +207,11 @@ export const checkDeliveryEnvironment = (repo: string, distro: string | null) =>
 
 /** Tinto's latest gh calls, newest first. */
 export const getDeliveryGithubLog = () => invoke<DeliveryGhCall[]>("delivery_github_log");
+
+/** The open PRs that wait for the user's review; read every so often. */
+export const REVIEW_REQUESTS_EVERY_MS = 10 * 60_000;
+export const getDeliveryReviewRequests = () =>
+  invoke<DeliveryReviewRequest[]>("delivery_review_requests");
 
 /** "Comprobar Jira": the token owner's name, as Jira sees it. */
 export const checkDeliveryJira = (repo: string) => invoke<string>("delivery_check_jira", { repo });

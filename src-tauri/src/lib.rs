@@ -158,6 +158,7 @@ pub fn run() {
             delivery::commands::delivery_close_pr,
             delivery::commands::delivery_pr_to_draft,
             delivery::commands::delivery_pr_reviewers,
+            delivery::commands::delivery_review_requests,
             delivery::commands::delivery_approve_replies,
             delivery::commands::delivery_opencode_models,
             delivery::commands::delivery_change_pr_reviewers,

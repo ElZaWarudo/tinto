@@ -5,7 +5,13 @@
 
 import { useEffect, useRef } from "react";
 import { busStore } from "../../bus/store";
-import { getDeliveryGuide, getDeliveryOverview, onDeliveryChanged } from "../../delivery/client";
+import {
+  getDeliveryGuide,
+  getDeliveryOverview,
+  getDeliveryReviewRequests,
+  onDeliveryChanged,
+  REVIEW_REQUESTS_EVERY_MS,
+} from "../../delivery/client";
 import type { DeliveryOverview, DeliveryRun } from "../../delivery/types";
 import { tauriNotificationAdapter, type NotificationAdapter } from "../../qol/notifications";
 import { useQualityState } from "../../qol/state";
@@ -154,6 +160,43 @@ export function DeliveryNotificationWatcher({
       clearInterval(clock);
       unlisten?.();
       if (pending) clearTimeout(pending);
+    };
+  }, [adapter, notificationsEnabled]);
+
+  // A PR someone asks the user to review, in any repo. The ones waiting when
+  // Tinto opens are not news: only those that come afterwards are announced.
+  const reviews = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!notificationsEnabled) return;
+    let active = true;
+    const check = () =>
+      getDeliveryReviewRequests().then(
+        (requests) => {
+          if (!active) return;
+          const known = reviews.current;
+          reviews.current = new Set(requests.map((request) => request.url));
+          for (const request of known ? requests : []) {
+            if (known!.has(request.url)) continue;
+            try {
+              void Promise.resolve(
+                adapter.send({
+                  key: request.url,
+                  title: `Tinto: ${request.repo} #${request.number}`,
+                  body: `${request.author} te pide revisar: ${request.title}`,
+                }),
+              ).catch(() => {});
+            } catch {
+              // The other notifications report an unavailable system.
+            }
+          }
+        },
+        () => {},
+      );
+    void check();
+    const clock = setInterval(() => void check(), REVIEW_REQUESTS_EVERY_MS);
+    return () => {
+      active = false;
+      clearInterval(clock);
     };
   }, [adapter, notificationsEnabled]);
 

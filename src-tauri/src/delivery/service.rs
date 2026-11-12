@@ -4441,6 +4441,34 @@ impl DeliveryService {
         if !usage_limit(error) {
             return Ok(());
         }
+        // The stage's alternative agent takes the job at once, when it can:
+        // only without one does the job wait for the limit to renew.
+        if let Some(fallback) = self.usage_fallback(&job)? {
+            let mut assignment = self.same_assignment(job.clone())?;
+            assignment.agent = fallback.agent;
+            assignment.model = fallback.model;
+            assignment.reasoning = fallback.reasoning;
+            assignment.stage_default = false;
+            if let Ok(retry) = self.dispatch_job(assignment, None, Some(&job.id)) {
+                let store = self.store()?;
+                store.record_event(
+                    now_ms(),
+                    "job_retried",
+                    Some(&retry.task_id),
+                    Some(&retry.id),
+                    &job.id,
+                )?;
+                let mut stopped = job.clone();
+                stopped.error = Some(format!(
+                    "{error} — Se reintentó con {}, el alternativo de la etapa.",
+                    agent_name(fallback.agent)
+                ));
+                store.put_job(&stopped)?;
+                drop(store);
+                self.notify();
+                return Ok(());
+            }
+        }
         let store = self.store()?;
         let mut stopped = job.clone();
         stopped.error = Some(format!(
@@ -4452,6 +4480,30 @@ impl DeliveryService {
         self.notify();
         self.arm_usage_retry(&job.id, USAGE_LIMIT_WAIT);
         Ok(())
+    }
+
+    /// The stage's alternative agent, when it can run a job its usage limit
+    /// stopped: another agent than the job's, installed, for a job that
+    /// starts its own session and that the alternative's sandbox can run.
+    fn usage_fallback(
+        &self,
+        job: &DeliveryJob,
+    ) -> Result<Option<super::model::DeliveryStageFallback>, DeliveryError> {
+        let repo = self.task(&job.task_id)?.repo;
+        let fallback = self
+            .store()?
+            .repo_settings(&repo)?
+            .stages
+            .remove(&job.role)
+            .and_then(|stage| stage.fallback);
+        Ok(fallback.filter(|fallback| {
+            fallback.agent != job.agent
+                && job.resumes.is_none()
+                && self.is_installed(fallback.agent)
+                && !(fallback.agent == DeliveryAgent::Codex
+                    && job.needs_environment
+                    && job.access == DeliveryAccess::Workspace)
+        }))
     }
 
     /// Retries a job its usage limit stopped once `wait` is over, unless

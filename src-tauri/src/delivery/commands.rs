@@ -830,6 +830,15 @@ pub async fn delivery_qa_screenshots(
     blocking(move || service.qa_screenshots(&task_id)).await
 }
 
+/// The open PRs that wait for the user's review, in any repo.
+#[tauri::command]
+pub async fn delivery_review_requests(
+    service: State<'_, DeliveryService>,
+) -> Result<Vec<super::prs::ReviewRequest>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.review_requests()).await
+}
+
 /// Who can review the task's PR: the repo's assignable people on GitHub.
 #[tauri::command]
 pub async fn delivery_pr_reviewers(

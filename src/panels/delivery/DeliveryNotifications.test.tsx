@@ -1,10 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, waitFor } from "@testing-library/react";
-import type { DeliveryDecision, DeliveryOverview, DeliveryTask } from "../../delivery/types";
+import type {
+  DeliveryDecision,
+  DeliveryOverview,
+  DeliveryReviewRequest,
+  DeliveryTask,
+} from "../../delivery/types";
 import { qualityStore } from "../../qol/state";
 
 const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
+  getDeliveryReviewRequests: vi.fn((): Promise<DeliveryReviewRequest[]> => Promise.resolve([])),
+  REVIEW_REQUESTS_EVERY_MS: 600_000,
   onDeliveryChanged: vi.fn(),
 }));
 vi.mock("../../delivery/client", () => client);
@@ -179,5 +186,38 @@ describe("Delivery notifications", () => {
     expect(adapter.send).toHaveBeenLastCalledWith(
       expect.objectContaining({ body: "2 decisiones pendientes" }),
     );
+  });
+  it("announces a PR someone asks the user to review after Tinto opened", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const request = (number: number): DeliveryReviewRequest => ({
+      repo: "o/r",
+      number,
+      title: `PR ${number}`,
+      url: `https://github.com/o/r/pull/${number}`,
+      author: "ana",
+      updated_at: "2026-11-10T10:00:00Z",
+      draft: false,
+    });
+    client.onDeliveryChanged.mockResolvedValue(() => {});
+    client.getDeliveryOverview.mockResolvedValue(overview([]));
+    client.getDeliveryReviewRequests.mockResolvedValue([request(7)]);
+    const adapter = { ensurePermission: vi.fn(), send: vi.fn() };
+    render(<DeliveryNotificationWatcher adapter={adapter} />);
+    act(() => qualityStore.setNotificationState({ enabled: true, status: "ready" }));
+    await waitFor(() => expect(client.getDeliveryReviewRequests).toHaveBeenCalledTimes(1));
+
+    // The one already waiting is not news; the one that comes later is.
+    client.getDeliveryReviewRequests.mockResolvedValue([request(7), request(9)]);
+    act(() => vi.advanceTimersByTime(600_000));
+    // waitFor polls on an interval: with the real one again.
+    vi.useRealTimers();
+    await waitFor(() =>
+      expect(adapter.send).toHaveBeenCalledWith({
+        key: "https://github.com/o/r/pull/9",
+        title: "Tinto: o/r #9",
+        body: "ana te pide revisar: PR 9",
+      }),
+    );
+    expect(adapter.send).toHaveBeenCalledTimes(1);
   });
 });
