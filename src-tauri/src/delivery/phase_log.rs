@@ -105,7 +105,12 @@ mod tests {
         let review = || PrWait::Review {
             reviewers: vec!["ana".into()],
         };
-        let steps: Vec<(Vec<(&str, Phase, Waiter)>, Vec<(&str, &str)>)> = vec![
+        // The phases an overview finds, and what it then records.
+        type Step = (
+            Vec<(&'static str, Phase, Waiter)>,
+            Vec<(&'static str, &'static str)>,
+        );
+        let steps: Vec<Step> = vec![
             // First sighting.
             (
                 vec![
