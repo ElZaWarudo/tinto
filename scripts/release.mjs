@@ -3,8 +3,8 @@
 // stable tag) sets the version in every manifest, adds its CHANGELOG.md section
 // (from the conventional commits since the last tag, unless a hand-written one is
 // already there), commits and tags v1.2.0. `--dry-run` prints that plan and
-// changes nothing. Pushing the tag makes the Release workflow build and publish
-// it; the Release cut workflow runs this and pushes for you.
+// changes nothing. Once the tag is pushed, the Release workflow builds and
+// publishes it when you start it; the Release cut workflow does all three.
 // `node scripts/release.mjs notes v1.2.0` prints that version's section, the
 // release's notes on GitHub.
 import { execFileSync } from "node:child_process";
@@ -161,7 +161,7 @@ function cut(version, dryRun) {
   git("commit", "-m", `chore(release): ${tag}`);
   git("tag", "-a", tag, "-m", `Tinto ${version}`);
   console.log(
-    `Tagged ${tag}. Review CHANGELOG.md, then publish it with:\n  git push origin HEAD ${tag}`,
+    `Tagged ${tag}. Review CHANGELOG.md, then publish it with:\n  git push origin HEAD ${tag}\n  gh workflow run release.yml --ref develop -f tag=${tag}`,
   );
 }
 

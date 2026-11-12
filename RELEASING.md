@@ -37,10 +37,10 @@ the signed update on its next start.
    this step fail; allow it or cut by hand (below).
 6. It then calls **Release**. A tag pushed with the workflow's own
    `GITHUB_TOKEN` triggers no other workflow, so Release is called as a
-   reusable workflow instead of waiting for the tag push. Release checks that
-   the tag matches the app's version, runs lint, the frontend tests and
-   clippy, builds into a draft, checks the update and publishes. Follow it in
-   the Actions tab. It builds with the Rust version pinned in `release.yml`
+   reusable workflow. Release checks that the tag matches the app's version
+   and builds into a draft while lint, the frontend tests and clippy run
+   beside it on Linux; once both pass it checks the update and publishes.
+   Follow it in the Actions tab. It builds with the Rust version pinned in `release.yml`
    (`dtolnay/rust-toolchain@…`); raise the pin when you update Rust.
 
 **Release cut** runs the workflow file of the branch you pick under *Use
@@ -50,8 +50,21 @@ the default branch.
 ### By hand
 
 `node scripts/release.mjs 1.3.0` (or `--kind minor`) does step 5 locally:
-it bumps, adds the section, commits and tags, without pushing. Check it, then
-`git push origin HEAD v1.3.0`: the tag push starts Release the same way.
+it bumps, adds the section, commits and tags, without pushing. Check it, push
+it and start Release for the tag:
+
+```bash
+git push origin HEAD v1.3.0
+```
+
+```bash
+gh workflow run release.yml --ref develop -f tag=v1.3.0
+```
+
+The tag push alone starts nothing. Release always runs on `develop` (`--ref`)
+and checks the tag out itself: GitHub keeps a run's Rust caches under the ref
+it ran on, and a run on a tag could never read an earlier tag's, so every
+release would compile from scratch.
 
 ## The update check
 

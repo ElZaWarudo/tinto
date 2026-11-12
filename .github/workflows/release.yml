@@ -1,15 +1,20 @@
 name: Release
 
-# A version tag builds the Windows installer into a draft GitHub Release,
+# Builds the Windows installer of a version tag into a draft GitHub Release,
 # checks its signed update the way installed Tinto will read it, and only then
-# publishes the release, which every installed Tinto picks up. It runs when a
-# tag is pushed by hand (scripts/release.mjs makes one) and when the Release
-# cut workflow calls it: a tag that workflow pushes with GITHUB_TOKEN triggers
-# no other workflow. See RELEASING.md.
+# publishes the release, which every installed Tinto picks up. It is started
+# for a tag already pushed, by hand (`gh workflow run release.yml --ref develop
+# -f tag=vX.Y.Z`) or by the Release cut workflow. It does not run on the tag
+# push itself: a run on a tag saves its Rust caches under that tag, where no
+# later release can read them, so every release would build from scratch. Run
+# on develop, each release restores the previous one's. See RELEASING.md.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The vX.Y.Z tag to build and publish
+        required: true
+        type: string
   workflow_call:
     inputs:
       tag:
@@ -21,12 +26,67 @@ permissions:
   contents: write
 
 env:
-  TAG: ${{ inputs.tag || github.ref_name }}
+  TAG: ${{ inputs.tag }}
 
-# Both jobs build with one pinned Rust: a newer stable can bring lints that
+# Every job builds with one pinned Rust: a newer stable can bring lints that
 # fail a release halfway. Check locally with the same one before tagging.
 
 jobs:
+  # Runs beside the builds, on Linux (faster than a Windows runner), and gates
+  # the publish, not the build: a failure leaves an unpublished draft.
+  checks:
+    name: Checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint and frontend tests
+        run: |
+          npm run lint
+          npm test
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
   wsl-agent:
     name: WSL agent
     runs-on: ubuntu-22.04
@@ -91,10 +151,14 @@ jobs:
           node-version: "24"
           cache: npm
 
+      - name: The tag matches the app's version
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          test "v$version" = "$TAG" || { echo "tag $TAG, app $version"; exit 1; }
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.99.1
-        with:
-          components: clippy
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -110,21 +174,6 @@ jobs:
         with:
           name: tinto-agent-linux-x86_64
           path: src-tauri/resources
-
-      - name: The tag matches the app's version
-        shell: bash
-        run: |
-          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          test "v$version" = "$TAG" || { echo "tag $TAG, app $version"; exit 1; }
-
-      - name: Lint and frontend tests
-        run: |
-          npm run lint
-          npm test
-
-      - name: Clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
 
       - name: Release notes
         id: notes
@@ -180,7 +229,9 @@ jobs:
   update-check:
     name: Check update and publish
     runs-on: ubuntu-latest
-    needs: windows
+    needs:
+      - checks
+      - windows
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
