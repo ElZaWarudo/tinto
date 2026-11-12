@@ -5844,6 +5844,25 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         h.service.approval(&again.id).unwrap().status,
         DeliveryApprovalStatus::Executed
     );
+
+    // With its PR open the branch gone is still a drift; once GitHub says
+    // the PR merged (it deletes the branch), before Tinto read it so, not.
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "mergeable": "MERGEABLE", "statusCheckRollup": [], "reviews": [], "comments": []}),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/7").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    git(remote.path(), &["update-ref", "-d", &branch]);
+    let status = || h.service.approval(&again.id).unwrap().status;
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(status(), DeliveryApprovalStatus::Drifted);
+    github.snapshot.lock().unwrap()["state"] = json!("MERGED");
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().state, "open");
+    assert_eq!(status(), DeliveryApprovalStatus::Executed);
 }
 
 #[test]

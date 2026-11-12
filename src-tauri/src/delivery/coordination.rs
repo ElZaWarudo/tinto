@@ -3527,6 +3527,18 @@ impl DeliveryService {
             .clone()
             .or_else(|| tasks::git(place, &task.repo, &["rev-parse", &tracking]).ok());
         let drift = match remote {
+            // Its PR merged since Tinto last read it, and GitHub deleted the
+            // branch: no drift; the watch records the merge on its next read.
+            None if self.task_pr(&task.id)?.is_some_and(|pr| {
+                pr.is_open()
+                    && self
+                        .github()
+                        .pr(&pr.url)
+                        .is_ok_and(|live| live["state"].as_str() == Some("MERGED"))
+            }) =>
+            {
+                None
+            }
             None => Some("La rama remota ya no existe".to_string()),
             Some(tip)
                 if published.as_ref().is_some_and(|published| {
