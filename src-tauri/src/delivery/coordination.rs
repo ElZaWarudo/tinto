@@ -3844,7 +3844,7 @@ impl DeliveryService {
         self.set_progress(&approval.id, MERGE_CHECKING)?;
         self.refresh_pr(&task.id, std::time::Duration::ZERO)?;
         self.merge_prerequisites(&task, Some(method))?;
-        let pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
+        let mut pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
             DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
         })?;
         // Merged without CI having run: the outcome says why it was not needed.
@@ -3856,14 +3856,30 @@ impl DeliveryService {
         let stacked = !self.stacked_prs(&task)?.is_empty();
         self.set_progress(&approval.id, "Fusionando en GitHub")?;
         // Pinned to the head just checked: a push since is not merged.
-        self.github_client().merge(
-            &pr.url,
-            method,
-            &approval.title,
-            &approval.body,
-            !stacked,
-            pr.head.as_deref(),
-        )?;
+        let merge = |pr: &super::prs::DeliveryPr| {
+            self.github_client().merge(
+                &pr.url,
+                method,
+                &approval.title,
+                &approval.body,
+                !stacked,
+                pr.head.as_deref(),
+            )
+        };
+        match merge(&pr) {
+            // Another PR merged into the base moments before: once more,
+            // with the PR as it is now.
+            Err(error) if error.message.contains("Base branch was modified") => {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                self.refresh_pr(&task.id, std::time::Duration::ZERO)?;
+                self.merge_prerequisites(&task, Some(method))?;
+                pr = self.task_pr(&task.id)?.ok_or_else(|| {
+                    DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
+                })?;
+                merge(&pr)?;
+            }
+            other => other?,
+        }
         let mut outcome = match stacked {
             false => format!(
                 "PR #{} fusionado ({method}) y rama {} borrada en GitHub",
