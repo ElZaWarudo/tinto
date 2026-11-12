@@ -101,6 +101,7 @@ import type {
   DeliveryFixCommit,
   DeliveryEnvironmentCheck,
   DeliveryJob,
+  DeliveryJobVerdict,
   DeliveryOverview,
   DeliveryPr,
   DeliveryQueueWait,
@@ -151,10 +152,7 @@ import {
   costOf,
   dollars,
   historyKey,
-  isBroken,
-  isDelivered,
   isOpen,
-  isSuperseded,
   jobsOf,
   lastHandoff,
   latestApproval,
@@ -163,8 +161,9 @@ import {
   scopeOutcome,
   lower,
   nextStageOf,
+  phaseOf,
   latestStep,
-  nextStep,
+  nextStepOf,
   openBlockers,
   parseStatuses,
   pausedJob,
@@ -198,6 +197,7 @@ import {
   stageLabel,
   taskStatus,
   qaProblemsToDecide as problemsToDecide,
+  verdictsOf,
   trackSteps,
   type StatusGroup,
   type StatusIcon,
@@ -2434,6 +2434,7 @@ function TaskDetail({
   onCloseContext: () => void;
 }) {
   const jobs = jobsOf(overview, task.id);
+  const verdicts = verdictsOf(overview, task.id);
   const cost = costOf(jobs);
   // The latest QA's visual changes page: what the user reviews before the PR.
   const qaRecord = latestOfRole(jobs, "qa");
@@ -2461,7 +2462,7 @@ function TaskDetail({
   const latest = newestFirst.find(
     (job) => job.agent !== "shell" && job.result_state !== "stale" && !job.undone_at_ms,
   );
-  const broken = latest && !hasOpenJob && isBroken(latest) ? latest : null;
+  const broken = latest && !hasOpenJob && verdicts[latest.id]?.broken ? latest : null;
   // A merge Tinto still runs stays in sight while it cleans up after itself.
   const openApprovals = approvals.filter(
     (approval) =>
@@ -2471,9 +2472,8 @@ function TaskDetail({
   const ladder = stepsOf(overview, task.id);
   const progress = issueProgress(overview, task);
   // A reply to a reviewer holds nothing: the next step can still be asked.
-  const step = openApprovals.every((approval) => approval.rung === "pr_reply")
-    ? nextStep(approvals, ladder)
-    : null;
+  const ladderStep = nextStepOf(overview, task.id);
+  const step = openApprovals.every((approval) => approval.rung === "pr_reply") ? ladderStep : null;
   const [requesting, setRequesting] = useState(false);
   // What opens on top of the task: its pending decisions, QA's problems, its
   // Jira issue or a blocker to add; next to the button that opened it.
@@ -2591,7 +2591,7 @@ function TaskDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askedHere]);
   // The coordinator's label stops at the stages; the delivery is Tinto's to know.
-  const delivered = isDelivered(approvals, ladder);
+  const delivered = !!phaseOf(overview, task.id) && !ladderStep;
   const stateLabel = delivered ? "Entregada" : (TASK_STATE_LABEL[task.state] ?? task.state);
   // The task's code as its latest stage found or left it.
   const withCode = newestFirst.find((job) => job.end_candidate ?? job.start_candidate);
@@ -3170,6 +3170,7 @@ function TaskDetail({
         decisions={taskDecisions}
         repo={task.repo}
         jobs={jobs}
+        verdicts={verdicts}
         approvals={approvals}
         steps={trackSteps(ladder, approvals)}
         pr={pr}
@@ -3311,11 +3312,13 @@ function TaskDetail({
                 current={current}
                 older={older}
                 jobs={jobs}
+                verdicts={verdicts}
                 renderJob={(job) => (
                   <JobRow
                     key={job.id}
                     job={job}
                     jobs={jobs}
+                    verdicts={verdicts}
                     wait={overview.queued?.[job.id]}
                     now={now}
                     expanded={expandedJobId === job.id}
@@ -3516,6 +3519,7 @@ function StageTrack({
   decisions,
   repo,
   jobs,
+  verdicts,
   approvals,
   steps,
   pr,
@@ -3529,6 +3533,7 @@ function StageTrack({
   /** The task's repo, whose settings say who runs each stage. */
   repo: string;
   jobs: DeliveryJob[];
+  verdicts: Record<string, DeliveryJobVerdict>;
   approvals: DeliveryApproval[];
   /** The delivery steps the task climbs. */
   steps: DeliveryStep[];
@@ -3546,14 +3551,14 @@ function StageTrack({
         <ol aria-labelledby="delivery-track-agents">
           {rolesOf(jobs).map((role) => {
             const job = latestOfRole(jobs, role);
-            const inRound = roundStage(role, job, jobs, round);
+            const inRound = roundStage(role, job, verdicts, round);
             const scope = role === SCOPE_ROLE ? scopeOutcome(task, job, jobs, decisions) : null;
             const outcome: { tone: Tone | "todo"; label: string; title?: string } = inRound
               ? { ...inRound, label: role === next ? "Siguiente" : inRound.label }
               : scope
                 ? scope
                 : job
-                  ? attemptOutcome(job, jobs)
+                  ? attemptOutcome(job, jobs, verdicts)
                   : { tone: "todo" as const, label: role === next ? "Siguiente" : "—" };
             const tone = outcome.tone;
             const content = (
@@ -4982,6 +4987,7 @@ function StageHistory({
   current,
   older,
   jobs,
+  verdicts,
   renderJob,
 }: {
   id: string;
@@ -4989,6 +4995,7 @@ function StageHistory({
   older: DeliveryJob[];
   /** Every job of the task, oldest first. */
   jobs: DeliveryJob[];
+  verdicts: Record<string, DeliveryJobVerdict>;
   renderJob: (job: DeliveryJob) => ReactNode;
 }) {
   const [showOlder, setShowOlder] = useState(false);
@@ -5003,7 +5010,7 @@ function StageHistory({
             <Icon name={showOlder ? "down" : "right"} />
             {older.length === 1 ? "1 intento anterior" : `${older.length} intentos anteriores`}
             <span className="delivery-muted">
-              · {older.map((job) => lower(attemptOutcome(job, jobs).label)).join(", ")}
+              · {older.map((job) => lower(attemptOutcome(job, jobs, verdicts).label)).join(", ")}
             </span>
           </button>
           {showOlder && <ul>{older.map(renderJob)}</ul>}
@@ -5016,6 +5023,7 @@ function StageHistory({
 function JobRow({
   job,
   jobs,
+  verdicts,
   wait,
   now,
   expanded,
@@ -5027,6 +5035,7 @@ function JobRow({
   job: DeliveryJob;
   /** Every job of the task, oldest first. */
   jobs: DeliveryJob[];
+  verdicts: Record<string, DeliveryJobVerdict>;
   /** Why it has not started, while it is queued. */
   wait?: DeliveryQueueWait;
   now: number;
@@ -5036,7 +5045,7 @@ function JobRow({
   onUndo: () => Promise<unknown>;
   onContinue: () => Promise<unknown>;
 }) {
-  const outcome = attemptOutcome(job, jobs);
+  const outcome = attemptOutcome(job, jobs, verdicts);
   const quiet = quietFor(job, now);
   const held = pausedJob(jobs)?.id === job.id;
   const scope =
@@ -5159,7 +5168,7 @@ function JobRow({
               Registro de QA tomado de {fileName(job.visual_record_source)}
             </p>
           )}
-          {isSuperseded(job, jobs) && (
+          {verdicts[job.id]?.superseded && (
             <p className="delivery-job__note">
               Una etapa anterior cambió el código después de este resultado, así que ya no cuenta:
               hay que repetir esta etapa.

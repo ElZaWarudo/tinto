@@ -926,7 +926,22 @@ export type DeliveryTaskPhase = DeliveryPhase & {
   round?: DeliveryRound & { at: string };
   /** What one of its queued jobs waits for looks stuck. */
   warning?: string | null;
+  /** The first step of its ladder not done; absent once delivered. */
+  next_step?: { rung: DeliveryRung; stage: string | null };
+  /** What Tinto's rules say of its jobs, by job id; a job none applies to is left out. */
+  verdicts?: Record<string, DeliveryJobVerdict>;
 };
+
+/** One job as Tinto's phase reads it; a flag left out is false. */
+export interface DeliveryJobVerdict {
+  /** Ended without a usable result, and not settled since. */
+  broken?: boolean;
+  passed?: boolean;
+  /** Findings a later stage answered. */
+  answered?: boolean;
+  /** A result later work on an earlier stage left behind. */
+  superseded?: boolean;
+}
 
 export interface DeliveryOverview {
   /** Where each task is, by task id: every surface reads this one answer. */

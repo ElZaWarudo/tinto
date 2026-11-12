@@ -16,6 +16,7 @@ import type {
   DeliveryOverview,
   DeliveryPhase,
   DeliveryRound,
+  DeliveryRung,
   DeliveryTask,
   DeliveryTaskPhase,
   DeliveryWaiter,
@@ -199,12 +200,21 @@ function phase(
   return { ...of, waits_on, next_stage };
 }
 
-/** Where the default task is: its tests passed, the implementation is due. */
-const NEXT_IMPLEMENTATION = phase(
-  { kind: "next_stage", role: "implementation" },
-  "coordinator",
-  "implementation",
-);
+/** Where the default task is: its tests passed, the implementation is due,
+ *  and no delivery step was done. */
+const NEXT_IMPLEMENTATION = {
+  ...phase({ kind: "next_stage", role: "implementation" }, "coordinator", "implementation"),
+  next_step: { rung: "commit", stage: null },
+} satisfies DeliveryTaskPhase;
+
+/** The default task's phases with this ladder step next, as Tinto says from
+ *  its approvals; `null` once every step is done. */
+function nextUp(
+  rung: DeliveryRung | null,
+  stage: string | null = null,
+): Record<string, DeliveryTaskPhase> {
+  return { t1: { ...NEXT_IMPLEMENTATION, next_step: rung ? { rung, stage } : undefined } };
+}
 
 function overview(over: Partial<DeliveryOverview> = {}): DeliveryOverview {
   return {
@@ -1727,6 +1737,7 @@ describe("DeliveryPanel", () => {
             changes: [],
           }),
         ],
+        phases: { t1: { ...NEXT_IMPLEMENTATION, verdicts: { j2: { broken: true } } } },
       }),
     );
     client.retryDeliveryJob.mockResolvedValue(job({ id: "j3" }));
@@ -1757,7 +1768,12 @@ describe("DeliveryPanel", () => {
         handoff: "",
       },
     });
-    client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [job(), blocked] }));
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [job(), blocked],
+        phases: { t1: { ...NEXT_IMPLEMENTATION, verdicts: { j2: { broken: true } } } },
+      }),
+    );
     client.resolveDeliveryJob.mockResolvedValue({
       ...blocked,
       resolved_at_ms: 5,
@@ -1811,6 +1827,7 @@ describe("DeliveryPanel", () => {
             resolved_note: "Otra sesión terminó el trabajo",
           }),
         ],
+        phases: { t1: { ...NEXT_IMPLEMENTATION, verdicts: { j2: { passed: true } } } },
       }),
     );
     renderPanel();
@@ -1860,6 +1877,7 @@ describe("DeliveryPanel", () => {
             outcome: "abc1234",
           },
         ],
+        phases: nextUp("push"),
       }),
     );
     client.requestDeliveryApproval.mockResolvedValue({});
@@ -3650,6 +3668,7 @@ describe("DeliveryPanel", () => {
           done("a5", "merge"),
           done("a6", "jira", "after_merge"),
         ],
+        phases: nextUp(null),
       }),
     );
     renderPanel();
@@ -3701,7 +3720,12 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
         jobs: [],
-        phases: { t1: phase({ kind: "drifted", rung: "push", stage: null }) },
+        phases: {
+          t1: {
+            ...phase({ kind: "drifted", rung: "push", stage: null }),
+            next_step: { rung: "push", stage: null },
+          },
+        },
         approvals: [
           step("commit"),
           step("push", { status: "drifted", notice: "La rama remota ya no existe" }),
@@ -3824,7 +3848,12 @@ describe("DeliveryPanel", () => {
           job({ id: `j${index}`, role }),
         ),
         approvals: [done("commit"), done("push"), done("pr"), done("jira")],
-        phases: { t1: phase({ kind: "pr", number: 279, wait: { kind: "ready" } }, "coordinator") },
+        phases: {
+          t1: {
+            ...phase({ kind: "pr", number: 279, wait: { kind: "ready" } }, "coordinator"),
+            next_step: { rung: "merge", stage: null },
+          },
+        },
         prs: [
           {
             task_id: "t1",
@@ -4105,6 +4134,7 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
         approvals: [done("commit"), done("push"), done("pr"), done("jira"), done("merge")],
+        phases: nextUp("jira", "after_merge"),
       }),
     );
     client.getDeliveryRepoSettings.mockResolvedValue({
@@ -4169,6 +4199,7 @@ describe("DeliveryPanel", () => {
           done("a5", "merge"),
           done("a6", "jira", "after_merge"),
         ],
+        phases: nextUp(null),
       }),
     );
     client.archiveDeliveryTask.mockResolvedValue(undefined);
@@ -4388,7 +4419,12 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
         prs: [pr],
-        phases: { t1: phase({ kind: "pr", number: pr.number, wait: { kind: "trouble" } }) },
+        phases: {
+          t1: {
+            ...phase({ kind: "pr", number: pr.number, wait: { kind: "trouble" } }),
+            next_step: { rung: "merge", stage: null },
+          },
+        },
         approvals: [executed("commit"), executed("push"), executed("pr"), executed("jira")],
       }),
     );
@@ -4533,6 +4569,7 @@ describe("DeliveryPanel", () => {
               "queue",
             ),
             round: { ...round, at: "implementation" },
+            verdicts: { t: { passed: true } },
           },
         },
       }),

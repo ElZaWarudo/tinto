@@ -17,18 +17,15 @@ import {
   batchName,
   costOf,
   historyKey,
-  isDelivered,
   entryTasks,
   issueProgress,
   issueRowId,
-  isSuperseded,
   packageState,
   taskListGroups,
   lastHandoff,
   mergeChecks,
   latestOfRole,
   nextStageOf,
-  nextStep,
   nowLine,
   prSummary,
   waitsOnLabel,
@@ -443,24 +440,26 @@ describe("a followed PR", () => {
   const upToJira = (["commit", "push", "pr", "jira"] as const).map((rung) =>
     approval({ id: rung, rung, status: "executed" }),
   );
-  // The PR as Tinto says it waits: `wait` and who acts come from the phase.
+  // The PR as Tinto says it waits: `wait`, who acts and the step left come
+  // from the phase.
+  const merge = { rung: "merge", stage: null } as const;
   const prWorld = (
     over: Partial<DeliveryPr>,
     wait: DeliveryPrWait,
     waits_on: DeliveryTaskPhase["waits_on"],
-    approvals = upToJira,
+    next_step: DeliveryTaskPhase["next_step"] = merge,
   ) =>
     overview({
       prs: [pr(over)],
-      approvals,
-      phases: { t1: { kind: "pr", number: 5, wait, waits_on, next_stage: null } },
+      approvals: upToJira,
+      phases: { t1: { kind: "pr", number: 5, wait, waits_on, next_stage: null, next_step } },
     });
   const withPr = (
     over: Partial<DeliveryPr>,
     wait: DeliveryPrWait = { kind: "trouble" },
     waits_on: DeliveryTaskPhase["waits_on"] = "user",
-    approvals = upToJira,
-  ) => taskStatus(task, prWorld(over, wait, waits_on, approvals), 76_000);
+    next_step: DeliveryTaskPhase["next_step"] = merge,
+  ) => taskStatus(task, prWorld(over, wait, waits_on, next_step), 76_000);
   const ci = { ci: "passing", head: "abc1234ef" } as const;
 
   it("brings the task back only when the PR waits on the user", () => {
@@ -601,36 +600,33 @@ describe("a followed PR", () => {
     expect(waitsOnPhrase("el coordinador", "Desbloqueada · espera al coordinador")).toBeNull();
     // Without the PR's Jira step, that one comes before the merge.
     expect(
-      withPr({ review_decision: "approved" }, ready, "coordinator", upToJira.slice(0, 3)).label,
+      withPr({ review_decision: "approved" }, ready, "coordinator", {
+        rung: "jira",
+        stage: "after_pr",
+      }).label,
     ).toBe("PR aprobado · siguiente: Jira (PR)");
     expect(prSummary(pr({ state: "closed" })).label).toBe("Cerrado sin fusionar");
-    expect(nextStep(upToJira)?.label).toBe("Merge");
   });
 });
 
 describe("results left behind by later work", () => {
-  const changed = [{ path: "src/app.ts", kind: "modified" }];
-
-  it("marks a result later work superseded, and answered findings", () => {
+  // Which results later work left behind is Tinto's (phase.rs); the view
+  // words its verdicts.
+  it("words a result Tinto says later work superseded, and answered findings", () => {
     const implementation = job({ role: "implementation" });
-    const jobs = [job({ changes: changed }), implementation, job({ attempt: 2, changes: changed })];
-    expect(attemptOutcome(implementation, jobs).label).toBe("Superado");
-    // The tests themselves stand, and so does a result nothing came after.
-    expect(attemptOutcome(jobs[2], jobs).label).toBe("Sin hallazgos");
-    expect(isSuperseded(jobs[0], jobs)).toBe(false);
-    const review = job({ role: "review" });
-    const undone = job({ role: "implementation", attempt: 2, changes: changed, undone_at_ms: 5 });
-    expect(isSuperseded(review, [job(), review, undone])).toBe(false);
+    const superseded = { [implementation.id]: { passed: true, superseded: true } };
+    expect(attemptOutcome(implementation, [], superseded).label).toBe("Superado");
+    expect(attemptOutcome(implementation).label).toBe("Sin hallazgos");
 
     const tests = job({ result: { ...job().result!, status: "findings", findings: ["a", "b"] } });
-    expect(attemptOutcome(tests, [tests, job({ role: "implementation" })])).toEqual({
+    expect(attemptOutcome(tests, [], { [tests.id]: { answered: true } })).toEqual({
       tone: "idle",
       label: "2 hallazgos · atendidos",
     });
-    expect(attemptOutcome(tests, [tests]).tone).toBe("attention");
+    expect(attemptOutcome(tests).tone).toBe("attention");
     // Accepted as they are (resolve_job with a note): settled, not a warning.
     const accepted = { ...tests, resolved_at_ms: 9, resolved_note: "no bloquean" };
-    expect(attemptOutcome(accepted, [accepted])).toEqual({
+    expect(attemptOutcome(accepted, [], { [accepted.id]: { passed: true } })).toEqual({
       tone: "ok",
       label: "2 hallazgos · aceptados",
     });
@@ -816,17 +812,6 @@ describe("an issue delivered in packages", () => {
   it("ends a middle package's ladder at its merge", () => {
     const steps = stepsOf(split, "p1");
     expect(steps.map((step) => step.label)).toEqual(["Commit", "Push", "PR", "Jira (PR)", "Merge"]);
-    const done = steps.map((step, at) =>
-      approval({
-        id: `s${at}`,
-        task_id: "p1",
-        rung: step.rung,
-        stage: step.stage,
-        status: "executed",
-      }),
-    );
-    expect(isDelivered(done, steps)).toBe(true);
-    expect(isDelivered(done)).toBe(false);
     // Without Tinto's steps, the whole ladder.
     expect(stepsOf(split, "p2")).toHaveLength(6);
   });
@@ -895,16 +880,19 @@ describe("a task in a round", () => {
     const tests = job({ role: "tests", created_at_ms: 1 });
     const review = job({ role: "review", created_at_ms: 2 });
     const fix = job({ role: "implementation", created_at_ms: 150 });
-    const jobs = [tests, review, fix];
-    expect(roundStage("tests", tests, jobs, round())).toEqual({
+    const verdicts = { [tests.id]: { passed: true }, [review.id]: { passed: true } };
+    expect(roundStage("tests", tests, verdicts, round())).toEqual({
       tone: "ok",
       label: "Vale de la ronda anterior",
     });
-    expect(roundStage("review", review, jobs, round())?.label).toBe("Se repite en esta ronda");
-    expect(roundStage("qa", undefined, jobs, round())?.label).toBe("Se repite en esta ronda");
+    // Tests that later work left behind do not stand.
+    const left = { [tests.id]: { passed: true, superseded: true } };
+    expect(roundStage("tests", tests, left, round())).toBeNull();
+    expect(roundStage("review", review, verdicts, round())?.label).toBe("Se repite en esta ronda");
+    expect(roundStage("qa", undefined, verdicts, round())?.label).toBe("Se repite en esta ronda");
     // This round's own attempt, and any outside a round, read as they went.
-    expect(roundStage("implementation", fix, jobs, round())).toBeNull();
-    expect(roundStage("review", review, jobs, null)).toBeNull();
+    expect(roundStage("implementation", fix, verdicts, round())).toBeNull();
+    expect(roundStage("review", review, verdicts, null)).toBeNull();
   });
 
   it("repeats the commit, and the push once published, until asked for in the round", () => {
