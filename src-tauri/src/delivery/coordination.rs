@@ -2335,7 +2335,18 @@ impl DeliveryService {
             };
             let autonomy = self.autonomy(task)?;
             if task.restack_from.is_some() {
-                if autonomy.sync && !failed(DeliveryRung::Sync) {
+                // A restack Tinto left paused, that drifted, failed or was
+                // abandoned is the user's or the coordinator's: Tinto never
+                // starts it again on its own.
+                let left = approvals
+                    .iter()
+                    .filter(|approval| approval.rung == DeliveryRung::Sync)
+                    .max_by_key(|approval| approval.requested_at_ms)
+                    .is_some_and(|sync| {
+                        sync.status != DeliveryApprovalStatus::Executed
+                            || (sync.restack && sync.created.is_empty())
+                    });
+                if autonomy.sync && !left {
                     self.auto_sync(task)?;
                 }
                 continue;
@@ -2531,7 +2542,7 @@ impl DeliveryService {
         // A restack is due while the branch still has the rewritten base's
         // commits; one done outside Tinto is not asked again.
         if let Some(from) = &task.restack_from {
-            if tasks::on_branch(place, &task.worktree, from) {
+            if self.restack_due(task, from, &commit)? {
                 return Ok((name, commit));
             }
             let mut done = task.clone();
@@ -2548,6 +2559,23 @@ impl DeliveryService {
             ));
         }
         Ok((name, commit))
+    }
+
+    /// Whether the branch still has to be restacked from `from` onto `onto`:
+    /// it has `from`, and, for a package, commits of the one it built on
+    /// that `onto` lacks.
+    fn restack_due(
+        &self,
+        task: &DeliveryTask,
+        from: &str,
+        onto: &str,
+    ) -> Result<bool, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        if !tasks::on_branch(place, &task.worktree, from) {
+            return Ok(false);
+        }
+        let heads = self.predecessor_heads(task)?;
+        Ok(heads.is_empty() || tasks::carries(place, &task.worktree, onto, &heads)?)
     }
 
     /// The coordinator corrects where a restack starts: `from` must be a
@@ -2695,7 +2723,12 @@ impl DeliveryService {
             .filter(|approval| approval.task_id == task.id)
             .collect();
         let refs: Vec<&DeliveryApproval> = approvals.iter().collect();
-        let Some(mut sync) = super::phase::open_merge(&refs, true).cloned() else {
+        // A restack is not a merge: its base is on HEAD from its first
+        // replayed commit on, paused or not (see `settle_restack`).
+        let Some(mut sync) = super::phase::open_merge(&refs, true)
+            .filter(|sync| !sync.restack)
+            .cloned()
+        else {
             return Ok(());
         };
         let place = Place::of(task.distro.as_deref());
@@ -2875,6 +2908,81 @@ impl DeliveryService {
         self.close_sync_rounds(&task.id, &sync, "restack abandonado")?;
         self.save_approval(&sync, "restack_aborted")?;
         Ok(sync)
+    }
+
+    /// A restack Tinto left paused whose rebase is gone (aborted, finished
+    /// or redone outside Tinto) is never started again by Tinto. When the
+    /// branch is restacked onto the base by then, the step stands on what
+    /// it has, as when Tinto finishes it; else it drifts, with a notice, and
+    /// waits for the user or the coordinator. A drifted one is taken as
+    /// done once the branch is restacked.
+    fn settle_restack(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
+        // A step running git in the worktree may be this restack's own.
+        let _git_work = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
+        };
+        let Some(mut sync) = self.latest_approval(&task.id, DeliveryRung::Sync)? else {
+            return Ok(());
+        };
+        let paused = sync.status == DeliveryApprovalStatus::Executed
+            && !sync.conflicts.is_empty()
+            && sync.created.is_empty();
+        let drifted = sync.status == DeliveryApprovalStatus::Drifted;
+        let place = Place::of(task.distro.as_deref());
+        if !sync.restack
+            || !(paused || drifted)
+            || tasks::rebase_head(place, &task.worktree).is_some()
+        {
+            return Ok(());
+        }
+        // A drifted one is looked at again only once the branch moved.
+        let head = tasks::head(place, &task.worktree)?;
+        if drifted && sync.head.as_deref() == Some(head.as_str()) {
+            return Ok(());
+        }
+        let task = self.task(&task.id)?;
+        let (name, tip) = tasks::base_tip(place, &task.worktree, &self.sync_base(&task)?, false)?;
+        let due = match &task.restack_from {
+            Some(from) => self.restack_due(&task, from, &tip)?,
+            None => false,
+        };
+        let onto = [sync.merge_head.clone(), Some(tip)]
+            .into_iter()
+            .flatten()
+            .find(|commit| tasks::on_branch(place, &task.worktree, commit));
+        match (due, onto) {
+            (false, Some(onto)) => {
+                sync.merge_head = Some(onto);
+                let before = sync.before.clone().unwrap_or_default();
+                let outcome = self.finish_restack(&task, &mut sync, &name, &before)?;
+                if drifted {
+                    sync.advance(StepEvent::Holds)?;
+                }
+                sync.conflicts.clear();
+                sync.notice = None;
+                sync.outcome = Some(format!("Restack terminado fuera de Tinto. {outcome}"));
+                self.close_sync_rounds(&task.id, &sync, "restack terminado fuera de Tinto")?;
+                self.save_approval(&sync, "step_adopted")
+            }
+            // Still drifted: nothing new to say.
+            _ if drifted => {
+                sync.head = Some(head);
+                self.store()?.put_approval(&sync)
+            }
+            _ => {
+                sync.advance(StepEvent::Drift)?;
+                sync.head = Some(head);
+                sync.notice = Some(
+                    "El rebase que Tinto dejó en pausa ya no está (se abandonó, terminó o se rehízo fuera de Tinto) y la rama aún no está restackeada sobre la base. Tinto no lo repite solo: pide el paso sync otra vez (con restack_from si el punto de partida era otro) o termina el restack fuera de Tinto, y Tinto lo da por hecho."
+                        .to_string(),
+                );
+                self.close_sync_rounds(&task.id, &sync, "restack abandonado fuera de Tinto")?;
+                self.save_approval(&sync, "step_drifted")
+            }
+        }
     }
 
     fn task_open_merge(
@@ -3262,6 +3370,26 @@ impl DeliveryService {
         let place = Place::of(task.distro.as_deref());
         let before = tasks::head(place, &task.worktree)?;
         let onto = approval.merge_head.clone().unwrap_or_default();
+        // Commits the base or the merged package already have would be
+        // replayed onto the base and conflict with it: a wrong old base.
+        let heads = self.predecessor_heads(task)?;
+        let twice = tasks::replayed_twice(place, &task.worktree, from, &onto, &heads)?;
+        if twice > 0 {
+            let right = tasks::last_met(place, &task.worktree, &heads).filter(|met| {
+                met != from && !tasks::is_ancestor(place, &task.worktree, met, &onto)
+            });
+            return Err(DeliveryError::new(
+                "restack_overlap",
+                format!(
+                    "No se hizo el restack (restack_overlap): desde {} repetiría {twice} commit(s) que ya tienen {name} o el paquete fusionado. {}",
+                    short(from),
+                    match right {
+                        Some(right) => format!("Pide el sync con restack_from {right}, el último commit de ese paquete que tiene la rama."),
+                        None => "Pide el sync con restack_from en el último commit del paquete fusionado que tiene la rama.".to_string(),
+                    }
+                ),
+            ));
+        }
         approval.before = Some(before.clone());
         if let Err(files) = tasks::restack(place, &task.worktree, &onto, from)? {
             let outcome = format!(
@@ -3645,6 +3773,16 @@ impl DeliveryService {
                 .is_some_and(|approval| approval.status == DeliveryApprovalStatus::Executed);
             if committed && !pushed {
                 self.commits_lost(&task)?;
+            }
+            // A restack left paused or drifted, its rebase gone since.
+            let restack = latest(DeliveryRung::Sync).is_some_and(|sync| {
+                sync.restack
+                    && (sync.status == DeliveryApprovalStatus::Drifted
+                        || (sync.status == DeliveryApprovalStatus::Executed
+                            && sync.created.is_empty()))
+            });
+            if restack {
+                self.settle_restack(&task)?;
             }
             // A sync's merge committed by hand, its round still open.
             let store = self.store()?;

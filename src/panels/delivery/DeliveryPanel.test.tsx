@@ -1620,7 +1620,12 @@ describe("DeliveryPanel", () => {
     );
     client.undoDeliveryCommit.mockResolvedValue({});
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Abandonar el restack" }));
+    // Its tile under Entrega opens it, on the way to abandon it.
+    const ladder = await screen.findByRole("list", { name: "Entrega" });
+    await user.click(within(ladder).getByRole("button", { name: /Sync con la base/ }));
+    const abandon = screen.getByRole("button", { name: "Abandonar el restack" });
+    expect(abandon).toHaveFocus();
+    await user.click(abandon);
     await waitFor(() => expect(client.undoDeliveryCommit).toHaveBeenCalledWith("s1"));
   });
 

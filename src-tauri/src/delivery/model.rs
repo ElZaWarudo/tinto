@@ -884,7 +884,8 @@ pub enum DeliveryApprovalStatus {
     /// outside it (reset, amend, rebase). The step is pending again.
     Undone,
     /// A done step that git or GitHub no longer bear out: the remote branch
-    /// is gone or moved, or the PR was closed. `notice` says what changed;
+    /// is gone or moved, the PR was closed, or the rebase a sync's restack
+    /// paused is gone with the branch not restacked. `notice` says what changed;
     /// it counts as done again if what it recorded holds again.
     Drifted,
 }
@@ -903,13 +904,17 @@ impl DeliveryApprovalStatus {
         use DeliveryApprovalStatus::*;
         use StepEvent::*;
         // Only commits are taken back (a sync's with its paused restack),
-        // only a PR or its merge gets done on GitHub, and only the push and
-        // the PR are checked against what git and GitHub show.
+        // only a PR or its merge gets done on GitHub, and only the push, the
+        // PR and a sync's restack are checked against what git and GitHub
+        // show.
         let takes = match event {
             Approve | Reject | Ran { .. } => true,
             Undo => matches!(rung, DeliveryRung::Commit | DeliveryRung::Sync),
             DoneOutside => matches!(rung, DeliveryRung::Pr | DeliveryRung::Merge),
-            Drift | Holds => matches!(rung, DeliveryRung::Push | DeliveryRung::Pr),
+            Drift | Holds => matches!(
+                rung,
+                DeliveryRung::Push | DeliveryRung::Pr | DeliveryRung::Sync
+            ),
         };
         if !takes {
             return None;
@@ -2099,8 +2104,8 @@ mod tests {
         ); 4] = [
             (Undo, Executed, &[Commit, Sync]),
             (DoneOutside, Pending, &[Pr, Merge]),
-            (Drift, Executed, &[Push, Pr]),
-            (Holds, Drifted, &[Push, Pr]),
+            (Drift, Executed, &[Push, Pr, Sync]),
+            (Holds, Drifted, &[Push, Pr, Sync]),
         ];
         for (event, from, rungs) in takers {
             for rung in all {
