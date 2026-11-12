@@ -404,12 +404,17 @@ fn run_tool(
     };
     match name {
         "delivery_overview" => {
-            let overview = narrow_overview(
+            let mut overview = narrow_overview(
                 service.overview()?,
                 args["run_id"].as_str(),
                 args["task_id"].as_str(),
                 args["closed"].as_bool().unwrap_or(false),
             );
+            // The jobs' verdicts are for the view to word them; the
+            // coordinator reads the phase.
+            for phase in overview.phases.values_mut() {
+                phase.verdicts.clear();
+            }
             let compact = args["compact"].as_bool().unwrap_or(true);
             let mut value = match compact {
                 true => compact_overview(&overview)?,

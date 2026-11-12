@@ -273,10 +273,48 @@ pub struct DeliveryTaskPhase {
     /// `pr_reply` for each, which resolves its thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads_to_answer: Vec<String>,
+    /// The first step of its ladder not done; none once delivered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<DeliveryStep>,
+    /// What these rules say of each of its jobs, by id, for the view to word
+    /// them as the phase does; jobs none applies to are left out. The
+    /// coordinator's overview leaves it out.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub verdicts: BTreeMap<String, JobVerdict>,
 }
 
 fn is_zero(count: &usize) -> bool {
     *count == 0
+}
+
+/// One job as the phase reads it (see `is_broken`, `is_passed`,
+/// `is_answered`, `is_superseded`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobVerdict {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub broken: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub passed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub answered: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub superseded: bool,
+}
+
+/// The verdicts of a task's jobs (oldest first) that say anything.
+fn verdicts(jobs: &[&DeliveryJob]) -> BTreeMap<String, JobVerdict> {
+    jobs.iter()
+        .map(|job| {
+            let verdict = JobVerdict {
+                broken: is_broken(job),
+                passed: is_passed(job),
+                answered: is_answered(job, jobs),
+                superseded: is_superseded(job, jobs),
+            };
+            (job.id.clone(), verdict)
+        })
+        .filter(|(_, verdict)| *verdict != JobVerdict::default())
+        .collect()
 }
 
 /// A task's open round and where it is in it.
@@ -1105,13 +1143,23 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         round: round.clone(),
         at: round_at(&phase),
     });
+    let jobs: Vec<&DeliveryJob> = facts
+        .jobs
+        .iter()
+        .filter(|job| job.task_id == task.id)
+        .collect();
+    phase.verdicts = verdicts(&jobs);
+    let approvals: Vec<&DeliveryApproval> = facts
+        .approvals
+        .iter()
+        .filter(|approval| approval.task_id == task.id)
+        .collect();
+    phase.next_step = next_step(task, &approvals).map(|(rung, stage)| DeliveryStep {
+        rung,
+        stage: stage.map(str::to_string),
+    });
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         phase.threads_unanswered = pr.unanswered().count();
-        let approvals: Vec<&DeliveryApproval> = facts
-            .approvals
-            .iter()
-            .filter(|approval| approval.task_id == task.id)
-            .collect();
         phase.threads_to_answer = threads_to_answer(pr, &approvals)
             .iter()
             .map(|thread| thread.label())
@@ -1309,6 +1357,8 @@ fn phase_in_round(
         failing_checks: failing.clone(),
         threads_unanswered: 0,
         threads_to_answer: Vec::new(),
+        next_step: None,
+        verdicts: BTreeMap::new(),
     };
 
     let decisions = facts
@@ -1973,6 +2023,49 @@ mod tests {
         assert_eq!(
             World::new(jobs(undone)).phase().next_stage.as_deref(),
             Some("qa")
+        );
+    }
+
+    #[test]
+    fn the_phase_says_what_the_rules_say_of_each_job_and_the_next_step() {
+        let mut world = World::new(vec![
+            job("j1", "tests", Finished, Some("findings")),
+            job("j2", "implementation", Finished, Some("pass")),
+            job("j3", "review", DeliveryJobStatus::Failed, None),
+            changed(job("j4", "tests", Finished, Some("pass"))),
+        ]);
+        let verdict = |broken, passed, answered, superseded| JobVerdict {
+            broken,
+            passed,
+            answered,
+            superseded,
+        };
+        let phase = world.phase();
+        assert_eq!(
+            phase.verdicts,
+            BTreeMap::from([
+                ("j1".to_string(), verdict(false, false, true, false)),
+                ("j2".to_string(), verdict(false, true, false, true)),
+                ("j3".to_string(), verdict(true, false, false, true)),
+                ("j4".to_string(), verdict(false, true, false, false)),
+            ])
+        );
+        assert_eq!(
+            phase.next_step,
+            Some(DeliveryStep {
+                rung: DeliveryRung::Commit,
+                stage: None
+            })
+        );
+        for (rung, at) in [("commit", 1), ("push", 2), ("pr", 3)] {
+            world.approvals.push(step(rung, "executed", Some(at)));
+        }
+        assert_eq!(
+            world.phase().next_step,
+            Some(DeliveryStep {
+                rung: DeliveryRung::Jira,
+                stage: Some(JIRA_AFTER_PR.into())
+            })
         );
     }
 

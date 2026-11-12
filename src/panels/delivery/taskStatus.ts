@@ -8,6 +8,7 @@ import type {
   DeliveryBlocker,
   DeliveryDecision,
   DeliveryJob,
+  DeliveryJobVerdict,
   DeliveryOverview,
   DeliveryPr,
   DeliveryRung,
@@ -174,17 +175,6 @@ export function quietFor(job: DeliveryJob, now: number): string | null {
   return minutes >= 5 ? `sin actividad hace ${minutes} min` : null;
 }
 
-/** A job that ended without a usable result, and was not settled since. */
-export function isBroken(job: DeliveryJob): boolean {
-  return (
-    !job.resolved_at_ms &&
-    (job.status === "failed" ||
-      job.status === "interrupted" ||
-      job.result_state === "invalid" ||
-      (job.status === "finished" && job.result?.status === "blocked"))
-  );
-}
-
 /** Not superseded: neither stale nor undone. */
 function isLive(job: DeliveryJob): boolean {
   return job.result_state !== "stale" && !job.undone_at_ms;
@@ -194,36 +184,21 @@ function isCurrent(job: DeliveryJob): boolean {
   return isLive(job) && job.result_state !== "invalid";
 }
 
-export function isPassed(job: DeliveryJob): boolean {
-  return (
-    (!!job.resolved_at_ms && isLive(job)) ||
-    (job.status === "finished" && isCurrent(job) && job.result?.status === "pass")
-  );
-}
-
 function stageOrder(role: string): number {
   return STAGES.findIndex((stage) => stage.role === role);
-}
-
-/**
- * A result left behind by later work on an earlier stage: new tests after the
- * implementation, or new code after its review or QA. `jobs` are the task's,
- * oldest first.
- */
-export function isSuperseded(job: DeliveryJob, jobs: DeliveryJob[]): boolean {
-  const order = stageOrder(job.role);
-  const at = jobs.findIndex((other) => other.id === job.id);
-  // Nothing comes before the tests that changes the code (Alcance reads).
-  if (order <= stageOrder("tests") || at < 0) return false;
-  return jobs.slice(at + 1).some((later) => {
-    const laterOrder = stageOrder(later.role);
-    return laterOrder >= 0 && laterOrder < order && !later.undone_at_ms && later.changes.length > 0;
-  });
 }
 
 /** The task's jobs, oldest first (the overview keeps them in creation order). */
 export function jobsOf(overview: DeliveryOverview, taskId: string): DeliveryJob[] {
   return overview.jobs.filter((job) => job.task_id === taskId);
+}
+
+/** What Tinto says of each of the task's jobs, by id (broken, passed, answered, superseded). */
+export function verdictsOf(
+  overview: DeliveryOverview,
+  taskId: string,
+): Record<string, DeliveryJobVerdict> {
+  return phaseOf(overview, taskId)?.verdicts ?? {};
 }
 
 /** Millionths of a dollar as the view shows them: `$0.42`. */
@@ -267,11 +242,14 @@ export function rolesOf(jobs: DeliveryJob[]): string[] {
 }
 
 /** One outcome per attempt: the strongest fact about it. With the task's
- *  `jobs`, a pass that later work left behind says so. */
+ *  `jobs` a resumed pause says so, and with Tinto's `verdicts` a pass later
+ *  work left behind, or findings a later stage answered. */
 export function attemptOutcome(
   job: DeliveryJob,
   jobs: DeliveryJob[] = [],
+  verdicts: Record<string, DeliveryJobVerdict> = {},
 ): { tone: Tone; label: string } {
+  const verdict = verdicts[job.id] ?? {};
   if (job.status === "queued") {
     return {
       tone: "waiting",
@@ -286,7 +264,7 @@ export function attemptOutcome(
       : { tone: "waiting", label: "En pausa" };
   }
   if (job.status === "cancelled") return { tone: "idle", label: "Cancelado" };
-  if (job.resolved_at_ms && isLive(job)) {
+  if (job.resolved_at_ms && verdict.passed) {
     // Findings accepted as they are, or a broken stage done another way.
     const findings = job.result?.status === "findings" ? job.result.findings.length : 0;
     if (findings > 0) {
@@ -310,7 +288,7 @@ export function attemptOutcome(
     return { tone: "ok", label: count > 0 ? `Listo · ${questions(count)}` : "Listo" };
   }
   if (result.status === "pass") {
-    return isSuperseded(job, jobs)
+    return verdict.superseded
       ? { tone: "idle", label: "Superado" }
       : { tone: "ok", label: "Sin hallazgos" };
   }
@@ -324,7 +302,7 @@ export function attemptOutcome(
     const count = result.findings.length;
     const label = count === 1 ? "1 hallazgo" : count > 1 ? `${count} hallazgos` : "Con hallazgos";
     // Once a later stage answered them they are history, not a warning.
-    return isAnswered(job, jobs)
+    return verdict.answered
       ? { tone: "idle", label: `${label} · atendidos` }
       : { tone: "attention", label };
   }
@@ -363,21 +341,6 @@ export function scopeOutcome(
   };
 }
 
-/** Findings a later stage answered: one after it passed (the tests' failing
- *  cases, made to pass by the implementation). */
-export function isAnswered(job: DeliveryJob, jobs: DeliveryJob[]): boolean {
-  return (
-    job.status === "finished" &&
-    job.result?.status === "findings" &&
-    jobs.some(
-      (later) =>
-        later.created_at_ms > job.created_at_ms &&
-        stageOrder(later.role) > stageOrder(job.role) &&
-        isPassed(later),
-    )
-  );
-}
-
 /** The latest accepted handoff, offered as the next stage's instructions. */
 export function lastHandoff(jobs: DeliveryJob[]): { text: string; from: DeliveryJob } | null {
   const from = [...jobs]
@@ -401,14 +364,11 @@ export function latestStep(
   return [...approvals].reverse().find((approval) => isStep(approval, step));
 }
 
-/** Delivered once every step of its ladder is done: commit, push, PR, merge and its Jira. */
-export function isDelivered(approvals: DeliveryApproval[], steps = STEPS): boolean {
-  return nextStep(approvals, steps) === null;
-}
-
-/** First step not done; null once every step is. */
-export function nextStep(approvals: DeliveryApproval[], steps = STEPS): DeliveryStep | null {
-  return steps.find((step) => latestStep(approvals, step)?.status !== "executed") ?? null;
+/** The first step of its ladder not done, as Tinto says; null once every
+ *  step is, or until the overview has its phase. */
+export function nextStepOf(overview: DeliveryOverview, taskId: string): DeliveryStep | null {
+  const next = phaseOf(overview, taskId)?.next_step;
+  return next ? phaseStep(next.rung, next.stage) : null;
 }
 
 /** The ladder the task climbs, as Tinto says: a middle package of a split issue ends at merge. */
@@ -773,7 +733,7 @@ export function roundHistory(overview: DeliveryOverview, taskId: string): string
 export function roundStage(
   role: string,
   job: DeliveryJob | undefined,
-  jobs: DeliveryJob[],
+  verdicts: Record<string, DeliveryJobVerdict>,
   round: DeliveryCurrentRound | null,
 ): { tone: Tone | "todo"; label: string } | null {
   if (!round || (job && job.created_at_ms >= round.opened_at_ms)) return null;
@@ -781,12 +741,8 @@ export function roundStage(
   const order = stageOrder(role);
   const tests = stageOrder("tests");
   if (order > tests) return { tone: "todo", label: "Se repite en esta ronda" };
-  if (
-    order === tests &&
-    job &&
-    (isPassed(job) || isAnswered(job, jobs)) &&
-    !isSuperseded(job, jobs)
-  ) {
+  const verdict = job ? verdicts[job.id] : undefined;
+  if (order === tests && (verdict?.passed || verdict?.answered) && !verdict?.superseded) {
     return { tone: "ok", label: "Vale de la ronda anterior" };
   }
   return null;
@@ -960,10 +916,7 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
     case "pr": {
       const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
       if (!pr) return waiting("PR");
-      const next = nextStep(
-        overview.approvals.filter((approval) => approval.task_id === task.id),
-        stepsOf(overview, task.id),
-      );
+      const next = nextStepOf(overview, task.id);
       const then = next ? ` · siguiente: ${lower(next.label)}` : "";
       // Tinto says what the PR waits on and who acts; this only words it,
       // and only what waits on the user asks for them.
