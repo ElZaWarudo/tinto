@@ -96,7 +96,34 @@ jobs:
         with:
           ref: refs/tags/${{ env.TAG }}
 
+      # The agent is rebuilt only when something it is built from changed:
+      # the Rust sources it can reach, the dependencies, or this file (the
+      # Rust pin). Left out: the app's version, which changes every release,
+      # and code the agent never runs (Delivery, the mobile link, the app's
+      # UI state and main). A reused agent reports the version it was built
+      # for; Tinto does not compare it. If the agent starts to use one of
+      # those modules, add it here.
+      - name: What the agent is built from
+        id: sources
+        run: |
+          hash=$({
+            git ls-files -s -- src-tauri/src src-tauri/build.rs .github/workflows/release.yml \
+              ':!src-tauri/src/delivery' ':!src-tauri/src/mobile_link' \
+              ':!src-tauri/src/ui_state.rs' ':!src-tauri/src/main.rs'
+            grep -v '^version = ' src-tauri/Cargo.toml
+            sed '/^name = "tinto"$/{n;d;}' src-tauri/Cargo.lock
+          } | sha256sum | cut -d ' ' -f 1)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Reuse the last build
+        id: built
+        uses: actions/cache@v6
+        with:
+          path: tinto-agent-linux-x86_64
+          key: wsl-agent-${{ steps.sources.outputs.hash }}
+
       - name: Install Tauri Linux dependencies
+        if: steps.built.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -112,15 +139,18 @@ jobs:
             wget
 
       - name: Setup Rust
+        if: steps.built.outputs.cache-hit != 'true'
         uses: dtolnay/rust-toolchain@1.99.1
 
       - name: Cache Rust
+        if: steps.built.outputs.cache-hit != 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           cache-on-failure: true
 
       - name: Build WSL agent
+        if: steps.built.outputs.cache-hit != 'true'
         working-directory: src-tauri
         run: |
           cargo build --release --bin tinto-agent

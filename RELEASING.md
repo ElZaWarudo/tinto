@@ -61,6 +61,10 @@ git push origin HEAD v1.3.0
 gh workflow run release.yml --ref develop -f tag=v1.3.0
 ```
 
+The WSL agent is rebuilt only when the code it is built from changed since an
+earlier release (`release.yml` says what counts); otherwise that release's
+binary is reused, and reports that release's version.
+
 The tag push alone starts nothing. Release always runs on `develop` (`--ref`)
 and checks the tag out itself: GitHub keeps a run's Rust caches under the ref
 it ran on, and a run on a tag could never read an earlier tag's, so every
