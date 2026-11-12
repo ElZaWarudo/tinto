@@ -263,6 +263,9 @@ pub(super) struct Inner {
     /// What held each queued job at the last scheduling tick, then what
     /// its `job_started` event says of a long wait (see `Queue::note_waits`).
     queue_notes: Mutex<HashMap<String, String>>,
+    /// Each live task's phase as last recorded (see `phase_log`); None
+    /// until the first overview reads it from the trail.
+    pub(super) phases_seen: Mutex<Option<HashMap<String, String>>>,
     /// Tests set it to stand for Tinto closing: its jobs keep running and
     /// nothing follows them any more.
     closed: AtomicBool,
@@ -627,6 +630,7 @@ impl DeliveryService {
                 restart_retries: Mutex::new(Vec::new()),
                 adopted: Mutex::new(Vec::new()),
                 queue_notes: Mutex::new(HashMap::new()),
+                phases_seen: Mutex::new(None),
                 closed: AtomicBool::new(false),
                 notify: Mutex::new(None),
                 changes: (Mutex::new(0), Condvar::new()),
@@ -1025,6 +1029,9 @@ impl DeliveryService {
             .iter()
             .map(|task| (task.id.clone(), super::phase::task_phase(task, &facts)))
             .collect();
+        if let Err(error) = self.record_phase_changes(&store, &phases) {
+            eprintln!("tinto: delivery could not record the phase changes: {error}");
+        }
         let archived_packages: Vec<DeliveryTask> = store
             .removed_tasks()?
             .into_iter()

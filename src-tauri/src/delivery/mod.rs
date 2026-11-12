@@ -22,6 +22,7 @@ pub mod mcp;
 pub mod model;
 mod overlaps;
 pub mod phase;
+mod phase_log;
 pub mod prs;
 mod published;
 mod qa_prepare;
