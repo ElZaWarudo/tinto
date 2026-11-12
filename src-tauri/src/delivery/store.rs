@@ -644,7 +644,13 @@ mod tests {
         );
         DeliveryStore::open(&dir.path().join("delivery.sqlite")).unwrap();
         drop(held);
-        DeliveryStore::lock_instance(dir.path()).unwrap();
+        // A command another test starts meanwhile is forked with the lock
+        // file open and keeps the lock until it execs: free a moment later.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while let Err(error) = DeliveryStore::lock_instance(dir.path()) {
+            assert!(std::time::Instant::now() < deadline, "{error:?}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]

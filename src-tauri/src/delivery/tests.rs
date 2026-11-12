@@ -1251,11 +1251,12 @@ fn a_check_adopted_after_a_restart_ends_with_the_code_it_left_or_runs_again() {
                     done.error
                 );
                 assert!(rounds.is_empty(), "{rounds:?}");
-                let jobs = restarted.overview().unwrap().jobs;
-                let retry = jobs
-                    .iter()
-                    .find(|again| again.retry_of.as_deref() == Some(job.id.as_str()))
-                    .expect("queued again");
+                // Queued again right after it is recorded as interrupted.
+                let retry = eventually(|| {
+                    let jobs = restarted.overview().unwrap().jobs;
+                    jobs.into_iter()
+                        .find(|again| again.retry_of.as_deref() == Some(job.id.as_str()))
+                });
                 assert_eq!(
                     wait_on(&restarted, &retry.id).status,
                     DeliveryJobStatus::Finished
@@ -13250,7 +13251,8 @@ fn a_restack_that_stops_on_conflicts_pauses_and_tinto_continues_it_or_abandons_i
         (sync.conflicts == ["notes2.txt"]).then_some(sync)
     });
     assert!(again.outcome.unwrap().contains("notes2.txt"));
-    assert_eq!(open_sync_rounds(), 1);
+    // The first stop's round closes, then this one's opens.
+    eventually(|| (open_sync_rounds() == 1).then_some(()));
     let resolved_once = in_worktree(&task, &["show", "HEAD:notes.txt"]);
     assert_eq!(resolved_once, "notes.txt from both");
 
