@@ -827,6 +827,10 @@ export interface DeliverySettingsChanges {
   jira_after_merge?: string[] | null;
   /** Fields a Jira transition gets, by transition id, name or target status. */
   jira_transition_fields?: Record<string, unknown>;
+  /** Tests to mark as failing only because of the environment. */
+  known_failures_add?: DeliveryKnownFailure[];
+  /** Known failures to unmark, by check and test. */
+  known_failures_remove?: DeliveryKnownFailure[];
 }
 
 /** Settings changes a coordinator asks for; nothing changes until the user approves. */

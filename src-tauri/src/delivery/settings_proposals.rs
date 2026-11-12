@@ -17,7 +17,7 @@ use std::path::Path;
 
 use super::decisions::{is_absolute, names, norm, AUTO, SCRIPT_EXTENSIONS};
 use super::model::{
-    DeliveryRepoSettings, DeliverySettingsChanges, DeliverySettingsProposal,
+    DeliveryKnownFailure, DeliveryRepoSettings, DeliverySettingsChanges, DeliverySettingsProposal,
     DeliverySettingsProposalStatus, DeliveryTask,
 };
 use super::service::{valid_env_name, DeliveryService};
@@ -62,7 +62,25 @@ fn clean(changes: &DeliverySettingsChanges) -> DeliverySettingsChanges {
             .iter()
             .map(|(key, fields)| (key.trim().to_string(), fields.clone()))
             .collect(),
+        known_failures_add: trimmed_failures(&changes.known_failures_add),
+        known_failures_remove: trimmed_failures(&changes.known_failures_remove),
     }
+}
+
+fn trimmed_failures(items: &[DeliveryKnownFailure]) -> Vec<DeliveryKnownFailure> {
+    items
+        .iter()
+        .map(|failure| DeliveryKnownFailure {
+            check: failure.check.trim().to_string(),
+            test: failure.test.trim().to_string(),
+            reason: failure.reason.trim().to_string(),
+        })
+        .collect()
+}
+
+/// The same known failure: one check's test, whatever the reason.
+fn same_failure(a: &DeliveryKnownFailure, b: &DeliveryKnownFailure) -> bool {
+    a.check == b.check && a.test == b.test
 }
 
 fn is_empty(changes: &DeliverySettingsChanges) -> bool {
@@ -77,6 +95,8 @@ fn is_empty(changes: &DeliverySettingsChanges) -> bool {
         && changes.qa_browser.is_none()
         && changes.verification.is_none()
         && changes.check_env.is_empty()
+        && changes.known_failures_add.is_empty()
+        && changes.known_failures_remove.is_empty()
         && !touches_jira(changes)
 }
 
@@ -203,6 +223,47 @@ fn problems(
             problems.push(format!("check_env «{name}»: ya tiene ese valor"));
         }
     }
+    for (index, failure) in changes.known_failures_add.iter().enumerate() {
+        let name = format!("known_failures_add «{} › {}»", failure.check, failure.test);
+        if failure.test.is_empty() || failure.reason.is_empty() {
+            problems.push(format!("{name}: faltan test o reason"));
+        } else if !settings.checks.contains(&failure.check)
+            && !changes.checks_add.contains(&failure.check)
+        {
+            problems.push(format!(
+                "{name}: check no es un comando de verificación de los ajustes (escríbelo tal cual está en checks)"
+            ));
+        } else if changes.known_failures_add[..index]
+            .iter()
+            .any(|other| same_failure(other, failure))
+        {
+            problems.push(format!("{name}: está repetido"));
+        } else if settings
+            .known_failures
+            .iter()
+            .any(|other| same_failure(other, failure))
+        {
+            problems.push(format!("{name}: ya está en los ajustes"));
+        }
+    }
+    for (index, failure) in changes.known_failures_remove.iter().enumerate() {
+        let name = format!(
+            "known_failures_remove «{} › {}»",
+            failure.check, failure.test
+        );
+        if changes.known_failures_remove[..index]
+            .iter()
+            .any(|other| same_failure(other, failure))
+        {
+            problems.push(format!("{name}: está repetido"));
+        } else if !settings
+            .known_failures
+            .iter()
+            .any(|other| same_failure(other, failure))
+        {
+            problems.push(format!("{name}: no está en los ajustes"));
+        }
+    }
     if touches_jira(changes) {
         match &settings.jira {
             None => problems.push(
@@ -267,6 +328,14 @@ fn is_part_of(part: &DeliverySettingsChanges, whole: &DeliverySettingsChanges) -
             .jira_transition_fields
             .iter()
             .all(|(key, fields)| whole.jira_transition_fields.get(key) == Some(fields))
+        && part
+            .known_failures_add
+            .iter()
+            .all(|failure| whole.known_failures_add.contains(failure))
+        && part
+            .known_failures_remove
+            .iter()
+            .all(|failure| whole.known_failures_remove.contains(failure))
 }
 
 /// The settings with the changes applied. Adding what is already there or
@@ -316,6 +385,21 @@ fn apply(settings: &mut DeliveryRepoSettings, changes: &DeliverySettingsChanges)
         settings.verification = verification.clone();
     }
     settings.check_env.extend(changes.check_env.clone());
+    for failure in &changes.known_failures_add {
+        if !settings
+            .known_failures
+            .iter()
+            .any(|other| same_failure(other, failure))
+        {
+            settings.known_failures.push(failure.clone());
+        }
+    }
+    settings.known_failures.retain(|failure| {
+        !changes
+            .known_failures_remove
+            .iter()
+            .any(|other| same_failure(other, failure))
+    });
     // Jira changes are proposed only for a repo with its Jira set.
     if let Some(jira) = settings.jira.as_mut() {
         if let Some(statuses) = &changes.jira_after_pr {
@@ -702,6 +786,51 @@ mod tests {
         assert_eq!(jira.transition_fields["Start Work"], fields);
         let again = problems(&changes, &settings, &task());
         assert_eq!(again.len(), 2, "{again:?}");
+    }
+
+    #[test]
+    fn known_failures_are_added_for_a_check_and_removed_by_check_and_test() {
+        let check = "npm --prefix services/session-executor test";
+        let failure = |check: &str, test: &str, reason: &str| DeliveryKnownFailure {
+            check: check.into(),
+            test: test.into(),
+            reason: reason.into(),
+        };
+        let image = failure(
+            check,
+            "LoadImage tool tells apart images",
+            "No /proc en Windows",
+        );
+        let grpc = failure(check, "hub streams a session", "gRPC inestable");
+        let mut settings = DeliveryRepoSettings {
+            checks: vec![check.into()],
+            known_failures: vec![grpc.clone()],
+            ..Default::default()
+        };
+        let changes = DeliverySettingsChanges {
+            known_failures_add: vec![image.clone()],
+            known_failures_remove: vec![failure(check, "hub streams a session", "")],
+            ..Default::default()
+        };
+        assert!(problems(&changes, &settings, &task()).is_empty());
+        apply(&mut settings, &changes);
+        assert_eq!(settings.known_failures, std::slice::from_ref(&image));
+
+        let refused = DeliverySettingsChanges {
+            known_failures_add: vec![
+                failure("npm test", "x", "r"),
+                failure(check, "y", ""),
+                image.clone(),
+            ],
+            known_failures_remove: vec![grpc],
+            ..Default::default()
+        };
+        let found = problems(&refused, &settings, &task());
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(found[0].contains("check no es un comando"));
+        assert!(found[1].contains("faltan test o reason"));
+        assert!(found[2].contains("ya está en los ajustes"));
+        assert!(found[3].contains("no está en los ajustes"));
     }
 
     #[test]
