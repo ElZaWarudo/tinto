@@ -5945,8 +5945,8 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
     put_step(&h, &task, "a-jira", "jira", "executed", "In Review");
     h.service.stage_legacy_jira().unwrap();
     assert_eq!(
-        h.service.approval("a-jira").unwrap().stage.as_deref(),
-        Some("after_pr")
+        h.service.approval("a-jira").unwrap().stage,
+        Some(super::model::DeliveryJiraStage::AfterPr)
     );
 
     let jira = |stage: Option<&str>| NewApproval {
@@ -5968,8 +5968,8 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
     };
     let next = h.service.request_approval(jira(None)).unwrap();
     assert_eq!(
-        next.stage.as_deref(),
-        Some("after_merge"),
+        next.stage,
+        Some(super::model::DeliveryJiraStage::AfterMerge),
         "the one missing"
     );
     assert_eq!(
@@ -13686,7 +13686,7 @@ fn past_the_brainstorm_tinto_asks_the_push_and_jira_steps_itself() {
     h.service.set_jira_token(h.repo.path(), "secret").unwrap();
     h.service.advance_ladders().unwrap();
     let [step] = steps(DeliveryRung::Jira).try_into().unwrap();
-    assert_eq!(step.stage.as_deref(), Some("after_pr"));
+    assert_eq!(step.stage, Some(super::model::DeliveryJiraStage::AfterPr));
     assert_eq!(
         step.status,
         DeliveryApprovalStatus::Executed,

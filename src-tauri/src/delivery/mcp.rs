@@ -21,7 +21,7 @@ use super::decisions::NewDecision;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryCommit,
     DeliveryCoordinatorEndpoint, DeliveryDecisionKind, DeliveryDecisionOption,
-    DeliveryDecisionStatus, DeliveryJob, DeliveryOverview, DeliveryPlatform,
+    DeliveryDecisionStatus, DeliveryJiraStage, DeliveryJob, DeliveryOverview, DeliveryPlatform,
     DeliveryQaProblemStatus, DeliveryRunStatus, DeliveryRung, DeliverySettingsChanges,
     DeliverySettingsProposalStatus, DeliveryTaskMilestone,
 };
@@ -1534,22 +1534,15 @@ fn compact_overview(overview: &DeliveryOverview) -> Result<Value, DeliveryError>
         jobs.push(Value::Object(value));
     }
     // Approvals come oldest first: the last one of each step stands.
-    let mut standing: BTreeMap<(&str, DeliveryRung, Option<&str>), &str> = BTreeMap::new();
+    let mut standing: BTreeMap<(&str, DeliveryRung, Option<DeliveryJiraStage>), &str> =
+        BTreeMap::new();
     for approval in &overview.approvals {
-        let step = (
-            approval.task_id.as_str(),
-            approval.rung,
-            approval.stage.as_deref(),
-        );
+        let step = (approval.task_id.as_str(), approval.rung, approval.stage);
         standing.insert(step, approval.id.as_str());
     }
     let mut approvals = Vec::new();
     for approval in &overview.approvals {
-        let step = (
-            approval.task_id.as_str(),
-            approval.rung,
-            approval.stage.as_deref(),
-        );
+        let step = (approval.task_id.as_str(), approval.rung, approval.stage);
         let settled = standing.get(&step) != Some(&approval.id.as_str())
             || delivered.contains(approval.task_id.as_str());
         approvals.push(

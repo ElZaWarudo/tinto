@@ -974,6 +974,26 @@ pub struct DeliveryCommit {
     pub paths: Vec<String>,
 }
 
+/// When a task's Jira step happens: it comes twice.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryJiraStage {
+    /// The PR is open: the issue goes to review.
+    AfterPr,
+    /// The PR is merged: the issue is closed.
+    AfterMerge,
+}
+
+impl DeliveryJiraStage {
+    /// As stored and as the coordinator names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AfterPr => "after_pr",
+            Self::AfterMerge => "after_merge",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryApproval {
     pub id: String,
@@ -993,10 +1013,9 @@ pub struct DeliveryApproval {
     /// `merge` only: `squash`, `merge` or `rebase`.
     #[serde(default)]
     pub merge_method: Option<String>,
-    /// `jira` only: when it happens, `after_pr` (the PR is open, the issue
-    /// goes to review) or `after_merge` (the issue is closed).
+    /// `jira` only: when it happens.
     #[serde(default)]
-    pub stage: Option<String>,
+    pub stage: Option<DeliveryJiraStage>,
     /// `jira` only: the statuses Tinto walks the issue through, in order,
     /// when the repo's Jira is set in Tinto. Empty: the coordinator does the
     /// step and reports it.
@@ -2139,6 +2158,10 @@ mod tests {
         {
             use super::DeliveryRunStatus::*;
             same(&[(Active, "active"), (Closed, "closed")]);
+        }
+        {
+            use super::DeliveryJiraStage::*;
+            same(&[(AfterPr, "after_pr"), (AfterMerge, "after_merge")]);
         }
     }
 }
