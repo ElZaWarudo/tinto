@@ -4,6 +4,15 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.3.2] - 2026-11-12
+
+### Fixes
+
+- **delivery:** never restart a restack on its own and restack from the right base
+- **delivery:** let the coordinator propose known failures
+- **delivery:** keep MCP calls answering while one is stuck
+- **delivery:** run automatic fix rounds on the stage's last model
+
 ## [1.3.1] - 2026-11-12
 
 ### Features
