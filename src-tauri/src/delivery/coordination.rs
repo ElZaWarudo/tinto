@@ -22,11 +22,12 @@
 
 use super::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryBlockerKind, DeliveryCommit,
-    DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJob,
-    DeliveryMergeConflicts, DeliveryRound, DeliveryRun, DeliveryRung,
-    DeliverySettingsProposalStatus, DeliveryTask, NewBlocker, StepEvent, SINGLE_COMMIT_MAX_FILES,
-    SINGLE_COMMIT_MAX_LINES,
+    DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJiraStage,
+    DeliveryJob, DeliveryMergeConflicts, DeliveryRound, DeliveryRoundKind, DeliveryRun,
+    DeliveryRunStatus, DeliveryRung, DeliverySettingsProposalStatus, DeliveryTask, NewBlocker,
+    StepEvent, SINGLE_COMMIT_MAX_FILES, SINGLE_COMMIT_MAX_LINES,
 };
+use super::prs::DeliveryPrState;
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
@@ -298,11 +299,6 @@ fn created_commits(approval: &DeliveryApproval) -> Vec<String> {
 /// on its own, past the brainstorm.
 const AUTO_FIX_ROUNDS: usize = 2;
 
-/// The Jira step when the PR is open (the issue goes to review).
-pub const JIRA_AFTER_PR: &str = "after_pr";
-/// The Jira step once the PR is merged (the issue is closed).
-pub const JIRA_AFTER_MERGE: &str = "after_merge";
-
 /// The question Tinto asks when other work got into a merge in progress,
 /// and its two answers.
 pub const MIXED_QUESTION: &str =
@@ -416,22 +412,23 @@ impl DeliveryService {
         &self,
         task: &DeliveryTask,
         asked: Option<&str>,
-    ) -> Result<String, DeliveryError> {
+    ) -> Result<DeliveryJiraStage, DeliveryError> {
         let stage = match asked {
-            Some(JIRA_AFTER_PR) | Some(JIRA_AFTER_MERGE) => asked.unwrap_or_default(),
+            Some("after_pr") => DeliveryJiraStage::AfterPr,
+            Some("after_merge") => DeliveryJiraStage::AfterMerge,
             Some(other) => {
                 return Err(DeliveryError::new(
                     "invalid_approval",
                     format!("momento de Jira desconocido: {other} (after_pr o after_merge)"),
                 ))
             }
-            None if self.jira_done(&task.id)? => JIRA_AFTER_MERGE,
-            None => JIRA_AFTER_PR,
+            None if self.jira_done(&task.id)? => DeliveryJiraStage::AfterMerge,
+            None => DeliveryJiraStage::AfterPr,
         };
         if let Some(package) = task
             .package
             .as_ref()
-            .filter(|package| stage == JIRA_AFTER_MERGE && !package.is_last())
+            .filter(|package| stage == DeliveryJiraStage::AfterMerge && !package.is_last())
         {
             return Err(DeliveryError::new(
                 "invalid_approval",
@@ -443,7 +440,7 @@ impl DeliveryService {
                 ),
             ));
         }
-        Ok(stage.to_string())
+        Ok(stage)
     }
 
     /// Whether the task's Jira step after its PR was done.
@@ -451,7 +448,7 @@ impl DeliveryService {
         Ok(self.store()?.approvals()?.iter().any(|approval| {
             approval.task_id == task_id
                 && approval.rung == DeliveryRung::Jira
-                && approval.stage.as_deref() == Some(JIRA_AFTER_PR)
+                && approval.stage == Some(DeliveryJiraStage::AfterPr)
                 && approval.status == DeliveryApprovalStatus::Executed
         }))
     }
@@ -486,7 +483,7 @@ impl DeliveryService {
         Ok(merge_done
             || self
                 .task_pr(&task.id)?
-                .is_some_and(|pr| pr.state == "merged"))
+                .is_some_and(|pr| pr.state == DeliveryPrState::Merged))
     }
 
     /// Jira steps from when a task had a single one get their moment: done
@@ -505,14 +502,11 @@ impl DeliveryService {
                     && merge.status == DeliveryApprovalStatus::Executed
                     && merge.executed_at_ms.is_some_and(|merged| merged <= at)
             });
-            jira.stage = Some(
-                if merged_before {
-                    JIRA_AFTER_MERGE
-                } else {
-                    JIRA_AFTER_PR
-                }
-                .to_string(),
-            );
+            jira.stage = Some(if merged_before {
+                DeliveryJiraStage::AfterMerge
+            } else {
+                DeliveryJiraStage::AfterPr
+            });
             self.store()?.put_approval(&jira)?;
         }
         Ok(())
@@ -669,7 +663,7 @@ impl DeliveryService {
             id: format!("run-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
             repo,
             title: title.trim().to_string(),
-            status: "active".to_string(),
+            status: DeliveryRunStatus::Active,
             generation: 1,
             owner,
             created_at_ms: now,
@@ -683,6 +677,7 @@ impl DeliveryService {
             returned_cursor: start,
             notified_cursor: 0,
             notified_at_ms: None,
+            owner_seen_at_ms: None,
         };
         store.put_run(&run)?;
         store.record_event(now, "run_created", None, None, &run.id)?;
@@ -701,13 +696,32 @@ impl DeliveryService {
     pub fn acquire_run(&self, run_id: &str, owner: &str) -> Result<DeliveryRun, DeliveryError> {
         let mut run = self.active_run(run_id)?;
         match run.owner.as_deref() {
-            Some(current) if current != owner => Err(DeliveryError::new(
-                "run_locked",
-                format!(
-                    "la ejecución la coordina {current} (generación {}); si el usuario te pidió coordinarla, o ese coordinador se detuvo, tómala con takeover_run",
-                    run.generation
-                ),
-            )),
+            Some(current) if current != owner => {
+                // Whether that coordinator still answers, so the caller
+                // need not ask the user.
+                let state = self
+                    .coordinator_states()?
+                    .into_iter()
+                    .find(|state| state.run_id == run.id);
+                let waiting = state.as_ref().is_some_and(|state| state.waiting);
+                let seen = match (
+                    run.owner_seen_at_ms,
+                    state.and_then(|state| state.owner_seen_seconds_ago),
+                ) {
+                    (Some(at), Some(ago)) => {
+                        format!("su último wait_run respondió hace {ago} s (owner_seen_at_ms {at})")
+                    }
+                    _ => "aún no llamó a wait_run".to_string(),
+                };
+                Err(DeliveryError::new(
+                    "run_locked",
+                    format!(
+                        "la ejecución la coordina {current} (generación {}); {seen} y {} esperando en wait_run; si el usuario te pidió coordinarla, o ese coordinador se detuvo, tómala con takeover_run",
+                        run.generation,
+                        if waiting { "ahora está" } else { "no está" }
+                    ),
+                ))
+            }
             Some(_) => Ok(run),
             None => {
                 run.owner = Some(owner.to_string());
@@ -927,7 +941,7 @@ impl DeliveryService {
 
     pub fn close_run(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
         let mut run = self.run(run_id)?;
-        run.status = "closed".to_string();
+        run.status = DeliveryRunStatus::Closed;
         run.owner = None;
         run.generation += 1;
         run.updated_at_ms = now_ms();
@@ -958,7 +972,7 @@ impl DeliveryService {
 
     fn active_run(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
         let run = self.run(run_id)?;
-        if run.status != "active" {
+        if run.status != DeliveryRunStatus::Active {
             return Err(DeliveryError::new(
                 "run_closed",
                 "la ejecución está cerrada",
@@ -1008,9 +1022,9 @@ impl DeliveryService {
     fn jira_link_only(
         &self,
         task: &DeliveryTask,
-        stage: Option<&str>,
+        stage: Option<DeliveryJiraStage>,
     ) -> Result<bool, DeliveryError> {
-        if task.package.is_none() || stage == Some(JIRA_AFTER_MERGE) {
+        if task.package.is_none() || stage == Some(DeliveryJiraStage::AfterMerge) {
             return Ok(false);
         }
         for other in self.packages_of(task)? {
@@ -1024,15 +1038,19 @@ impl DeliveryService {
     /// Whether Tinto can ask a task's Jira step for `stage` without the
     /// coordinator's statuses: the repo has them for that moment, or the
     /// step only links the PR. Otherwise the step is the coordinator's.
-    fn jira_step_settable(&self, task: &DeliveryTask, stage: &str) -> Result<bool, DeliveryError> {
+    fn jira_step_settable(
+        &self,
+        task: &DeliveryTask,
+        stage: DeliveryJiraStage,
+    ) -> Result<bool, DeliveryError> {
         let jira = self
             .store()?
             .repo_settings(&task.repo)?
             .jira
             .unwrap_or_default();
         let statuses = match stage {
-            JIRA_AFTER_MERGE => jira.after_merge,
-            _ => jira.after_pr,
+            DeliveryJiraStage::AfterMerge => jira.after_merge,
+            DeliveryJiraStage::AfterPr => jira.after_pr,
         };
         Ok(!statuses.is_empty() || self.jira_link_only(task, Some(stage))?)
     }
@@ -1110,7 +1128,7 @@ impl DeliveryService {
         let mut link_only = false;
         if request.rung == DeliveryRung::Jira && task.package.is_some() {
             let packages = self.packages_of(&task)?;
-            if stage.as_deref() == Some(JIRA_AFTER_MERGE) {
+            if stage == Some(DeliveryJiraStage::AfterMerge) {
                 let of = task.package.as_ref().map_or(0, |package| package.of);
                 let mut missing = Vec::new();
                 for index in 1..of {
@@ -1136,7 +1154,7 @@ impl DeliveryService {
                     ));
                 }
             } else {
-                link_only = self.jira_link_only(&task, stage.as_deref())?;
+                link_only = self.jira_link_only(&task, stage)?;
             }
         }
         // With the repo's Jira set in Tinto, Tinto runs the step: the
@@ -1156,8 +1174,8 @@ impl DeliveryService {
                     .repo_settings(&task.repo)?
                     .jira
                     .unwrap_or_default();
-                jira_statuses = match stage.as_deref() {
-                    Some(JIRA_AFTER_MERGE) => jira.after_merge,
+                jira_statuses = match stage {
+                    Some(DeliveryJiraStage::AfterMerge) => jira.after_merge,
                     _ => jira.after_pr,
                 };
             }
@@ -1689,25 +1707,26 @@ impl DeliveryService {
         if approval.rung == DeliveryRung::PrReply {
             self.post_reply_once_published(&mut approval, None)?;
         }
+        // One step at a time runs git in the worktree, until it is saved: a
+        // reader must not see its git work without the step that did it.
+        let lock = super::service::keyed_lock(&self.inner.git_work, &approval.task_id);
+        let mut git_work = None;
         if matches!(
             approval.rung,
             DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
         ) {
             let task = self.task(&approval.task_id)?;
-            // One step at a time runs git in the worktree.
-            let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
-            let git_work = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            git_work = Some(lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
             let executed = match approval.rung {
                 DeliveryRung::Commit if approval.record => self.run_record(&task, &mut approval),
                 DeliveryRung::Commit => run_commit_plan(&task, &mut approval),
                 DeliveryRung::Sync => self.run_sync(&task, &mut approval),
-                _ if self.commits_lost(&task)? => Err(DeliveryError::new(
+                _ if self.commits_lost_locked(&task)? => Err(DeliveryError::new(
                     "commit_missing",
                     "No se publicó: los commits que hizo Tinto ya no están en la rama. Vuelve a preparar el commit.",
                 )),
                 _ => self.run_push(&task, &mut approval),
             };
-            drop(git_work);
             approval.executed_at_ms = Some(now_ms());
             match executed {
                 Ok(outcome) => {
@@ -1730,6 +1749,7 @@ impl DeliveryService {
             }
         }
         self.save_approval(&approval, "approval_approved")?;
+        drop(git_work);
         if approval.rung == DeliveryRung::PrReply {
             self.reply_answered(&approval)?;
         }
@@ -1843,7 +1863,7 @@ impl DeliveryService {
             .refresh_pr(&task_id, std::time::Duration::ZERO)
             .ok()
             .flatten()
-            .is_some_and(|pr| pr.state == "merged"))
+            .is_some_and(|pr| pr.state == DeliveryPrState::Merged))
     }
 
     /// Says on a running step what it is doing now.
@@ -1926,6 +1946,18 @@ impl DeliveryService {
     /// The coordinator takes back a request the user has not answered, to
     /// ask it again with other text. The reason stays in the log.
     pub fn withdraw_approval(&self, approval_id: &str, reason: &str) -> Result<(), DeliveryError> {
+        self.withdraw(approval_id, reason, "approval_withdrawn")
+    }
+
+    /// Takes back a request the user has not answered, recording `event`:
+    /// `approval_withdrawn` when the coordinator does it, `step_withdrawn`
+    /// (which wakes it) when Tinto does.
+    pub(super) fn withdraw(
+        &self,
+        approval_id: &str,
+        reason: &str,
+        event: &str,
+    ) -> Result<(), DeliveryError> {
         let lock = super::service::keyed_lock(&self.inner.deciding, approval_id);
         let _deciding = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let approval = self.approval(approval_id)?;
@@ -1949,7 +1981,7 @@ impl DeliveryService {
         store.delete_approval(&approval.id)?;
         store.record_event(
             now_ms(),
-            "approval_withdrawn",
+            event,
             Some(&approval.task_id),
             None,
             &format!("{rung}: {}", reason.trim()),
@@ -2252,7 +2284,7 @@ impl DeliveryService {
             .store()?
             .runs()?
             .into_iter()
-            .filter(|run| run.unattended && !run.paused && run.status == "active")
+            .filter(|run| run.unattended && !run.paused && run.status == DeliveryRunStatus::Active)
             .map(|run| run.id)
             .collect();
         if runs.is_empty() {
@@ -2342,8 +2374,8 @@ impl DeliveryService {
                     {
                         (
                             DeliveryRung::Jira,
-                            Some(stage.to_string()),
-                            format!("{}: Jira {stage}", task.key),
+                            Some(stage.as_str().to_string()),
+                            format!("{}: Jira {}", task.key, stage.as_str()),
                         )
                     }
                     _ => continue,
@@ -2387,7 +2419,7 @@ impl DeliveryService {
     ) -> Result<(), DeliveryError> {
         let checks_rounds: Vec<&super::model::DeliveryRound> = rounds
             .iter()
-            .filter(|round| round.task_id == task.id && round.kind == "checks")
+            .filter(|round| round.task_id == task.id && round.kind == DeliveryRoundKind::Checks)
             .collect();
         let Some(round) = checks_rounds
             .iter()
@@ -2782,7 +2814,7 @@ impl DeliveryService {
             &store,
             &task.id,
             super::rounds::NewRound {
-                kind: "sync",
+                kind: DeliveryRoundKind::Sync,
                 short: "conflictos del restack".to_string(),
                 cause: format!("Conflictos del restack en el commit {at}"),
                 items: files,
@@ -3348,7 +3380,20 @@ impl DeliveryService {
     /// Whether the commits of the task's commit step are gone from its
     /// branch (reset, amend or rebase done outside Tinto). The step then
     /// counts as undone, so the commit is prepared again before any push.
+    /// While a step runs git in the worktree it says nothing: a restack
+    /// rewrites the commits before its sync step is saved.
     pub(super) fn commits_lost(&self, task: &DeliveryTask) -> Result<bool, DeliveryError> {
+        let lock = super::service::keyed_lock(&self.inner.git_work, &task.id);
+        let _git_work = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+        };
+        self.commits_lost_locked(task)
+    }
+
+    /// [`Self::commits_lost`] for a caller that holds the task's git work.
+    fn commits_lost_locked(&self, task: &DeliveryTask) -> Result<bool, DeliveryError> {
         let latest = self
             .store()?
             .approvals()?
@@ -3465,7 +3510,7 @@ impl DeliveryService {
             .is_some_and(|merge| merge.status == DeliveryApprovalStatus::Executed)
             || self
                 .task_pr(&task.id)?
-                .is_some_and(|pr| pr.state == "merged");
+                .is_some_and(|pr| pr.state == DeliveryPrState::Merged);
         if merged {
             return self.set_drift(push, None);
         }
@@ -3480,6 +3525,18 @@ impl DeliveryService {
             .clone()
             .or_else(|| tasks::git(place, &task.repo, &["rev-parse", &tracking]).ok());
         let drift = match remote {
+            // Its PR merged since Tinto last read it, and GitHub deleted the
+            // branch: no drift; the watch records the merge on its next read.
+            None if self.task_pr(&task.id)?.is_some_and(|pr| {
+                pr.is_open()
+                    && self
+                        .github()
+                        .pr(&pr.url)
+                        .is_ok_and(|live| live["state"].as_str() == Some("MERGED"))
+            }) =>
+            {
+                None
+            }
             None => Some("La rama remota ya no existe".to_string()),
             Some(tip)
                 if published.as_ref().is_some_and(|published| {
@@ -3599,7 +3656,10 @@ impl DeliveryService {
         task: &DeliveryTask,
         mut round: super::model::DeliveryRound,
     ) -> Result<(), DeliveryError> {
-        if round.kind != "checks" || round.waits_merge_commit || task.checks.is_empty() {
+        if round.kind != DeliveryRoundKind::Checks
+            || round.waits_merge_commit
+            || task.checks.is_empty()
+        {
             return Ok(());
         }
         {
@@ -3677,10 +3737,11 @@ impl DeliveryService {
         // A package merged before it may have just freed this one.
         self.retarget_packages()?;
         let task = &self.task(&task.id)?;
-        let blocker = if pr.state != "open" {
+        let blocker = if pr.state != DeliveryPrState::Open {
             Some(format!(
                 "el PR #{} no está abierto ({})",
-                pr.number, pr.state
+                pr.number,
+                pr.state.as_str()
             ))
         } else if let Some(why) = self.package_merge_refusal(task)? {
             Some(format!("el PR #{} {why}", pr.number))
@@ -3766,8 +3827,8 @@ impl DeliveryService {
                 "el Jira de este repositorio ya no tiene host o token en Tinto",
             )
         })?;
-        let pr = match approval.stage.as_deref() {
-            Some(JIRA_AFTER_PR) => self.task_pr(&task.id)?,
+        let pr = match approval.stage {
+            Some(DeliveryJiraStage::AfterPr) => self.task_pr(&task.id)?,
             _ => None,
         };
         super::jira::run_step(
@@ -3797,7 +3858,7 @@ impl DeliveryService {
         self.set_progress(&approval.id, MERGE_CHECKING)?;
         self.refresh_pr(&task.id, std::time::Duration::ZERO)?;
         self.merge_prerequisites(&task, Some(method))?;
-        let pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
+        let mut pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
             DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
         })?;
         // Merged without CI having run: the outcome says why it was not needed.
@@ -3809,14 +3870,30 @@ impl DeliveryService {
         let stacked = !self.stacked_prs(&task)?.is_empty();
         self.set_progress(&approval.id, "Fusionando en GitHub")?;
         // Pinned to the head just checked: a push since is not merged.
-        self.github_client().merge(
-            &pr.url,
-            method,
-            &approval.title,
-            &approval.body,
-            !stacked,
-            pr.head.as_deref(),
-        )?;
+        let merge = |pr: &super::prs::DeliveryPr| {
+            self.github_client().merge(
+                &pr.url,
+                method,
+                &approval.title,
+                &approval.body,
+                !stacked,
+                pr.head.as_deref(),
+            )
+        };
+        match merge(&pr) {
+            // Another PR merged into the base moments before: once more,
+            // with the PR as it is now.
+            Err(error) if error.message.contains("Base branch was modified") => {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                self.refresh_pr(&task.id, std::time::Duration::ZERO)?;
+                self.merge_prerequisites(&task, Some(method))?;
+                pr = self.task_pr(&task.id)?.ok_or_else(|| {
+                    DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
+                })?;
+                merge(&pr)?;
+            }
+            other => other?,
+        }
         let mut outcome = match stacked {
             false => format!(
                 "PR #{} fusionado ({method}) y rama {} borrada en GitHub",

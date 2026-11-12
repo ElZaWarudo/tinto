@@ -635,9 +635,8 @@ pub struct DeliveryRound {
     pub task_id: String,
     /// From 2.
     pub number: u32,
-    /// What sent the work back: `review`, `qa`, `qa_problems`, `checks`,
-    /// `pr` or `sync`.
-    pub kind: String,
+    /// What sent the work back.
+    pub kind: DeliveryRoundKind,
     /// In a few words, for the task list: "5 hallazgos de QA", "PR".
     pub short: String,
     /// One line: "Cambios pedidos en el PR #308 por ana (3 comentarios)".
@@ -673,6 +672,26 @@ impl DeliveryRound {
     pub fn is_current(&self) -> bool {
         self.is_open() && !self.waits_merge_commit
     }
+}
+
+/// What sent a round's work back.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryRoundKind {
+    /// Findings of a review.
+    Review,
+    /// Findings of QA.
+    Qa,
+    /// QA problems the user sent to fix.
+    QaProblems,
+    /// A failing check of Tinto.
+    Checks,
+    /// Changes asked or comments on the PR.
+    Pr,
+    /// Conflicts of a sync.
+    Sync,
+    /// The PR merged in GitHub with checks failing.
+    Ci,
 }
 
 /// One item of an agent's task list.
@@ -876,13 +895,25 @@ impl DeliveryApprovalStatus {
         matches!(self, Self::Executed | Self::Drifted)
     }
 
-    /// Where a step goes on `event`, or `None` when the event cannot happen
-    /// to a step in this status. Rejected and undone steps are final, and
-    /// failed ones but for undoing what they left: the step is asked again
-    /// as a new one.
-    pub fn on(self, event: StepEvent) -> Option<Self> {
+    /// Where a `rung` step goes on `event`, or `None` when the event cannot
+    /// happen to that rung or to a step in this status. Rejected and undone
+    /// steps are final, and failed ones but for undoing what they left: the
+    /// step is asked again as a new one.
+    pub fn on(self, rung: DeliveryRung, event: StepEvent) -> Option<Self> {
         use DeliveryApprovalStatus::*;
         use StepEvent::*;
+        // Only commits are taken back (a sync's with its paused restack),
+        // only a PR or its merge gets done on GitHub, and only the push and
+        // the PR are checked against what git and GitHub show.
+        let takes = match event {
+            Approve | Reject | Ran { .. } => true,
+            Undo => matches!(rung, DeliveryRung::Commit | DeliveryRung::Sync),
+            DoneOutside => matches!(rung, DeliveryRung::Pr | DeliveryRung::Merge),
+            Drift | Holds => matches!(rung, DeliveryRung::Push | DeliveryRung::Pr),
+        };
+        if !takes {
+            return None;
+        }
         match (self, event) {
             (Pending, Approve) => Some(Approved),
             (Pending, Reject) => Some(Rejected),
@@ -943,6 +974,26 @@ pub struct DeliveryCommit {
     pub paths: Vec<String>,
 }
 
+/// When a task's Jira step happens: it comes twice.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryJiraStage {
+    /// The PR is open: the issue goes to review.
+    AfterPr,
+    /// The PR is merged: the issue is closed.
+    AfterMerge,
+}
+
+impl DeliveryJiraStage {
+    /// As stored and as the coordinator names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AfterPr => "after_pr",
+            Self::AfterMerge => "after_merge",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryApproval {
     pub id: String,
@@ -962,10 +1013,9 @@ pub struct DeliveryApproval {
     /// `merge` only: `squash`, `merge` or `rebase`.
     #[serde(default)]
     pub merge_method: Option<String>,
-    /// `jira` only: when it happens, `after_pr` (the PR is open, the issue
-    /// goes to review) or `after_merge` (the issue is closed).
+    /// `jira` only: when it happens.
     #[serde(default)]
-    pub stage: Option<String>,
+    pub stage: Option<DeliveryJiraStage>,
     /// `jira` only: the statuses Tinto walks the issue through, in order,
     /// when the repo's Jira is set in Tinto. Empty: the coordinator does the
     /// step and reports it.
@@ -1081,10 +1131,10 @@ pub struct DeliveryProgress {
 }
 
 impl DeliveryApproval {
-    /// Moves the step on `event`, refusing an event its status does not
-    /// allow (see [`DeliveryApprovalStatus::on`]).
+    /// Moves the step on `event`, refusing an event its rung or status does
+    /// not allow (see [`DeliveryApprovalStatus::on`]).
     pub fn advance(&mut self, event: StepEvent) -> Result<(), super::DeliveryError> {
-        let next = self.status.on(event).ok_or_else(|| {
+        let next = self.status.on(self.rung, event).ok_or_else(|| {
             super::DeliveryError::new(
                 "step_transition",
                 format!(
@@ -1422,6 +1472,16 @@ pub struct DeliverySettingsChanges {
     /// Variables for checks, by name, each set to the value given.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub check_env: BTreeMap<String, String>,
+    /// The repo's Jira statuses once the PR is open, replacing them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira_after_pr: Option<Vec<String>>,
+    /// The repo's Jira statuses once the PR is merged, replacing them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira_after_merge: Option<Vec<String>>,
+    /// Fields a Jira transition gets, by transition id, name or target
+    /// status, each set to the fields given (adding or replacing it).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub jira_transition_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1454,13 +1514,19 @@ pub struct DeliverySettingsProposal {
     pub decided_at_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryRunStatus {
+    Active,
+    Closed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryRun {
     pub id: String,
     pub repo: std::path::PathBuf,
     pub title: String,
-    /// `active` or `closed`.
-    pub status: String,
+    pub status: DeliveryRunStatus,
     /// Increases on every takeover; older generations are fenced.
     pub generation: u64,
     pub owner: Option<String>,
@@ -1502,6 +1568,10 @@ pub struct DeliveryRun {
     /// When Tinto last woke it.
     #[serde(default)]
     pub notified_at_ms: Option<u64>,
+    /// When its owner was last heard from: the last reply wait_run handed
+    /// it. A coordinator about to take the batch over reads it.
+    #[serde(default)]
+    pub owner_seen_at_ms: Option<u64>,
 }
 
 /// One entry of Delivery's audit trail; `seq` is the cursor of wait_run.
@@ -1953,6 +2023,9 @@ pub struct DeliveryCoordinatorState {
     pub unread: u32,
     /// When the oldest of them happened.
     pub unread_since_ms: Option<u64>,
+    /// How long ago its owner was last heard from (the run's
+    /// `owner_seen_at_ms`); `None` before its first wait_run.
+    pub owner_seen_seconds_ago: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1994,17 +2067,43 @@ mod tests {
 
     #[test]
     fn a_step_moves_only_through_its_lifecycle() {
-        // Approved, then run; a done step drifts and holds again.
-        assert_eq!(Pending.on(Approve), Some(Approved));
-        assert_eq!(Approved.on(Ran { ok: false }), Some(Failed));
-        assert_eq!(Executed.on(Drift).and_then(|s| s.on(Holds)), Some(Executed));
-        // Done on GitHub while waiting for the user.
-        assert_eq!(Pending.on(DoneOutside), Some(Executed));
+        use super::DeliveryRung::{self, *};
+        // Approved, then run; a done push drifts and holds again.
+        assert_eq!(Pending.on(Jira, Approve), Some(Approved));
+        assert_eq!(Approved.on(Jira, Ran { ok: false }), Some(Failed));
+        assert_eq!(
+            Executed.on(Push, Drift).and_then(|s| s.on(Push, Holds)),
+            Some(Executed)
+        );
+        // Merged on GitHub while waiting for the user.
+        assert_eq!(Pending.on(Merge, DoneOutside), Some(Executed));
         // Nothing runs or is reported before the user approves it.
-        assert_eq!(Pending.on(Ran { ok: true }), None);
+        assert_eq!(Pending.on(Jira, Ran { ok: true }), None);
         // A commit plan that failed halfway can be undone; a push cannot.
-        assert_eq!(Failed.on(Undo), Some(Undone));
-        assert_eq!(Pending.on(Undo), None);
+        assert_eq!(Failed.on(Commit, Undo), Some(Undone));
+        assert_eq!(Failed.on(Push, Undo), None);
+        assert_eq!(Pending.on(Commit, Undo), None);
+        // Each rung takes only the events that can happen to it.
+        let all = [Commit, Sync, Push, Pr, Merge, Jira, PrReply];
+        let takers: [(
+            super::StepEvent,
+            super::DeliveryApprovalStatus,
+            &[DeliveryRung],
+        ); 4] = [
+            (Undo, Executed, &[Commit, Sync]),
+            (DoneOutside, Pending, &[Pr, Merge]),
+            (Drift, Executed, &[Push, Pr]),
+            (Holds, Drifted, &[Push, Pr]),
+        ];
+        for (event, from, rungs) in takers {
+            for rung in all {
+                assert_eq!(
+                    from.on(rung, event).is_some(),
+                    rungs.contains(&rung),
+                    "{rung:?} {event:?}"
+                );
+            }
+        }
         // Rejected and undone steps are asked again as new ones.
         for event in [
             Approve,
@@ -2015,8 +2114,54 @@ mod tests {
             Holds,
             Undo,
         ] {
-            assert_eq!(Rejected.on(event), None, "{event:?}");
-            assert_eq!(Undone.on(event), None, "{event:?}");
+            for rung in all {
+                assert_eq!(Rejected.on(rung, event), None, "{rung:?} {event:?}");
+                assert_eq!(Undone.on(rung, event), None, "{rung:?} {event:?}");
+            }
+        }
+    }
+
+    /// Typed states keep the strings stored before them: saved rows still
+    /// load, and the frontend and the coordinator see the same values.
+    #[test]
+    fn typed_states_keep_their_stored_strings() {
+        fn same<T>(pairs: &[(T, &str)])
+        where
+            T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+        {
+            for (value, text) in pairs {
+                assert_eq!(serde_json::to_value(value).unwrap(), *text);
+                assert_eq!(&serde_json::from_value::<T>((*text).into()).unwrap(), value);
+            }
+        }
+        {
+            use super::DeliveryRoundKind::*;
+            same(&[
+                (Review, "review"),
+                (Qa, "qa"),
+                (QaProblems, "qa_problems"),
+                (Checks, "checks"),
+                (Pr, "pr"),
+                (Sync, "sync"),
+                (Ci, "ci"),
+            ]);
+        }
+        {
+            use super::super::prs::DeliveryPrState::*;
+            same(&[
+                (Unknown, "unknown"),
+                (Open, "open"),
+                (Merged, "merged"),
+                (Closed, "closed"),
+            ]);
+        }
+        {
+            use super::DeliveryRunStatus::*;
+            same(&[(Active, "active"), (Closed, "closed")]);
+        }
+        {
+            use super::DeliveryJiraStage::*;
+            same(&[(AfterPr, "after_pr"), (AfterMerge, "after_merge")]);
         }
     }
 }

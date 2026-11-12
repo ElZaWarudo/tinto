@@ -55,6 +55,13 @@ fn clean(changes: &DeliverySettingsChanges) -> DeliverySettingsChanges {
             .iter()
             .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
             .collect(),
+        jira_after_pr: changes.jira_after_pr.as_deref().map(trimmed),
+        jira_after_merge: changes.jira_after_merge.as_deref().map(trimmed),
+        jira_transition_fields: changes
+            .jira_transition_fields
+            .iter()
+            .map(|(key, fields)| (key.trim().to_string(), fields.clone()))
+            .collect(),
     }
 }
 
@@ -70,6 +77,13 @@ fn is_empty(changes: &DeliverySettingsChanges) -> bool {
         && changes.qa_browser.is_none()
         && changes.verification.is_none()
         && changes.check_env.is_empty()
+        && !touches_jira(changes)
+}
+
+fn touches_jira(changes: &DeliverySettingsChanges) -> bool {
+    changes.jira_after_pr.is_some()
+        || changes.jira_after_merge.is_some()
+        || !changes.jira_transition_fields.is_empty()
 }
 
 /// Why a command agents would run cannot be proposed, if it cannot.
@@ -189,6 +203,44 @@ fn problems(
             problems.push(format!("check_env «{name}»: ya tiene ese valor"));
         }
     }
+    if touches_jira(changes) {
+        match &settings.jira {
+            None => problems.push(
+                "jira: el repositorio no tiene Jira en Tinto; el usuario lo configura en Ajustes"
+                    .to_string(),
+            ),
+            Some(jira) => {
+                for (field, statuses, current) in [
+                    ("jira_after_pr", &changes.jira_after_pr, &jira.after_pr),
+                    (
+                        "jira_after_merge",
+                        &changes.jira_after_merge,
+                        &jira.after_merge,
+                    ),
+                ] {
+                    let Some(statuses) = statuses else { continue };
+                    if statuses.iter().any(|status| status.is_empty()) {
+                        problems.push(format!("{field}: un estado está vacío"));
+                    } else if statuses == current {
+                        problems.push(format!("{field}: ya tiene esos estados"));
+                    }
+                }
+                for (key, fields) in &changes.jira_transition_fields {
+                    if key.is_empty() {
+                        problems.push("jira_transition_fields: una transición sin nombre".into());
+                    } else if !fields.is_object() {
+                        problems.push(format!(
+                            "jira_transition_fields «{key}»: debe ser un objeto con los campos, como {{\"customfield_10617\": {{\"value\": \"NO\"}}}}"
+                        ));
+                    } else if jira.transition_fields.get(key) == Some(fields) {
+                        problems.push(format!(
+                            "jira_transition_fields «{key}»: ya tiene esos campos"
+                        ));
+                    }
+                }
+            }
+        }
+    }
     problems
 }
 
@@ -209,6 +261,12 @@ fn is_part_of(part: &DeliverySettingsChanges, whole: &DeliverySettingsChanges) -
             .check_env
             .iter()
             .all(|(name, value)| whole.check_env.get(name) == Some(value))
+        && (part.jira_after_pr.is_none() || part.jira_after_pr == whole.jira_after_pr)
+        && (part.jira_after_merge.is_none() || part.jira_after_merge == whole.jira_after_merge)
+        && part
+            .jira_transition_fields
+            .iter()
+            .all(|(key, fields)| whole.jira_transition_fields.get(key) == Some(fields))
 }
 
 /// The settings with the changes applied. Adding what is already there or
@@ -258,6 +316,17 @@ fn apply(settings: &mut DeliveryRepoSettings, changes: &DeliverySettingsChanges)
         settings.verification = verification.clone();
     }
     settings.check_env.extend(changes.check_env.clone());
+    // Jira changes are proposed only for a repo with its Jira set.
+    if let Some(jira) = settings.jira.as_mut() {
+        if let Some(statuses) = &changes.jira_after_pr {
+            jira.after_pr = statuses.clone();
+        }
+        if let Some(statuses) = &changes.jira_after_merge {
+            jira.after_merge = statuses.clone();
+        }
+        jira.transition_fields
+            .extend(changes.jira_transition_fields.clone());
+    }
 }
 
 impl DeliveryService {
@@ -592,6 +661,7 @@ mod tests {
                 qa_browser: Some(true),
                 verification: Some("e2e".into()),
                 check_env: [("DB".to_string(), "mongodb://h/agos{task}".to_string())].into(),
+                ..Default::default()
             },
         );
         assert_eq!(settings.checks, ["npm test", "new"]);
@@ -601,6 +671,37 @@ mod tests {
         assert!(settings.qa_browser);
         assert_eq!(settings.verification, "e2e");
         assert_eq!(settings.check_env["DB"], "mongodb://h/agos{task}");
+    }
+
+    #[test]
+    fn jira_statuses_and_transition_fields_apply_to_a_repo_with_jira() {
+        let fields = serde_json::json!({"customfield_10617": {"value": "NO"}});
+        let changes = DeliverySettingsChanges {
+            jira_after_pr: Some(vec!["En ejecución".into(), "In Review".into()]),
+            jira_transition_fields: [("Start Work".to_string(), fields.clone())].into(),
+            ..Default::default()
+        };
+        let without_jira = problems(&changes, &DeliveryRepoSettings::default(), &task());
+        assert!(
+            without_jira[0].contains("no tiene Jira"),
+            "{without_jira:?}"
+        );
+        let mut settings = DeliveryRepoSettings {
+            jira: Some(super::super::model::DeliveryJiraSettings {
+                host: "https://jira.test".into(),
+                after_merge: vec!["Cerrada".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(problems(&changes, &settings, &task()).is_empty());
+        apply(&mut settings, &changes);
+        let jira = settings.jira.as_ref().unwrap();
+        assert_eq!(jira.after_pr, ["En ejecución", "In Review"]);
+        assert_eq!(jira.after_merge, ["Cerrada"]);
+        assert_eq!(jira.transition_fields["Start Work"], fields);
+        let again = problems(&changes, &settings, &task());
+        assert_eq!(again.len(), 2, "{again:?}");
     }
 
     #[test]

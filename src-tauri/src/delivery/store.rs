@@ -2,6 +2,7 @@
 //! the Agents journal so the two never share migrations. Each record is
 //! stored as JSON next to the few columns that are queried.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -553,6 +554,19 @@ impl DeliveryStore {
         Ok(seq.unwrap_or(0) as u64)
     }
 
+    /// The detail of each task's newest entry of `kind`, by task.
+    pub fn latest_task_details(
+        &self,
+        kind: &str,
+    ) -> Result<HashMap<String, String>, DeliveryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, detail FROM events WHERE seq IN \
+             (SELECT MAX(seq) FROM events WHERE kind = ?1 AND task_id IS NOT NULL GROUP BY task_id)",
+        )?;
+        let rows = stmt.query_map([kind], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<Result<HashMap<String, String>, _>>()?)
+    }
+
     #[cfg(test)]
     pub fn event_kinds(&self) -> Result<Vec<String>, DeliveryError> {
         let mut stmt = self.conn.prepare("SELECT kind FROM events ORDER BY seq")?;
@@ -630,7 +644,13 @@ mod tests {
         );
         DeliveryStore::open(&dir.path().join("delivery.sqlite")).unwrap();
         drop(held);
-        DeliveryStore::lock_instance(dir.path()).unwrap();
+        // A command another test starts meanwhile is forked with the lock
+        // file open and keeps the lock until it execs: free a moment later.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while let Err(error) = DeliveryStore::lock_instance(dir.path()) {
+            assert!(std::time::Instant::now() < deadline, "{error:?}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]

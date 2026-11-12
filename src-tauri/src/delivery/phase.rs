@@ -11,16 +11,16 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::coordination::{JIRA_AFTER_MERGE, JIRA_AFTER_PR};
 use super::model::SCOPE_ROLE;
 use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
-    DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJob, DeliveryJobStatus,
-    DeliveryLease, DeliveryLeaseState, DeliveryQaProblem, DeliveryQaProblemStatus,
-    DeliveryQueueWait, DeliveryResultState, DeliveryRound, DeliveryRun, DeliveryRung,
-    DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
+    DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJiraStage, DeliveryJob,
+    DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryQaProblem,
+    DeliveryQaProblemStatus, DeliveryQueueWait, DeliveryResultState, DeliveryRound,
+    DeliveryRoundKind, DeliveryRun, DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue,
+    DeliveryTask,
 };
-use super::prs::{CiState, DeliveryPr};
+use super::prs::{CiState, DeliveryPr, DeliveryPrState};
 use super::reviews::ReviewState;
 use super::service::{CHECKS_ROLE, SETUP_ROLE};
 
@@ -28,13 +28,13 @@ use super::service::{CHECKS_ROLE, SETUP_ROLE};
 pub const STAGES: [&str; 4] = ["tests", "implementation", "review", "qa"];
 
 /// The delivery ladder: Jira comes twice, once the PR is open and once merged.
-pub const STEPS: [(DeliveryRung, Option<&str>); 6] = [
+pub const STEPS: [(DeliveryRung, Option<DeliveryJiraStage>); 6] = [
     (DeliveryRung::Commit, None),
     (DeliveryRung::Push, None),
     (DeliveryRung::Pr, None),
-    (DeliveryRung::Jira, Some(JIRA_AFTER_PR)),
+    (DeliveryRung::Jira, Some(DeliveryJiraStage::AfterPr)),
     (DeliveryRung::Merge, None),
-    (DeliveryRung::Jira, Some(JIRA_AFTER_MERGE)),
+    (DeliveryRung::Jira, Some(DeliveryJiraStage::AfterMerge)),
 ];
 
 /// Who has to act for the task to move.
@@ -70,7 +70,7 @@ pub enum Phase {
     /// The user approves a delivery step.
     Approval {
         rung: DeliveryRung,
-        stage: Option<String>,
+        stage: Option<DeliveryJiraStage>,
     },
     /// An approved step Tinto is running apart (a merge): what it is doing
     /// and since when. Nobody has to act.
@@ -82,12 +82,12 @@ pub enum Phase {
     /// An approved PR or Jira step the coordinator still has to report.
     Record {
         rung: DeliveryRung,
-        stage: Option<String>,
+        stage: Option<DeliveryJiraStage>,
     },
     /// A done step git or GitHub no longer bear out.
     Drifted {
         rung: DeliveryRung,
-        stage: Option<String>,
+        stage: Option<DeliveryJiraStage>,
     },
     Running {
         job_id: String,
@@ -192,7 +192,7 @@ pub enum Phase {
     },
     NextStep {
         rung: DeliveryRung,
-        stage: Option<String>,
+        stage: Option<DeliveryJiraStage>,
     },
 }
 
@@ -273,10 +273,48 @@ pub struct DeliveryTaskPhase {
     /// `pr_reply` for each, which resolves its thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads_to_answer: Vec<String>,
+    /// The first step of its ladder not done; none once delivered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<DeliveryStep>,
+    /// What these rules say of each of its jobs, by id, for the view to word
+    /// them as the phase does; jobs none applies to are left out. The
+    /// coordinator's overview leaves it out.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub verdicts: BTreeMap<String, JobVerdict>,
 }
 
 fn is_zero(count: &usize) -> bool {
     *count == 0
+}
+
+/// One job as the phase reads it (see `is_broken`, `is_passed`,
+/// `is_answered`, `is_superseded`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobVerdict {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub broken: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub passed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub answered: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub superseded: bool,
+}
+
+/// The verdicts of a task's jobs (oldest first) that say anything.
+fn verdicts(jobs: &[&DeliveryJob]) -> BTreeMap<String, JobVerdict> {
+    jobs.iter()
+        .map(|job| {
+            let verdict = JobVerdict {
+                broken: is_broken(job),
+                passed: is_passed(job),
+                answered: is_answered(job, jobs),
+                superseded: is_superseded(job, jobs),
+            };
+            (job.id.clone(), verdict)
+        })
+        .filter(|(_, verdict)| *verdict != JobVerdict::default())
+        .collect()
 }
 
 /// A task's open round and where it is in it.
@@ -293,7 +331,7 @@ pub struct CurrentRound {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryStep {
     pub rung: DeliveryRung,
-    pub stage: Option<String>,
+    pub stage: Option<DeliveryJiraStage>,
 }
 
 /// Everything the phase of a task depends on, as the overview has it.
@@ -590,7 +628,7 @@ pub const MERGE_STAGES: [&str; 2] = ["implementation", "review"];
 /// Whether a round is one of `sync`'s conflicts: its first, or one of the
 /// later stops of a restack (`<sync id>#<when>`).
 pub fn is_sync_round(round: &DeliveryRound, sync: &DeliveryApproval) -> bool {
-    round.kind == "sync"
+    round.kind == DeliveryRoundKind::Sync
         && round.source.as_deref().is_some_and(|source| {
             source == sync.id
                 || source
@@ -607,11 +645,13 @@ pub fn resolves_merge(
     jobs: &[&DeliveryJob],
 ) -> bool {
     let at = sync.executed_at_ms.unwrap_or(0);
-    (round.kind == "sync" && round.source.as_deref() == Some(sync.id.as_str()))
-        || (matches!(round.kind.as_str(), "review" | "checks")
-            && jobs.iter().any(|job| {
-                Some(job.id.as_str()) == round.source.as_deref() && job.created_at_ms > at
-            }))
+    (round.kind == DeliveryRoundKind::Sync && round.source.as_deref() == Some(sync.id.as_str()))
+        || (matches!(
+            round.kind,
+            DeliveryRoundKind::Review | DeliveryRoundKind::Checks
+        ) && jobs
+            .iter()
+            .any(|job| Some(job.id.as_str()) == round.source.as_deref() && job.created_at_ms > at))
 }
 
 /// The merge's conflicts are resolved and verified: since the sync an
@@ -707,18 +747,22 @@ fn paused_job<'a>(jobs: &[&'a DeliveryJob]) -> Option<&'a DeliveryJob> {
         .copied()
 }
 
-fn step_matches(approval: &DeliveryApproval, rung: DeliveryRung, stage: Option<&str>) -> bool {
+fn step_matches(
+    approval: &DeliveryApproval,
+    rung: DeliveryRung,
+    stage: Option<DeliveryJiraStage>,
+) -> bool {
     approval.rung == rung
         && match stage {
             None => true,
-            Some(stage) => approval.stage.as_deref().unwrap_or(JIRA_AFTER_PR) == stage,
+            Some(stage) => approval.stage.unwrap_or(DeliveryJiraStage::AfterPr) == stage,
         }
 }
 
 fn latest_step<'a>(
     approvals: &[&'a DeliveryApproval],
     rung: DeliveryRung,
-    stage: Option<&str>,
+    stage: Option<DeliveryJiraStage>,
 ) -> Option<&'a DeliveryApproval> {
     approvals
         .iter()
@@ -735,7 +779,7 @@ pub fn step_done(approvals: &[&DeliveryApproval], rung: DeliveryRung) -> bool {
 
 /// The ladder the task climbs. A middle package of a split issue ends at
 /// its merge: the issue closes in Jira with its last package.
-pub fn steps_for(task: &DeliveryTask) -> Vec<(DeliveryRung, Option<&'static str>)> {
+pub fn steps_for(task: &DeliveryTask) -> Vec<(DeliveryRung, Option<DeliveryJiraStage>)> {
     let middle = task
         .package
         .as_ref()
@@ -743,7 +787,9 @@ pub fn steps_for(task: &DeliveryTask) -> Vec<(DeliveryRung, Option<&'static str>
     STEPS
         .into_iter()
         .filter(|(rung, stage)| {
-            !(middle && *rung == DeliveryRung::Jira && *stage == Some(JIRA_AFTER_MERGE))
+            !(middle
+                && *rung == DeliveryRung::Jira
+                && *stage == Some(DeliveryJiraStage::AfterMerge))
         })
         .collect()
 }
@@ -757,20 +803,16 @@ pub fn is_delivered(task: &DeliveryTask, approvals: &[&DeliveryApproval]) -> boo
 pub(super) fn next_step(
     task: &DeliveryTask,
     approvals: &[&DeliveryApproval],
-) -> Option<(DeliveryRung, Option<&'static str>)> {
+) -> Option<(DeliveryRung, Option<DeliveryJiraStage>)> {
     steps_for(task).into_iter().find(|(rung, stage)| {
         latest_step(approvals, *rung, *stage)
             .is_none_or(|step| step.status != DeliveryApprovalStatus::Executed)
     })
 }
 
-fn stage_of(approval: &DeliveryApproval) -> Option<String> {
-    (approval.rung == DeliveryRung::Jira).then(|| {
-        approval
-            .stage
-            .clone()
-            .unwrap_or_else(|| JIRA_AFTER_PR.into())
-    })
+fn stage_of(approval: &DeliveryApproval) -> Option<DeliveryJiraStage> {
+    (approval.rung == DeliveryRung::Jira)
+        .then(|| approval.stage.unwrap_or(DeliveryJiraStage::AfterPr))
 }
 
 /// The stage to run next: none while a stage or Tinto's checks run, wait
@@ -917,7 +959,7 @@ pub fn split_issues(
             || facts
                 .prs
                 .iter()
-                .any(|pr| pr.task_id == task.id && pr.state == "merged");
+                .any(|pr| pr.task_id == task.id && pr.state == DeliveryPrState::Merged);
         let entry = DeliveryIssuePackage {
             task_id: task.id.clone(),
             index: package.index,
@@ -1008,7 +1050,7 @@ pub fn pr_wait(
     to_answer: &[String],
     review_optional: bool,
 ) -> PrWait {
-    if pr.state == "merged" {
+    if pr.state == DeliveryPrState::Merged {
         return PrWait::Ready;
     }
     let logins = |keep: fn(ReviewState) -> bool| -> Vec<String> {
@@ -1018,7 +1060,7 @@ pub fn pr_wait(
             .map(|reviewer| reviewer.login.clone())
             .collect()
     };
-    if pr.state == "open" && !replies.is_empty() {
+    if pr.state == DeliveryPrState::Open && !replies.is_empty() {
         let mut reviewers: Vec<String> = replies
             .iter()
             .flatten()
@@ -1037,7 +1079,7 @@ pub fn pr_wait(
     };
     let untracked_changes = pr.review_decision.as_deref() == Some("changes_requested")
         && (pr.changes_requested_by.is_empty() || !pr.changes_requested_by.iter().all(tracked));
-    let trouble = pr.state == "closed"
+    let trouble = pr.state == DeliveryPrState::Closed
         || pr.new_reviews + pr.new_comments > 0
         || pr.checks.failing > 0
         || pr.ci == Some(CiState::NotRun)
@@ -1105,13 +1147,20 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         round: round.clone(),
         at: round_at(&phase),
     });
+    let jobs: Vec<&DeliveryJob> = facts
+        .jobs
+        .iter()
+        .filter(|job| job.task_id == task.id)
+        .collect();
+    phase.verdicts = verdicts(&jobs);
+    let approvals: Vec<&DeliveryApproval> = facts
+        .approvals
+        .iter()
+        .filter(|approval| approval.task_id == task.id)
+        .collect();
+    phase.next_step = next_step(task, &approvals).map(|(rung, stage)| DeliveryStep { rung, stage });
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         phase.threads_unanswered = pr.unanswered().count();
-        let approvals: Vec<&DeliveryApproval> = facts
-            .approvals
-            .iter()
-            .filter(|approval| approval.task_id == task.id)
-            .collect();
         phase.threads_to_answer = threads_to_answer(pr, &approvals)
             .iter()
             .map(|thread| thread.label())
@@ -1136,6 +1185,66 @@ fn round_at(phase: &DeliveryTaskPhase) -> String {
         | Phase::Drifted { rung, .. }
         | Phase::NextStep { rung, .. } => format!("{rung:?}").to_ascii_lowercase(),
         _ => phase.next_stage.clone().unwrap_or_default(),
+    }
+}
+
+/// The facts besides the phase itself that decide who some phases wait on.
+struct WaiterFacts {
+    /// Past its run's brainstorm, what the coordinator can act on does not
+    /// wait for the user.
+    unattended: bool,
+    /// Nothing of its batch waits on the user's answer: the coordinator
+    /// checks the environment and releases a quarantined resource.
+    releases_quarantine: bool,
+    /// One of its open blockers is in Tinto (a task, a decision).
+    blocked_inside: bool,
+    /// Replies to reviewers wait for the user's approval.
+    replies_pending: bool,
+}
+
+/// Who a phase waits on. Every phase is named, so a new one has to say.
+fn waiter(phase: &Phase, facts: &WaiterFacts) -> Waiter {
+    match phase {
+        Phase::Decisions { .. }
+        | Phase::QaProblems { .. }
+        | Phase::Approval { .. }
+        | Phase::Paused { .. }
+        | Phase::BatchPaused { .. }
+        | Phase::WaitsEnvironment { .. }
+        | Phase::Quarantined { .. }
+        | Phase::SettingsProposal
+        | Phase::MergeMixed { .. } => Waiter::User,
+        Phase::StepRunning { .. } | Phase::Delivered => Waiter::Nobody,
+        Phase::Record { .. }
+        | Phase::SetupFailed { .. }
+        | Phase::Unblocked { .. }
+        | Phase::Broken { .. }
+        | Phase::WaitsMergeCommit { .. }
+        | Phase::MergedFailingCi { .. }
+        | Phase::NextStage { .. } => Waiter::Coordinator,
+        // A push is put right by asking for it again, which the
+        // coordinator does, and so are the PR and Jira steps past the
+        // brainstorm; the other steps wait on the user.
+        Phase::Drifted { rung, .. } => match rung {
+            DeliveryRung::Push => Waiter::Coordinator,
+            DeliveryRung::Pr | DeliveryRung::Jira if facts.unattended => Waiter::Coordinator,
+            _ => Waiter::User,
+        },
+        Phase::Running { .. } => Waiter::Agent,
+        Phase::Queued { .. } => Waiter::Queue,
+        Phase::WaitsQuarantine { .. } if facts.releases_quarantine => Waiter::Coordinator,
+        Phase::WaitsQuarantine { .. } => Waiter::User,
+        Phase::Blocked { .. } if facts.blocked_inside => Waiter::Dependency,
+        Phase::Blocked { .. } => Waiter::External,
+        Phase::PrWaitsPredecessor { .. } => Waiter::Dependency,
+        Phase::Pr { wait, .. } => wait.waiter(facts.unattended),
+        // The PR step on an open PR is refused until every thread has a
+        // reply: while replies wait for approval, it waits on the user.
+        Phase::NextStep {
+            rung: DeliveryRung::Pr,
+            ..
+        } if facts.replies_pending => Waiter::User,
+        Phase::NextStep { .. } => Waiter::Coordinator,
     }
 }
 
@@ -1184,7 +1293,7 @@ fn phase_in_round(
     // Changes asked on the PR sent the work back and no stage answered
     // them yet: implementation does.
     let unanswered = round.is_some_and(|round| {
-        round.kind == "pr"
+        round.kind == DeliveryRoundKind::Pr
             && !round.waits_merge_commit
             && !jobs.iter().any(|job| {
                 job.agent != DeliveryAgent::Shell && job.created_at_ms >= round.opened_at_ms
@@ -1200,10 +1309,7 @@ fn phase_in_round(
     } else {
         ladder
             .into_iter()
-            .map(|(rung, stage)| DeliveryStep {
-                rung,
-                stage: stage.map(str::to_string),
-            })
+            .map(|(rung, stage)| DeliveryStep { rung, stage })
             .collect()
     };
     let warning = jobs
@@ -1224,14 +1330,23 @@ fn phase_in_round(
         })
         .map(|approval| approval.reply_to())
         .collect();
-    let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
-        waits_on: match &phase {
-            Phase::NextStep {
-                rung: DeliveryRung::Pr,
-                ..
-            } if !replies.is_empty() => Waiter::User,
-            _ => waits_on,
-        },
+    let open: Vec<&DeliveryBlocker> = task.blockers.iter().filter(|b| b.is_open()).collect();
+    let waiter_facts = WaiterFacts {
+        unattended,
+        releases_quarantine: task
+            .run_id
+            .as_ref()
+            .is_some_and(|run| facts.releasable_runs.contains(run)),
+        blocked_inside: open.iter().any(|blocker| {
+            matches!(
+                blocker.kind,
+                DeliveryBlockerKind::Task { .. } | DeliveryBlockerKind::Decision { .. }
+            )
+        }),
+        replies_pending: !replies.is_empty(),
+    };
+    let phase = |phase: Phase| DeliveryTaskPhase {
+        waits_on: waiter(&phase, &waiter_facts),
         phase,
         next_stage: next.clone(),
         steps: steps.clone(),
@@ -1240,6 +1355,8 @@ fn phase_in_round(
         failing_checks: failing.clone(),
         threads_unanswered: 0,
         threads_to_answer: Vec::new(),
+        next_step: None,
+        verdicts: BTreeMap::new(),
     };
 
     let decisions = facts
@@ -1250,19 +1367,16 @@ fn phase_in_round(
         })
         .count();
     if decisions > 0 {
-        return phase(Phase::Decisions { count: decisions }, Waiter::User);
+        return phase(Phase::Decisions { count: decisions });
     }
     if let Some(step) = approvals
         .iter()
         .find(|approval| approval.status == DeliveryApprovalStatus::Pending)
     {
-        return phase(
-            Phase::Approval {
-                rung: step.rung,
-                stage: stage_of(step),
-            },
-            Waiter::User,
-        );
+        return phase(Phase::Approval {
+            rung: step.rung,
+            stage: stage_of(step),
+        });
     }
     // What Tinto itself waits on the user for comes before any blocker: the
     // QA problems the user decides, and replies to reviewers (a push to the
@@ -1275,7 +1389,7 @@ fn phase_in_round(
         })
         .count();
     if problems > 0 {
-        return phase(Phase::QaProblems { count: problems }, Waiter::User);
+        return phase(Phase::QaProblems { count: problems });
     }
 
     // Approved, or done and still cleaning up after it (its branch).
@@ -1288,47 +1402,30 @@ fn phase_in_round(
         .flatten()
         .map(|progress| (approval, progress))
     }) {
-        return phase(
-            Phase::StepRunning {
-                rung: step.rung,
-                step: progress.step.clone(),
-                since_ms: progress.since_ms,
-            },
-            Waiter::Nobody,
-        );
+        return phase(Phase::StepRunning {
+            rung: step.rung,
+            step: progress.step.clone(),
+            since_ms: progress.since_ms,
+        });
     }
     if let Some(step) = approvals
         .iter()
         .find(|approval| approval.status == DeliveryApprovalStatus::Approved)
     {
-        return phase(
-            Phase::Record {
-                rung: step.rung,
-                stage: stage_of(step),
-            },
-            Waiter::Coordinator,
-        );
+        return phase(Phase::Record {
+            rung: step.rung,
+            stage: stage_of(step),
+        });
     }
     if let Some(step) = approvals.iter().find(|approval| {
         approval.status == DeliveryApprovalStatus::Drifted
-            && latest_step(&approvals, approval.rung, stage_of(approval).as_deref())
+            && latest_step(&approvals, approval.rung, stage_of(approval))
                 .is_some_and(|latest| latest.id == approval.id)
     }) {
-        // A push is put right by asking for it again, which the
-        // coordinator does, and so are the PR and Jira steps past the
-        // brainstorm; the other steps wait on the user.
-        let waits_on = match step.rung {
-            DeliveryRung::Push => Waiter::Coordinator,
-            DeliveryRung::Pr | DeliveryRung::Jira if unattended => Waiter::Coordinator,
-            _ => Waiter::User,
-        };
-        return phase(
-            Phase::Drifted {
-                rung: step.rung,
-                stage: stage_of(step),
-            },
-            waits_on,
-        );
+        return phase(Phase::Drifted {
+            rung: step.rung,
+            stage: stage_of(step),
+        });
     }
     if let Some(job) = jobs.iter().find(|job| {
         matches!(
@@ -1336,61 +1433,46 @@ fn phase_in_round(
             DeliveryJobStatus::Pending | DeliveryJobStatus::Started
         )
     }) {
-        return phase(
-            Phase::Running {
-                job_id: job.id.clone(),
-                role: job.role.clone(),
-            },
-            Waiter::Agent,
-        );
+        return phase(Phase::Running {
+            job_id: job.id.clone(),
+            role: job.role.clone(),
+        });
     }
     if let Some(job) = paused_job(&jobs) {
-        return phase(
-            Phase::Paused {
-                job_id: job.id.clone(),
-                role: job.role.clone(),
-            },
-            Waiter::User,
-        );
+        return phase(Phase::Paused {
+            job_id: job.id.clone(),
+            role: job.role.clone(),
+        });
     }
     if let Some(job) = current_setup(&task.setup, &jobs)
         .into_iter()
         .find(|job| !job.status.is_open() && job.status != DeliveryJobStatus::Finished)
     {
-        return phase(
-            Phase::SetupFailed {
-                job_id: job.id.clone(),
-                command: job.prompt.clone(),
-            },
-            Waiter::Coordinator,
-        );
+        return phase(Phase::SetupFailed {
+            job_id: job.id.clone(),
+            command: job.prompt.clone(),
+        });
     }
     if let Some(job) = jobs
         .iter()
         .find(|job| job.status == DeliveryJobStatus::Queued)
     {
         if let Some(problem) = &job.waits_environment {
-            return phase(
-                Phase::WaitsEnvironment {
-                    job_id: job.id.clone(),
-                    role: job.role.clone(),
-                    problem: problem.clone(),
-                },
-                Waiter::User,
-            );
+            return phase(Phase::WaitsEnvironment {
+                job_id: job.id.clone(),
+                role: job.role.clone(),
+                problem: problem.clone(),
+            });
         }
         let run_paused = facts
             .runs
             .iter()
             .any(|run| Some(&run.id) == task.run_id.as_ref() && run.paused);
         if run_paused {
-            return phase(
-                Phase::BatchPaused {
-                    job_id: job.id.clone(),
-                    role: job.role.clone(),
-                },
-                Waiter::User,
-            );
+            return phase(Phase::BatchPaused {
+                job_id: job.id.clone(),
+                role: job.role.clone(),
+            });
         }
         let lease = facts
             .leases
@@ -1413,19 +1495,10 @@ fn phase_in_round(
         if let Some(lease) = wanted
             .filter(|lease| lease.state == DeliveryLeaseState::Quarantined && !takes_over(lease))
         {
-            // Once nothing of the batch waits on the user, the coordinator
-            // checks the environment and releases it.
-            let releases = match task.run_id.as_ref() {
-                Some(run) if facts.releasable_runs.contains(run) => Waiter::Coordinator,
-                _ => Waiter::User,
-            };
-            return phase(
-                Phase::WaitsQuarantine {
-                    job_id: job.id.clone(),
-                    lease: lease.name.clone(),
-                },
-                releases,
-            );
+            return phase(Phase::WaitsQuarantine {
+                job_id: job.id.clone(),
+                lease: lease.name.clone(),
+            });
         }
         let position = match lease {
             Some(lease) => {
@@ -1456,77 +1529,51 @@ fn phase_in_round(
             }
         };
         let wait = facts.queued.get(&job.id);
-        return phase(
-            Phase::Queued {
-                job_id: job.id.clone(),
-                role: job.role.clone(),
-                lease: lease.map(|lease| lease.name.clone()),
-                position,
-                reason: wait.map(|wait| wait.reason.clone()),
-                since_ms: wait.map(|wait| wait.since_ms),
-            },
-            Waiter::Queue,
-        );
+        return phase(Phase::Queued {
+            job_id: job.id.clone(),
+            role: job.role.clone(),
+            lease: lease.map(|lease| lease.name.clone()),
+            position,
+            reason: wait.map(|wait| wait.reason.clone()),
+            since_ms: wait.map(|wait| wait.since_ms),
+        });
     }
     if let Some(lease) = facts.leases.iter().find(|lease| {
         lease.state == DeliveryLeaseState::Quarantined
             && lease.holder_task_id.as_deref() == Some(task.id.as_str())
     }) {
-        return phase(
-            Phase::Quarantined {
-                lease: lease.name.clone(),
-            },
-            Waiter::User,
-        );
+        return phase(Phase::Quarantined {
+            lease: lease.name.clone(),
+        });
     }
     if facts
         .settings_proposals
         .iter()
         .any(|proposal| proposal.task_id == task.id)
     {
-        return phase(Phase::SettingsProposal, Waiter::User);
+        return phase(Phase::SettingsProposal);
     }
-    let open: Vec<&DeliveryBlocker> = task.blockers.iter().filter(|b| b.is_open()).collect();
     if !open.is_empty() {
-        let inside = open.iter().any(|blocker| {
-            matches!(
-                blocker.kind,
-                DeliveryBlockerKind::Task { .. } | DeliveryBlockerKind::Decision { .. }
-            )
-        });
-        return phase(
-            Phase::Blocked { open: open.len() },
-            if inside {
-                Waiter::Dependency
-            } else {
-                Waiter::External
-            },
-        );
+        return phase(Phase::Blocked { open: open.len() });
     }
     if let Some(unblock) = &task.unblocked {
-        return phase(
-            Phase::Unblocked {
-                cleared: unblock.cleared.clone(),
-                by: unblock.by.clone(),
-                at_ms: unblock.at_ms,
-            },
-            Waiter::Coordinator,
-        );
+        return phase(Phase::Unblocked {
+            cleared: unblock.cleared.clone(),
+            by: unblock.by.clone(),
+            at_ms: unblock.at_ms,
+        });
     }
     let latest = jobs
         .iter()
         .rev()
         .find(|job| job.agent != DeliveryAgent::Shell && is_live(job));
     if let Some(job) = latest.filter(|job| is_broken(job)) {
-        return phase(
-            Phase::Broken {
-                job_id: job.id.clone(),
-                role: job.role.clone(),
-                attempt: job.attempt,
-                blocked: job.status == DeliveryJobStatus::Finished,
-            },
-            Waiter::Coordinator,
-        );
+        return phase(Phase::Broken {
+            job_id: job.id.clone(),
+            role: job.role.clone(),
+            attempt: job.attempt,
+            blocked: job.status == DeliveryJobStatus::Finished,
+        });
     }
     if let Some(sync) = merge {
         let task_rounds: Vec<&DeliveryRound> = facts
@@ -1536,12 +1583,9 @@ fn phase_in_round(
             .collect();
         let mixed = mixed_into_merge(&task_rounds, &jobs, sync);
         if !mixed.is_empty() {
-            return phase(
-                Phase::MergeMixed {
-                    mixed_rounds: mixed.iter().map(|round| round.number).collect(),
-                },
-                Waiter::User,
-            );
+            return phase(Phase::MergeMixed {
+                mixed_rounds: mixed.iter().map(|round| round.number).collect(),
+            });
         }
         if !resolving {
             let waiting = task_rounds
@@ -1549,54 +1593,40 @@ fn phase_in_round(
                 .rev()
                 .find(|round| round.is_open() && round.waits_merge_commit)
                 .map(|round| round.number);
-            return phase(
-                Phase::WaitsMergeCommit {
-                    waiting_round: waiting,
-                },
-                Waiter::Coordinator,
-            );
+            return phase(Phase::WaitsMergeCommit {
+                waiting_round: waiting,
+            });
         }
     }
-    if let Some(pr) = facts
-        .prs
-        .iter()
-        .find(|pr| pr.task_id == task.id && round.is_some_and(|round| round.kind == "ci"))
-    {
+    if let Some(pr) = facts.prs.iter().find(|pr| {
+        pr.task_id == task.id && round.is_some_and(|round| round.kind == DeliveryRoundKind::Ci)
+    }) {
         if let Some(why) = &pr.merged_failing_ci {
-            return phase(
-                Phase::MergedFailingCi {
-                    number: pr.number,
-                    why: why.clone(),
-                },
-                Waiter::Coordinator,
-            );
+            return phase(Phase::MergedFailingCi {
+                number: pr.number,
+                why: why.clone(),
+            });
         }
     }
     let step = next_step(task, &approvals);
     let Some((rung, stage)) = step else {
-        return phase(Phase::Delivered, Waiter::Nobody);
+        return phase(Phase::Delivered);
     };
     // Work sent back comes before the PR's wait: the round's stages, then
     // its commit and push.
     if let Some(round) = round {
         if let Some(role) = next.clone() {
-            return phase(Phase::NextStage { role }, Waiter::Coordinator);
+            return phase(Phase::NextStage { role });
         }
         if let Some(rung) = round_step(round, &approvals) {
-            return phase(Phase::NextStep { rung, stage: None }, Waiter::Coordinator);
+            return phase(Phase::NextStep { rung, stage: None });
         }
     }
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         // A merged PR waits on nothing: the step left is what the task
         // waits on, named, so the coordinator sees it among the idle ones.
-        if pr.state == "merged" {
-            return phase(
-                Phase::NextStep {
-                    rung,
-                    stage: stage.map(str::to_string),
-                },
-                Waiter::Coordinator,
-            );
+        if pr.state == DeliveryPrState::Merged {
+            return phase(Phase::NextStep { rung, stage });
         }
         // Replies to reviewers are outside the ladder, but waiting for the
         // user's approval they are what the PR waits on.
@@ -1615,27 +1645,20 @@ fn phase_in_round(
             &to_answer,
             facts.review_optional.contains(&task.id),
         );
-        let waits_on = wait.waiter(unattended);
-        return phase(
-            Phase::Pr {
-                number: pr.number,
-                ci: pr.ci,
-                wait,
-            },
-            waits_on,
-        );
+        return phase(Phase::Pr {
+            number: pr.number,
+            ci: pr.ci,
+            wait,
+        });
     }
     if let Some(role) = next.clone() {
-        return phase(Phase::NextStage { role }, Waiter::Coordinator);
+        return phase(Phase::NextStage { role });
     }
     if rung == DeliveryRung::Pr {
         if let Some(package) = facts.pr_waits.get(&task.id) {
-            return phase(
-                Phase::PrWaitsPredecessor {
-                    package: package.clone(),
-                },
-                Waiter::Dependency,
-            );
+            return phase(Phase::PrWaitsPredecessor {
+                package: package.clone(),
+            });
         }
         // That package merged: the restack onto its base comes first.
         let gated = task
@@ -1643,22 +1666,13 @@ fn phase_in_round(
             .as_ref()
             .is_some_and(|package| package.pr_after_merge);
         if gated && task.restack_from.is_some() {
-            return phase(
-                Phase::NextStep {
-                    rung: DeliveryRung::Sync,
-                    stage: None,
-                },
-                Waiter::Coordinator,
-            );
+            return phase(Phase::NextStep {
+                rung: DeliveryRung::Sync,
+                stage: None,
+            });
         }
     }
-    phase(
-        Phase::NextStep {
-            rung,
-            stage: stage.map(str::to_string),
-        },
-        Waiter::Coordinator,
-    )
+    phase(Phase::NextStep { rung, stage })
 }
 
 #[cfg(test)]
@@ -1999,6 +2013,49 @@ mod tests {
         assert_eq!(
             World::new(jobs(undone)).phase().next_stage.as_deref(),
             Some("qa")
+        );
+    }
+
+    #[test]
+    fn the_phase_says_what_the_rules_say_of_each_job_and_the_next_step() {
+        let mut world = World::new(vec![
+            job("j1", "tests", Finished, Some("findings")),
+            job("j2", "implementation", Finished, Some("pass")),
+            job("j3", "review", DeliveryJobStatus::Failed, None),
+            changed(job("j4", "tests", Finished, Some("pass"))),
+        ]);
+        let verdict = |broken, passed, answered, superseded| JobVerdict {
+            broken,
+            passed,
+            answered,
+            superseded,
+        };
+        let phase = world.phase();
+        assert_eq!(
+            phase.verdicts,
+            BTreeMap::from([
+                ("j1".to_string(), verdict(false, false, true, false)),
+                ("j2".to_string(), verdict(false, true, false, true)),
+                ("j3".to_string(), verdict(true, false, false, true)),
+                ("j4".to_string(), verdict(false, true, false, false)),
+            ])
+        );
+        assert_eq!(
+            phase.next_step,
+            Some(DeliveryStep {
+                rung: DeliveryRung::Commit,
+                stage: None
+            })
+        );
+        for (rung, at) in [("commit", 1), ("push", 2), ("pr", 3)] {
+            world.approvals.push(step(rung, "executed", Some(at)));
+        }
+        assert_eq!(
+            world.phase().next_step,
+            Some(DeliveryStep {
+                rung: DeliveryRung::Jira,
+                stage: Some(DeliveryJiraStage::AfterPr)
+            })
         );
     }
 
@@ -2478,7 +2535,7 @@ mod tests {
         let mut world = World::new(vec![job("j1", "qa", Finished, Some("pass"))]);
         for (rung, stage) in STEPS {
             let mut done = step(&format!("{rung:?}").to_lowercase(), "executed", Some(1));
-            done.stage = stage.map(str::to_string);
+            done.stage = stage;
             done.id = format!("{rung:?}-{stage:?}");
             world.approvals.push(done);
         }
@@ -2502,7 +2559,7 @@ mod tests {
             (
                 Phase::NextStep {
                     rung: DeliveryRung::Jira,
-                    stage: Some(JIRA_AFTER_PR.into()),
+                    stage: Some(DeliveryJiraStage::AfterPr),
                 },
                 Waiter::Coordinator
             )

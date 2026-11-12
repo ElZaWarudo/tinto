@@ -11,7 +11,7 @@ use super::model::{
     DeliveryUnblock, NewBlocker,
 };
 use super::phase::{is_delivered, step_done};
-use super::prs::{parse_pr_url, DeliveryPr};
+use super::prs::{parse_pr_url, DeliveryPr, DeliveryPrState};
 use super::service::DeliveryService;
 use super::{now_ms, DeliveryError};
 
@@ -87,7 +87,7 @@ fn blocker_state(blocker: &DeliveryBlocker, world: &World<'_>) -> (String, bool)
             let reached = if is_delivered(other, &approvals) {
                 Some(DeliveryTaskMilestone::Delivered)
             } else if step_done(&approvals, DeliveryRung::Merge)
-                || pr.is_some_and(|pr| pr.state == "merged")
+                || pr.is_some_and(|pr| pr.state == DeliveryPrState::Merged)
             {
                 Some(DeliveryTaskMilestone::Merged)
             } else if step_done(&approvals, DeliveryRung::Pr) || pr.is_some() {
@@ -104,7 +104,7 @@ fn blocker_state(blocker: &DeliveryBlocker, world: &World<'_>) -> (String, bool)
                 .prs
                 .iter()
                 .find(|pr| same_pr(pr, url))
-                .map(|pr| pr.state.clone())
+                .map(|pr| pr.state.as_str().to_string())
                 .or_else(|| state.clone());
             let status = match state.as_deref() {
                 Some("open") => "abierto",
@@ -136,6 +136,10 @@ fn blocker_state(blocker: &DeliveryBlocker, world: &World<'_>) -> (String, bool)
         DeliveryBlockerKind::Note { .. } => (String::new(), false),
     }
 }
+
+/// A gap in the watch loop, which waits a minute at most, past which it
+/// records that Delivery was suspended.
+const RESUMED_AFTER_MS: u64 = 5 * 60_000;
 
 impl DeliveryService {
     fn new_blocker(
@@ -490,7 +494,30 @@ impl DeliveryService {
                 .lock()
                 .map(|count| *count)
                 .unwrap_or(0);
+            let mut waited_from: Option<u64> = None;
             loop {
+                // Its wait lasts a minute at most, on a clock that stops
+                // while the machine sleeps: a far longer gap on the wall
+                // clock means the machine or Tinto was suspended, which
+                // would otherwise read as jobs queued for no reason.
+                let now = now_ms();
+                if let Some(gap) = waited_from
+                    .map(|from| now.saturating_sub(from))
+                    .filter(|gap| *gap > RESUMED_AFTER_MS)
+                {
+                    let detail = format!(
+                        "Delivery estuvo detenido {} min (el equipo se suspendió o Tinto no respondía)",
+                        gap / 60_000
+                    );
+                    if let Err(error) = service.store().and_then(|store| {
+                        store.record_event(now, "scheduler_resumed", None, None, &detail)
+                    }) {
+                        eprintln!("tinto: delivery could not record its resume: {error}");
+                    }
+                    // Nothing else wakes the scheduler after a suspend: start
+                    // what was left queued instead of waiting for an event.
+                    service.tick();
+                }
                 if let Err(error) = service.settle_blockers() {
                     eprintln!("tinto: delivery could not settle the blocked tasks: {error}");
                 }
@@ -508,6 +535,7 @@ impl DeliveryService {
                 if let Err(error) = service.advance_ladders() {
                     eprintln!("tinto: delivery could not advance the ladders: {error}");
                 }
+                waited_from = Some(now_ms());
                 let (count, changed) = &service.inner.changes;
                 let Ok(guard) = count.lock() else { return };
                 let Ok((guard, _)) =

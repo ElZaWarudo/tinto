@@ -518,7 +518,7 @@ export type DeliveryQaProblemStatus =
   "open" | "sent" | "fixing" | "verified" | "still_failing" | "dismissed" | "superseded";
 
 /** What sent a task's work back. */
-export type DeliveryRoundKind = "review" | "qa" | "qa_problems" | "checks" | "pr" | "sync";
+export type DeliveryRoundKind = "review" | "qa" | "qa_problems" | "checks" | "pr" | "sync" | "ci";
 
 /** A pass of work sent back on a task, recorded when it happened. Round 1,
  *  the initial delivery, is never stored. */
@@ -822,6 +822,11 @@ export interface DeliverySettingsChanges {
   verification?: string | null;
   /** Variables for checks, by name, each set to the value given. */
   check_env?: Record<string, string>;
+  /** The repo's Jira statuses once the PR is open / merged, replacing them. */
+  jira_after_pr?: string[] | null;
+  jira_after_merge?: string[] | null;
+  /** Fields a Jira transition gets, by transition id, name or target status. */
+  jira_transition_fields?: Record<string, unknown>;
 }
 
 /** Settings changes a coordinator asks for; nothing changes until the user approves. */
@@ -921,7 +926,22 @@ export type DeliveryTaskPhase = DeliveryPhase & {
   round?: DeliveryRound & { at: string };
   /** What one of its queued jobs waits for looks stuck. */
   warning?: string | null;
+  /** The first step of its ladder not done; absent once delivered. */
+  next_step?: { rung: DeliveryRung; stage: string | null };
+  /** What Tinto's rules say of its jobs, by job id; a job none applies to is left out. */
+  verdicts?: Record<string, DeliveryJobVerdict>;
 };
+
+/** One job as Tinto's phase reads it; a flag left out is false. */
+export interface DeliveryJobVerdict {
+  /** Ended without a usable result, and not settled since. */
+  broken?: boolean;
+  passed?: boolean;
+  /** Findings a later stage answered. */
+  answered?: boolean;
+  /** A result later work on an earlier stage left behind. */
+  superseded?: boolean;
+}
 
 export interface DeliveryOverview {
   /** Where each task is, by task id: every surface reads this one answer. */

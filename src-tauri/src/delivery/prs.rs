@@ -23,8 +23,8 @@ use serde_json::Value;
 
 use super::coordination::found_step;
 use super::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryFixCommit, DeliveryRung,
-    DeliveryTask, StepEvent,
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryFixCommit,
+    DeliveryRoundKind, DeliveryRung, DeliveryTask, StepEvent,
 };
 use super::reviews::ReviewEvent;
 use super::service::DeliveryService;
@@ -233,14 +233,36 @@ impl PrChecks {
     }
 }
 
+/// Where a PR is on GitHub.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryPrState {
+    /// Until the first read.
+    Unknown,
+    Open,
+    Merged,
+    Closed,
+}
+
+impl DeliveryPrState {
+    /// As stored, for messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Open => "open",
+            Self::Merged => "merged",
+            Self::Closed => "closed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryPr {
     pub task_id: String,
     pub url: String,
     pub repo: String,
     pub number: u64,
-    /// `open`, `merged`, `closed`, or `unknown` until the first read.
-    pub state: String,
+    pub state: DeliveryPrState,
     pub draft: bool,
     pub conflicts: bool,
     /// `approved`, `changes_requested`, `review_required` or none.
@@ -336,7 +358,7 @@ impl DeliveryPr {
             url: pr.url.clone(),
             repo: pr.repo.clone(),
             number: pr.number,
-            state: "unknown".to_string(),
+            state: DeliveryPrState::Unknown,
             draft: false,
             conflicts: false,
             review_decision: None,
@@ -467,7 +489,7 @@ impl DeliveryPr {
     }
 
     pub fn is_open(&self) -> bool {
-        self.state == "open" || self.state == "unknown"
+        self.state == DeliveryPrState::Open || self.state == DeliveryPrState::Unknown
     }
 
     /// Reviewed and approved: GitHub's decision when the repo requires
@@ -743,9 +765,10 @@ fn check_state(check: &Value) -> &'static str {
         return "pending";
     }
     match upper("conclusion").as_str() {
-        // A run cancelled (by Tinto, the coordinator or a newer push) did
-        // not test the head: it never ran, it did not fail.
-        "CANCELLED" => "not_run",
+        // A run cancelled (by Tinto, the coordinator, a newer push or a
+        // concurrency group) did not test the head: it never ran, it did not
+        // fail. `head_checks` decides whether another run of it did.
+        "CANCELLED" => "cancelled",
         "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failing",
         "SKIPPED" | "NEUTRAL" => "skipped",
         _ => "passing",
@@ -764,6 +787,7 @@ pub(super) fn head_checks(snapshot: &Value) -> PrChecks {
         .collect();
     let mut checks = PrChecks::default();
     let mut seen: Vec<String> = Vec::new();
+    let mut cancelled: Vec<String> = Vec::new();
     for check in snapshot["statusCheckRollup"]
         .as_array()
         .into_iter()
@@ -782,9 +806,21 @@ pub(super) fn head_checks(snapshot: &Value) -> PrChecks {
             "failing" => checks.failing += 1,
             "skipped" => checks.skipped += 1,
             "not_run" => checks.not_run.push(name.clone()),
+            "cancelled" => {
+                cancelled.push(name);
+                continue;
+            }
             _ => checks.pending += 1,
         }
         seen.push(name);
+    }
+    // A cancelled run yields to another run of the same check on the head
+    // (a workflow concurrency group cancels one and keeps the other); only a
+    // check whose every run was cancelled is not run.
+    for name in cancelled {
+        if !seen.contains(&name) && !checks.not_run.contains(&name) {
+            checks.not_run.push(name);
+        }
     }
     for name in &required {
         if !seen.contains(name) && !checks.not_run.contains(name) {
@@ -800,11 +836,10 @@ pub(super) fn head_checks(snapshot: &Value) -> PrChecks {
 /// approve it changed on GitHub, for the task's history.
 pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) -> Vec<String> {
     pr.state = match snapshot["state"].as_str().unwrap_or_default() {
-        "MERGED" => "merged",
-        "CLOSED" => "closed",
-        _ => "open",
-    }
-    .to_string();
+        "MERGED" => DeliveryPrState::Merged,
+        "CLOSED" => DeliveryPrState::Closed,
+        _ => DeliveryPrState::Open,
+    };
     let text = |value: &Value| {
         value
             .as_str()
@@ -2494,7 +2529,9 @@ impl DeliveryService {
         // into its base alone does not make it wait for a sync.
         self.sync_conflicted_pr(&pr)?;
         // Done with: the screenshots its replies showed are not kept.
-        let done = |pr: &DeliveryPr| pr.state == "merged" || pr.state == "closed";
+        let done = |pr: &DeliveryPr| {
+            pr.state == DeliveryPrState::Merged || pr.state == DeliveryPrState::Closed
+        };
         if done(&pr) && !done(&before) && before.checked_at_ms.is_some() {
             self.drop_evidence(&self.task(task_id)?);
         }
@@ -2519,7 +2556,7 @@ impl DeliveryService {
                 .error
                 .as_deref()
                 .is_some_and(|error| error.contains("Could not resolve"));
-            let drift = if pr.state == "closed" {
+            let drift = if pr.state == DeliveryPrState::Closed {
                 Some(format!("El PR #{} se cerró sin fusionar", pr.number))
             } else if gone {
                 Some(format!("El PR #{} ya no existe en GitHub", pr.number))
@@ -2528,7 +2565,28 @@ impl DeliveryService {
             };
             self.set_drift(step, drift)?;
         }
-        if pr.state != "merged" {
+        // A merge waiting for the user that waiting will not make possible
+        // is taken back: the coordinator hears it and asks again once the
+        // PR is put right. Checks running or a review pending are not that.
+        let stale = match pr.state {
+            DeliveryPrState::Closed => Some(format!("el PR #{} se cerró sin fusionar", pr.number)),
+            _ if pr.is_open() && pr.conflicts => {
+                Some(format!("el PR #{} tiene conflictos con su base", pr.number))
+            }
+            _ => None,
+        };
+        let pending = self
+            .latest_approval(&pr.task_id, DeliveryRung::Merge)?
+            .filter(|merge| merge.status == DeliveryApprovalStatus::Pending);
+        if let (Some(why), Some(merge)) = (stale, pending) {
+            let reason = format!("{why}; pídelo de nuevo cuando se pueda fusionar");
+            match self.withdraw(&merge.id, &reason, "step_withdrawn") {
+                // The user decided it meanwhile: its run checks the PR.
+                Err(error) if error.category == "approval_not_pending" => {}
+                other => other?,
+            }
+        }
+        if pr.state != DeliveryPrState::Merged {
             return Ok(());
         }
         let merge = self.latest_approval(&pr.task_id, DeliveryRung::Merge)?;
@@ -2593,7 +2651,7 @@ impl DeliveryService {
             &store,
             &task.id,
             super::rounds::NewRound {
-                kind: "ci",
+                kind: DeliveryRoundKind::Ci,
                 short: "CI en rojo".to_string(),
                 cause: format!(
                     "El PR #{} se fusionó en GitHub con checks fallando: arréglalo en {base}",
@@ -2716,7 +2774,7 @@ impl DeliveryService {
             // What can change any moment is read on every pass: CI running,
             // red (it may be running again), not run yet, conflicts, and
             // what waits for the PR's head to have its fix.
-            let hot = pr.state == "unknown"
+            let hot = pr.state == DeliveryPrState::Unknown
                 || pr.checks.pending > 0
                 || pr.checks.failing > 0
                 || pr.ci == Some(CiState::NotRun)
@@ -2959,7 +3017,7 @@ impl DeliveryService {
         remove: Vec<String>,
     ) -> Result<Option<DeliveryPr>, DeliveryError> {
         let pr = self.linked_pr(task_id)?;
-        if pr.state != "open" {
+        if pr.state != DeliveryPrState::Open {
             return Err(DeliveryError::new(
                 "pr_not_open",
                 "solo se cambian los revisores de un PR abierto",
@@ -3471,7 +3529,7 @@ fn merged_outside(pr: &DeliveryPr) -> String {
 fn pr_news(before: &DeliveryPr, after: &DeliveryPr, reviewers: &[String]) -> Option<String> {
     let mut news = reviewers.to_vec();
     if after.state != before.state {
-        news.push(format!("ahora está {}", after.state));
+        news.push(format!("ahora está {}", after.state.as_str()));
     }
     if after.review_decision != before.review_decision {
         if let Some(decision) = after.review_decision.as_deref() {
@@ -3636,7 +3694,7 @@ mod tests {
         let mut pr = DeliveryPr::linked("t1", &reference);
         let before = json!([{"author": {"login": "ana"}, "state": "COMMENTED", "submittedAt": "2026-10-14T08:00:00Z"}]);
         apply_snapshot(&mut pr, &snapshot(before.clone(), json!([])), "me");
-        assert_eq!(pr.state, "open");
+        assert_eq!(pr.state, DeliveryPrState::Open);
         assert!(pr.conflicts);
         assert_eq!(pr.review_decision.as_deref(), Some("changes_requested"));
         assert_eq!(
@@ -3683,7 +3741,7 @@ mod tests {
         assert_eq!((pr.new_reviews, pr.new_comments), (0, 0));
 
         apply_snapshot(&mut pr, &json!({"state": "MERGED"}), "me");
-        assert_eq!(pr.state, "merged");
+        assert_eq!(pr.state, DeliveryPrState::Merged);
         assert!(!pr.is_open());
     }
 
@@ -3790,13 +3848,42 @@ mod tests {
                 CiState::NotRun,
                 vec!["e2e"],
             ),
-            // Cancelled tested nothing: not run, not failing.
+            // Cancelled tested nothing: not run, not failing, unless another
+            // run of the same check has a state of its own.
             (
                 "cancelled",
                 json!([run("build", "COMPLETED", "CANCELLED")]),
                 json!([]),
                 CiState::NotRun,
                 vec!["build"],
+            ),
+            (
+                "cancelled beside a pass of the same check",
+                json!([run("build", "COMPLETED", "CANCELLED"), ok()]),
+                json!(["build"]),
+                CiState::Passing,
+                vec![],
+            ),
+            (
+                "cancelled beside a run of the same check still going",
+                json!([
+                    run("build", "IN_PROGRESS", ""),
+                    run("build", "COMPLETED", "CANCELLED")
+                ]),
+                json!([]),
+                CiState::Pending,
+                vec![],
+            ),
+            (
+                "every run of the check cancelled",
+                json!([
+                    ok(),
+                    run("e2e", "COMPLETED", "CANCELLED"),
+                    run("e2e", "COMPLETED", "CANCELLED")
+                ]),
+                json!([]),
+                CiState::NotRun,
+                vec!["e2e"],
             ),
         ];
         for (case, rollup, required, state, not_run) in cases {

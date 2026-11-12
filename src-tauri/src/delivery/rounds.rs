@@ -8,7 +8,8 @@
 
 use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryJob, DeliveryJobStatus,
-    DeliveryQaProblem, DeliveryResultState, DeliveryRound, DeliveryRung, DeliveryTask,
+    DeliveryQaProblem, DeliveryResultState, DeliveryRound, DeliveryRoundKind, DeliveryRung,
+    DeliveryTask,
 };
 use super::phase::{
     check_fails, current_checks, failing_checks, has_open_findings, next_stage, open_merge,
@@ -25,7 +26,7 @@ const ITEM_CHARS: usize = 300;
 
 /// What opens a round.
 pub(super) struct NewRound {
-    pub kind: &'static str,
+    pub kind: DeliveryRoundKind,
     pub short: String,
     pub cause: String,
     pub items: Vec<String>,
@@ -65,12 +66,15 @@ pub(super) fn round_text(round: &DeliveryRound) -> String {
 }
 
 /// How a round that is done again ended, by what opened it.
-fn done_outcome(kind: &str) -> &'static str {
+fn done_outcome(kind: DeliveryRoundKind) -> &'static str {
     match kind {
-        "checks" => "comprobaciones en verde",
-        "sync" => "conflictos resueltos",
-        "pr" => "cambios publicados",
-        _ => "corregidos",
+        DeliveryRoundKind::Checks => "comprobaciones en verde",
+        DeliveryRoundKind::Sync => "conflictos resueltos",
+        DeliveryRoundKind::Pr => "cambios publicados",
+        DeliveryRoundKind::Review
+        | DeliveryRoundKind::Qa
+        | DeliveryRoundKind::QaProblems
+        | DeliveryRoundKind::Ci => "corregidos",
     }
 }
 
@@ -98,7 +102,11 @@ fn findings_round(job: &DeliveryJob) -> Option<NewRound> {
         stage_name(&job.role)
     );
     Some(NewRound {
-        kind: if job.role == QA_ROLE { "qa" } else { "review" },
+        kind: if job.role == QA_ROLE {
+            DeliveryRoundKind::Qa
+        } else {
+            DeliveryRoundKind::Review
+        },
         cause: short.clone(),
         short,
         items: findings.iter().map(|finding| line(finding)).collect(),
@@ -127,7 +135,7 @@ fn checks_round(task: &DeliveryTask, job: &DeliveryJob, jobs: &[DeliveryJob]) ->
         .map(|check| format!("`{}`", check.prompt))
         .collect();
     Some(NewRound {
-        kind: "checks",
+        kind: DeliveryRoundKind::Checks,
         short: "comprobaciones".to_string(),
         cause: format!("Fallan comprobaciones de Tinto: {}", names.join(", ")),
         items: failed
@@ -160,7 +168,7 @@ fn pr_round(pr: &DeliveryPr, rounds: &[DeliveryRound]) -> Option<NewRound> {
     // Changes asked since the latest round that answered the PR.
     let answered = rounds
         .iter()
-        .filter(|round| round.kind == "pr")
+        .filter(|round| round.kind == DeliveryRoundKind::Pr)
         .map(|round| round.opened_at_ms)
         .max()
         .unwrap_or(0);
@@ -194,7 +202,7 @@ fn pr_round(pr: &DeliveryPr, rounds: &[DeliveryRound]) -> Option<NewRound> {
         ));
     }
     Some(NewRound {
-        kind: "pr",
+        kind: DeliveryRoundKind::Pr,
         short: "PR".to_string(),
         cause,
         items,
@@ -259,7 +267,7 @@ pub(super) fn open_round(
         id: String::new(),
         task_id: task_id.to_string(),
         number,
-        kind: new.kind.to_string(),
+        kind: new.kind,
         short: String::new(),
         cause: String::new(),
         items: Vec::new(),
@@ -273,7 +281,7 @@ pub(super) fn open_round(
     let waits = merge.is_some_and(|sync| !resolves_merge(&probe, sync, &job_refs));
     // The sync's own round sets aside the one in course, unfinished: its
     // work goes on once the merge is committed.
-    if merge.is_some() && new.kind == "sync" {
+    if merge.is_some() && new.kind == DeliveryRoundKind::Sync {
         if let Some(mut open) = rounds
             .iter()
             .rev()
@@ -295,7 +303,7 @@ pub(super) fn open_round(
     let previous = rounds.iter().rev().find(|round| {
         round.is_open()
             && round.waits_merge_commit == waits
-            && !(new.kind == "sync" && merge.is_some())
+            && !(new.kind == DeliveryRoundKind::Sync && merge.is_some())
     });
     if let Some(mut open) = previous.cloned() {
         // A round waiting for the merge commit has had no stage of its own.
@@ -306,7 +314,8 @@ pub(super) fn open_round(
         // A round no stage worked on yet takes the new cause, under its own
         // number: QA problems refine QA's findings; anything else joins what
         // it already had to address.
-        let refines = open.kind == "qa" && new.kind == "qa_problems";
+        let refines =
+            open.kind == DeliveryRoundKind::Qa && new.kind == DeliveryRoundKind::QaProblems;
         if !worked {
             // The same news again (opened as it arrived, then a stage
             // dispatched on it): nothing changes.
@@ -325,7 +334,7 @@ pub(super) fn open_round(
                     }
                 }
             }
-            open.kind = new.kind.to_string();
+            open.kind = new.kind;
             open.short = new.short;
             open.cause = new.cause;
             open.source = new.source.or(open.source);
@@ -339,25 +348,27 @@ pub(super) fn open_round(
             )?;
             return Ok(());
         }
-        let role = if open.kind == "review" {
+        let role = if open.kind == DeliveryRoundKind::Review {
             "review"
         } else {
             QA_ROLE
         };
-        let fixed = matches!(open.kind.as_str(), "review" | "qa" | "qa_problems")
-            && jobs.iter().any(|job| {
-                job.role == role
-                    && job.created_at_ms >= open.opened_at_ms
-                    && job.status == DeliveryJobStatus::Finished
-                    && job.result_state == Some(DeliveryResultState::Accepted)
-                    && job
-                        .result
-                        .as_ref()
-                        .is_some_and(|result| result.status == "pass")
-            });
+        let fixed = matches!(
+            open.kind,
+            DeliveryRoundKind::Review | DeliveryRoundKind::Qa | DeliveryRoundKind::QaProblems
+        ) && jobs.iter().any(|job| {
+            job.role == role
+                && job.created_at_ms >= open.opened_at_ms
+                && job.status == DeliveryJobStatus::Finished
+                && job.result_state == Some(DeliveryResultState::Accepted)
+                && job
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| result.status == "pass")
+        });
         open.closed_at_ms = Some(now);
         open.outcome = Some(if fixed {
-            done_outcome(&open.kind).to_string()
+            done_outcome(open.kind).to_string()
         } else {
             format!("siguió en la ronda {number}")
         });
@@ -369,7 +380,7 @@ pub(super) fn open_round(
         id: uuid::Uuid::new_v4().to_string(),
         task_id: task_id.to_string(),
         number,
-        kind: new.kind.to_string(),
+        kind: new.kind,
         short: new.short,
         cause: new.cause,
         items,
@@ -419,7 +430,7 @@ pub(super) fn settle_round(store: &DeliveryStore, task_id: &str) -> Result<(), D
     let accepted = round.source.as_deref().is_some_and(|source| {
         jobs.iter()
             .any(|job| job.id == source && job.resolved_at_ms.is_some())
-    }) || (round.kind == "checks"
+    }) || (round.kind == DeliveryRoundKind::Checks
         && worked.iter().all(|job| job.changes.is_empty())
         && failing_checks(&task.checks, &job_refs).is_empty()
         && jobs.iter().any(|job| {
@@ -448,7 +459,7 @@ pub(super) fn settle_round(store: &DeliveryStore, task_id: &str) -> Result<(), D
                     .is_some_and(|result| result.status == "pass")
         });
     let outcome = if round_step(&round, &approval_refs).is_none() {
-        done_outcome(&round.kind)
+        done_outcome(round.kind)
     } else if accepted {
         "aceptados"
     } else if unchanged {
@@ -492,7 +503,7 @@ pub(super) fn for_qa_problems(
         store,
         task_id,
         NewRound {
-            kind: "qa_problems",
+            kind: DeliveryRoundKind::QaProblems,
             cause: format!("{short} para corregir"),
             short,
             items: sent
@@ -526,7 +537,7 @@ pub(super) fn after_step(
             store,
             &approval.task_id,
             NewRound {
-                kind: "sync",
+                kind: DeliveryRoundKind::Sync,
                 short: "conflictos con la base".to_string(),
                 cause: format!(
                     "Conflictos al sincronizar con la base en {}",

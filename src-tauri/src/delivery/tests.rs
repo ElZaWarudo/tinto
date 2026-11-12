@@ -13,7 +13,7 @@ use super::coordination::NewApproval;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryDecisionKind,
     DeliveryDecisionOption, DeliveryJob, DeliveryJobStatus, DeliveryLeaseState,
-    DeliveryRepoSettings, DeliveryResultState, DeliveryRung, DeliverySettings,
+    DeliveryRepoSettings, DeliveryResultState, DeliveryRoundKind, DeliveryRung, DeliverySettings,
     DeliverySettingsChanges, DeliverySettingsProposalStatus, DeliveryStageAgent, DeliveryTask,
 };
 use super::service::{DeliveryService, Launcher, NewJob, NewPackage, NewTask};
@@ -1251,11 +1251,12 @@ fn a_check_adopted_after_a_restart_ends_with_the_code_it_left_or_runs_again() {
                     done.error
                 );
                 assert!(rounds.is_empty(), "{rounds:?}");
-                let jobs = restarted.overview().unwrap().jobs;
-                let retry = jobs
-                    .iter()
-                    .find(|again| again.retry_of.as_deref() == Some(job.id.as_str()))
-                    .expect("queued again");
+                // Queued again right after it is recorded as interrupted.
+                let retry = eventually(|| {
+                    let jobs = restarted.overview().unwrap().jobs;
+                    jobs.into_iter()
+                        .find(|again| again.retry_of.as_deref() == Some(job.id.as_str()))
+                });
                 assert_eq!(
                     wait_on(&restarted, &retry.id).status,
                     DeliveryJobStatus::Finished
@@ -5081,6 +5082,8 @@ struct FakeGitHub {
     feed_calls: std::sync::atomic::AtomicUsize,
     mentioned: Vec<String>,
     merged: std::sync::Mutex<Vec<String>>,
+    /// What the next merges answer before one goes through, in order.
+    merge_errors: std::sync::Mutex<Vec<String>>,
     /// `<url> <logins>` of every review request.
     reviews: std::sync::Mutex<Vec<String>>,
     /// What `gh pr list --head <branch>` answers, for any branch.
@@ -5105,6 +5108,7 @@ impl FakeGitHub {
             feed_calls: std::sync::atomic::AtomicUsize::new(0),
             mentioned: Vec::new(),
             merged: std::sync::Mutex::new(Vec::new()),
+            merge_errors: std::sync::Mutex::new(Vec::new()),
             reviews: std::sync::Mutex::new(Vec::new()),
             branch_prs: std::sync::Mutex::new(branch_prs),
             actions: std::sync::Mutex::new(Vec::new()),
@@ -5157,6 +5161,11 @@ impl super::prs::GitHub for FakeGitHub {
         delete_branch: bool,
         _head: Option<&str>,
     ) -> Result<(), super::DeliveryError> {
+        let mut errors = self.merge_errors.lock().unwrap();
+        if !errors.is_empty() {
+            return Err(super::DeliveryError::new("gh_failed", errors.remove(0)));
+        }
+        drop(errors);
         self.merged.lock().unwrap().push(match delete_branch {
             true => format!("{url} {method} {subject}"),
             false => format!("{url} {method} {subject} (branch kept)"),
@@ -5350,6 +5359,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         feed_calls: std::sync::atomic::AtomicUsize::new(0),
         mentioned: vec!["o/r#5".into()],
         merged: std::sync::Mutex::new(Vec::new()),
+        merge_errors: std::sync::Mutex::new(Vec::new()),
         reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
         actions: std::sync::Mutex::new(Vec::new()),
@@ -5375,7 +5385,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         .refresh_pr(&task.id, Duration::ZERO)
         .unwrap()
         .unwrap();
-    assert_eq!(pr.state, "open");
+    assert_eq!(pr.state, super::prs::DeliveryPrState::Open);
     assert_eq!(
         pr.new_reviews, 0,
         "what was there before linking is not news"
@@ -5426,6 +5436,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         feed_calls: std::sync::atomic::AtomicUsize::new(0),
         mentioned: Vec::new(),
         merged: std::sync::Mutex::new(Vec::new()),
+        merge_errors: std::sync::Mutex::new(Vec::new()),
         reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
         actions: std::sync::Mutex::new(Vec::new()),
@@ -5526,6 +5537,12 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     h.service
         .set_step_text(&asked.id, Some("P-2: paginate (#5)".into()), None, None)
         .unwrap();
+    // Another PR merged into the base just before: GitHub refuses the first
+    // try and Tinto tries once more.
+    github.merge_errors.lock().unwrap().push(
+        "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)"
+            .into(),
+    );
     // Approving returns at once; the merge runs apart and says what it does.
     let approved = h.service.decide_approval(&asked.id, true, None).unwrap();
     assert_eq!(approved.status, DeliveryApprovalStatus::Approved);
@@ -5545,7 +5562,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     );
     assert_eq!(
         h.service.task_pr(&task.id).unwrap().unwrap().state,
-        "merged"
+        super::prs::DeliveryPrState::Merged
     );
 }
 
@@ -5828,6 +5845,28 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         h.service.approval(&again.id).unwrap().status,
         DeliveryApprovalStatus::Executed
     );
+
+    // With its PR open the branch gone is still a drift; once GitHub says
+    // the PR merged (it deletes the branch), before Tinto read it so, not.
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "mergeable": "MERGEABLE", "statusCheckRollup": [], "reviews": [], "comments": []}),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/7").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    git(remote.path(), &["update-ref", "-d", &branch]);
+    let status = || h.service.approval(&again.id).unwrap().status;
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(status(), DeliveryApprovalStatus::Drifted);
+    github.snapshot.lock().unwrap()["state"] = json!("MERGED");
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(
+        h.service.task_pr(&task.id).unwrap().unwrap().state,
+        super::prs::DeliveryPrState::Open
+    );
+    assert_eq!(status(), DeliveryApprovalStatus::Executed);
 }
 
 #[test]
@@ -5907,8 +5946,8 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
     put_step(&h, &task, "a-jira", "jira", "executed", "In Review");
     h.service.stage_legacy_jira().unwrap();
     assert_eq!(
-        h.service.approval("a-jira").unwrap().stage.as_deref(),
-        Some("after_pr")
+        h.service.approval("a-jira").unwrap().stage,
+        Some(super::model::DeliveryJiraStage::AfterPr)
     );
 
     let jira = |stage: Option<&str>| NewApproval {
@@ -5930,8 +5969,8 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
     };
     let next = h.service.request_approval(jira(None)).unwrap();
     assert_eq!(
-        next.stage.as_deref(),
-        Some("after_merge"),
+        next.stage,
+        Some(super::model::DeliveryJiraStage::AfterMerge),
         "the one missing"
     );
     assert_eq!(
@@ -6452,7 +6491,27 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
         h.repo.path(),
         &["remote", "add", "origin", &plain_path(remote.path())],
     );
-    let task = h.task("P-12");
+    // The coordinator archives it through its tool, under the same rule.
+    let fence = coordinated_run(&h);
+    let created = tool(
+        &h,
+        "create_task",
+        with(
+            &fence,
+            json!({"repo": plain_path(h.repo.path()), "key": "P-12", "title": "x"}),
+        ),
+    );
+    let task = h
+        .service
+        .task(created["structuredContent"]["id"].as_str().unwrap())
+        .unwrap();
+    let archive = || {
+        tool(
+            &h,
+            "archive_task",
+            with(&fence, json!({"task_id": task.id})),
+        )
+    };
     let worktree = PathBuf::from(plain_path(&task.worktree));
     std::fs::write(worktree.join("feature.txt"), "x").unwrap();
     git(&worktree, &["add", "."]);
@@ -6466,9 +6525,14 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
     let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/5").unwrap();
     h.service.link_pr(&task.id, &reference).unwrap();
 
-    assert_eq!(
-        h.service.archive_task(&task.id).unwrap_err().category,
-        "task_not_delivered"
+    let refused = archive();
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("task_not_delivered"),
+        "{refused}"
     );
     for (id, rung, stage) in [
         ("a1", "commit", None),
@@ -6486,7 +6550,11 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
         .unwrap();
         h.service.store().unwrap().put_approval(&step).unwrap();
     }
-    h.service.archive_task(&task.id).unwrap();
+    let archived = archive();
+    assert_eq!(
+        archived["structuredContent"]["archived"], true,
+        "{archived}"
+    );
     assert!(!worktree.exists(), "the worktree goes");
     let branch = format!("refs/heads/{}", task.branch);
     assert!(
@@ -8411,7 +8479,7 @@ fn a_pr_goes_back_to_review_only_once_every_review_thread_has_a_reply() {
         "{read}"
     );
     let phase = h.service.overview().unwrap().phases[&task_id].clone();
-    assert_eq!(phase.round.unwrap().round.kind, "pr");
+    assert_eq!(phase.round.unwrap().round.kind, DeliveryRoundKind::Pr);
     assert_eq!(phase.threads_unanswered, 2);
     // Opened days ago: wait_run hears of each thread once.
     let alerts = || {
@@ -8995,7 +9063,7 @@ fn a_pr_with_conflicts_brings_its_base_in_without_asking() {
     let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/281").unwrap();
     h.service.link_pr(&task_id, &reference).unwrap();
     let mut pr = h.service.task_pr(&task_id).unwrap().unwrap();
-    pr.state = "open".into();
+    pr.state = super::prs::DeliveryPrState::Open;
     pr.conflicts = true;
     let syncs = || {
         h.service
@@ -9047,7 +9115,7 @@ fn a_merge_syncs_no_pr_without_conflicts_and_a_sync_replaces_the_checks_on_the_c
             super::prs::parse_pr_url(&format!("https://github.com/o/r/pull/{number}")).unwrap();
         // Stored as Tinto last read it, open and without conflicts.
         let mut pr = super::prs::DeliveryPr::linked(task_id, &reference);
-        pr.state = "open".into();
+        pr.state = super::prs::DeliveryPrState::Open;
         pr.base = Some("main".into());
         pr.checked_at_ms = Some(1);
         h.service.store().unwrap().put_pr(&pr).unwrap();
@@ -9089,7 +9157,7 @@ fn a_merge_syncs_no_pr_without_conflicts_and_a_sync_replaces_the_checks_on_the_c
         sync.outcome
     );
     assert!(sync.conflicts.is_empty());
-    let checks: Vec<(String, DeliveryJobStatus)> = h
+    let checks: Vec<(String, DeliveryJobStatus, Option<String>)> = h
         .service
         .store()
         .unwrap()
@@ -9097,11 +9165,13 @@ fn a_merge_syncs_no_pr_without_conflicts_and_a_sync_replaces_the_checks_on_the_c
         .unwrap()
         .into_iter()
         .filter(|job| job.role == "checks")
-        .map(|job| (job.id, job.status))
+        .map(|job| (job.id, job.status, job.error))
         .collect();
-    let [(old, cancelled), (_, queued)] = checks.try_into().unwrap();
+    let [(old, cancelled, why), (_, queued, _)] = checks.try_into().unwrap();
     assert_eq!(old, stale.id);
     assert_eq!(cancelled, DeliveryJobStatus::Cancelled);
+    // It says why it never ran.
+    assert!(why.is_some_and(|why| why.contains("sincronizar")));
     assert_eq!(queued, DeliveryJobStatus::Queued);
 }
 
@@ -9401,7 +9471,7 @@ fn the_overview_narrows_to_a_batch_or_task_leaves_closed_batches_out_and_sends_r
             id: "round-1".into(),
             task_id: first.id.clone(),
             number: 2,
-            kind: "review".into(),
+            kind: DeliveryRoundKind::Review,
             short: "3 hallazgos".into(),
             cause: "La revisión pidió cambios".into(),
             items: items.clone(),
@@ -10299,7 +10369,7 @@ fn each_send_back_opens_a_round_that_closes_once_its_work_is_committed() {
     );
     let round = round_now(&h, &task).expect("review findings open a round");
     assert_eq!(round.round.number, 2);
-    assert_eq!(round.round.kind, "review");
+    assert_eq!(round.round.kind, DeliveryRoundKind::Review);
     assert_eq!(round.round.cause, "2 hallazgos de revisión");
     assert_eq!(
         round.round.items,
@@ -10346,7 +10416,10 @@ fn each_send_back_opens_a_round_that_closes_once_its_work_is_committed() {
     assert_eq!(rounds[0].outcome.as_deref(), Some("corregidos"));
     assert!(rounds[0].closed_at_ms.is_some());
     let round = round_now(&h, &task).unwrap();
-    assert_eq!((round.round.number, round.round.kind.as_str()), (3, "qa"));
+    assert_eq!(
+        (round.round.number, round.round.kind),
+        (3, DeliveryRoundKind::Qa)
+    );
     assert_eq!(round.round.cause, "1 hallazgo de QA");
 
     // Its stages pass again: the round still wants its commit.
@@ -10399,7 +10472,7 @@ fn qa_problems_sent_to_fix_refine_the_round_their_qa_opened() {
         .unwrap();
     let round = round_now(&h, &task).unwrap();
     assert_eq!(round.round.number, 2, "the same round, not a new one");
-    assert_eq!(round.round.kind, "qa_problems");
+    assert_eq!(round.round.kind, DeliveryRoundKind::QaProblems);
     assert_eq!(round.round.cause, "1 problema de QA para corregir");
     assert_eq!(
         round.round.items,
@@ -10449,7 +10522,7 @@ fn a_failing_check_opens_a_round_the_fix_is_told_about() {
     );
     // There as soon as the check is seen ended.
     let round = round_now(&h, &task).expect("a failing check opens a round");
-    assert_eq!(round.round.kind, "checks");
+    assert_eq!(round.round.kind, DeliveryRoundKind::Checks);
     assert_eq!(
         round.round.cause,
         "Fallan comprobaciones de Tinto: `exit=1`"
@@ -10533,7 +10606,10 @@ fn a_checks_round_closes_once_its_checks_pass_again_with_nothing_to_publish() {
         super::rounds::after_job(&store, &job).unwrap();
     };
     check("c1", "failed");
-    assert_eq!(round_now(&h, &task).unwrap().round.kind, "checks");
+    assert_eq!(
+        round_now(&h, &task).unwrap().round.kind,
+        DeliveryRoundKind::Checks
+    );
     // A setup step later, the same check passes on the same code: the
     // worktree is clean, so the round has nothing left to commit.
     check("c2", "finished");
@@ -10639,7 +10715,7 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
     // The coordinator sends the work back: the stage answers the PR.
     let fix = h.dispatch(&task, "implementation", "events=codex-ok touch=fix.txt");
     let round = round_now(&h, &task).expect("a writing stage on the PR's news opens a round");
-    assert_eq!(round.round.kind, "pr");
+    assert_eq!(round.round.kind, DeliveryRoundKind::Pr);
     assert_eq!(
         round.round.cause,
         "Cambios pedidos en el PR #308 por ana (2 comentarios)"
@@ -10736,7 +10812,7 @@ fn changes_asked_open_their_round_as_they_arrive_even_with_the_push_drifted() {
         }
     ));
     let round = phase.round.expect("the changes asked open a round");
-    assert_eq!(round.round.kind, "pr");
+    assert_eq!(round.round.kind, DeliveryRoundKind::Pr);
     assert_eq!(phase.next_stage.as_deref(), Some("implementation"));
 
     // Settled another way (answered on the PR): resolve_job with the task
@@ -10767,7 +10843,7 @@ fn a_sync_with_conflicts_opens_a_round_once() {
     h.service.save_approval(&sync, "approval_approved").unwrap();
     h.service.save_approval(&sync, "step_matches").unwrap();
     let round = round_now(&h, &task).unwrap();
-    assert_eq!(round.round.kind, "sync");
+    assert_eq!(round.round.kind, DeliveryRoundKind::Sync);
     assert_eq!(
         round.round.cause,
         "Conflictos al sincronizar con la base en 1 archivo"
@@ -11505,6 +11581,27 @@ fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
     // The base moved after the green run, without conflicts: it merges
     // without a sync and a new run first.
     assert!(refused(green).is_none());
+
+    // While it waits for the user, checks running again leave it asked;
+    // conflicts with the base take it back and tell the coordinator.
+    let merge = || {
+        h.service
+            .latest_approval(&task.id, DeliveryRung::Merge)
+            .unwrap()
+    };
+    github.snapshot.lock().unwrap()["statusCheckRollup"] = json!([check("ci", "IN_PROGRESS", "")]);
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(merge().unwrap().status, DeliveryApprovalStatus::Pending);
+    github.snapshot.lock().unwrap()["mergeable"] = json!("CONFLICTING");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert!(merge().is_none());
+    let withdrawn = h
+        .service
+        .store()
+        .unwrap()
+        .event_details("step_withdrawn")
+        .unwrap();
+    assert!(withdrawn[0].starts_with("merge: el PR #7 tiene conflictos con su base"));
 }
 
 #[test]
@@ -11624,7 +11721,7 @@ fn a_pr_merged_on_github_opens_a_ci_round_only_while_a_check_fails() {
         }
     );
     let round = phase.round.expect("a round to fix it");
-    assert_eq!(round.round.kind, "ci");
+    assert_eq!(round.round.kind, DeliveryRoundKind::Ci);
     assert!(
         round.round.cause.contains("arréglalo en main"),
         "{}",
@@ -11767,7 +11864,7 @@ fn a_round_opened_during_a_merge_waits_for_its_commit_and_runs_on_top_of_it() {
         &h.service.store().unwrap(),
         &task.id,
         super::rounds::NewRound {
-            kind: "qa_problems",
+            kind: DeliveryRoundKind::QaProblems,
             short: "1 problema de QA".into(),
             cause: "1 problema de QA para corregir".into(),
             items: vec!["#1 P1: the toast covers Retry → move it up".into()],
@@ -11778,12 +11875,12 @@ fn a_round_opened_during_a_merge_waits_for_its_commit_and_runs_on_top_of_it() {
     let rounds = || h.service.store().unwrap().task_rounds(&task.id).unwrap();
     let waiting = rounds()
         .into_iter()
-        .find(|round| round.kind == "qa_problems")
+        .find(|round| round.kind == DeliveryRoundKind::QaProblems)
         .unwrap();
     assert!(waiting.waits_merge_commit && waiting.is_open());
     // The merge's own round stays the one its stages work in.
     let phase = h.service.overview().unwrap().phases[&task.id].clone();
-    assert_eq!(phase.round.unwrap().round.kind, "sync");
+    assert_eq!(phase.round.unwrap().round.kind, DeliveryRoundKind::Sync);
     let fix = resolve_merge(&h, &task);
     assert!(!fix.round.join("\n").contains("toast"), "{:?}", fix.round);
 
@@ -11815,7 +11912,10 @@ fn a_round_opened_during_a_merge_waits_for_its_commit_and_runs_on_top_of_it() {
     assert!(!released.waits_merge_commit && released.is_open());
     assert!(released.opened_at_ms >= concluded.executed_at_ms.unwrap());
     let phase = h.service.overview().unwrap().phases[&task.id].clone();
-    assert_eq!(phase.round.unwrap().round.kind, "qa_problems");
+    assert_eq!(
+        phase.round.unwrap().round.kind,
+        DeliveryRoundKind::QaProblems
+    );
     // Its fix is told about it, on top of the merge commit.
     let fix = h.dispatch(&task, "implementation", "events=codex-ok touch=toast.txt");
     assert!(fix.round.join("\n").contains("toast"), "{:?}", fix.round);
@@ -11831,7 +11931,7 @@ fn a_merge_other_work_got_into_asks_the_user_how_to_commit_it() {
         id: "legacy".into(),
         task_id: task.id.clone(),
         number: 3,
-        kind: "pr".into(),
+        kind: DeliveryRoundKind::Pr,
         short: "PR".into(),
         cause: "Cambios pedidos en el PR #5".into(),
         items: Vec::new(),
@@ -12389,7 +12489,7 @@ fn a_check_the_system_killed_runs_again_once_before_it_sends_the_work_back() {
         .all(|run| run.status == DeliveryJobStatus::Failed));
     // Killed again: now it does.
     let round = eventually(|| round_now(&h, &task));
-    assert_eq!(round.round.kind, "checks");
+    assert_eq!(round.round.kind, DeliveryRoundKind::Checks);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(ended_checks(&h, &task, 2).len(), 2, "only one retry");
 }
@@ -13117,7 +13217,7 @@ fn a_restack_that_stops_on_conflicts_pauses_and_tinto_continues_it_or_abandons_i
             .task_rounds(&task.id)
             .unwrap()
             .into_iter()
-            .filter(|round| round.kind == "sync" && round.is_open())
+            .filter(|round| round.kind == DeliveryRoundKind::Sync && round.is_open())
             .count()
     };
     assert_eq!(open_sync_rounds(), 1);
@@ -13151,7 +13251,8 @@ fn a_restack_that_stops_on_conflicts_pauses_and_tinto_continues_it_or_abandons_i
         (sync.conflicts == ["notes2.txt"]).then_some(sync)
     });
     assert!(again.outcome.unwrap().contains("notes2.txt"));
-    assert_eq!(open_sync_rounds(), 1);
+    // The first stop's round closes, then this one's opens.
+    eventually(|| (open_sync_rounds() == 1).then_some(()));
     let resolved_once = in_worktree(&task, &["show", "HEAD:notes.txt"]);
     assert_eq!(resolved_once, "notes.txt from both");
 
@@ -13203,6 +13304,21 @@ fn a_commit_step_survives_tintos_own_restack_and_the_push_goes_on() {
         .request_approval(step(&task, DeliveryRung::Commit, "Add own"))
         .unwrap();
     let commit = h.service.decide_approval(&commit.id, true, None).unwrap();
+    // While a step runs git in the worktree (the restack, before its sync
+    // step is saved), a reader takes no rewritten commit for an outside one.
+    let committed = in_worktree(&task, &["rev-parse", "HEAD"]);
+    let lock = super::service::keyed_lock(&h.service.inner.git_work, &task.id);
+    {
+        let _running = lock.lock().unwrap();
+        write_files(&task, &["more.txt"]);
+        git(&task.worktree, &["add", "--all"]);
+        git(
+            &task.worktree,
+            &["commit", "-q", "--amend", "-m", "Rewritten"],
+        );
+        assert!(!h.service.commits_lost(&task).unwrap());
+    }
+    git(&task.worktree, &["reset", "-q", "--hard", &committed]);
     let asked = h
         .service
         .request_approval(step(&task, DeliveryRung::Sync, "Restack"))
@@ -13572,7 +13688,7 @@ fn past_the_brainstorm_tinto_asks_the_push_and_jira_steps_itself() {
     h.service.set_jira_token(h.repo.path(), "secret").unwrap();
     h.service.advance_ladders().unwrap();
     let [step] = steps(DeliveryRung::Jira).try_into().unwrap();
-    assert_eq!(step.stage.as_deref(), Some("after_pr"));
+    assert_eq!(step.stage, Some(super::model::DeliveryJiraStage::AfterPr));
     assert_eq!(
         step.status,
         DeliveryApprovalStatus::Executed,
@@ -13639,7 +13755,10 @@ fn past_the_brainstorm_a_failing_checks_round_gets_its_fix_stage_from_tinto() {
         store.put_job(&check).unwrap();
         super::rounds::after_job(&store, &check).unwrap();
     }
-    assert_eq!(round_now(&h, &task).unwrap().round.kind, "checks");
+    assert_eq!(
+        round_now(&h, &task).unwrap().round.kind,
+        DeliveryRoundKind::Checks
+    );
 
     h.service.advance_ladders().unwrap();
     let fixes: Vec<DeliveryJob> = h
@@ -13913,7 +14032,7 @@ fn a_restack_after_a_squash_drops_the_predecessors_commits_the_follower_synced_i
         &first.id,
         &super::prs::parse_pr_url("https://github.com/o/r/pull/1").unwrap(),
     );
-    pr.state = "merged".into();
+    pr.state = super::prs::DeliveryPrState::Merged;
     pr.head = Some(head.clone());
     h.service.store().unwrap().put_pr(&pr).unwrap();
     for name in ["one.txt", "one-b.txt", "one-c.txt"] {

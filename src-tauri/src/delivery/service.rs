@@ -22,9 +22,9 @@ use super::model::{
     DeliveryDecision, DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy,
     DeliveryJob, DeliveryJobLog, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
     DeliveryOverview, DeliveryPackage, DeliveryPlatform, DeliveryPreparedStack, DeliveryQaPrepare,
-    DeliveryQaStack, DeliveryRepoSettings, DeliveryResultState, DeliveryScopeMode,
-    DeliverySettings, DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone,
-    DeliveryTiming, NewBlocker, SCOPE_ROLE,
+    DeliveryQaStack, DeliveryRepoSettings, DeliveryResultState, DeliveryRoundKind,
+    DeliveryRunStatus, DeliveryScopeMode, DeliverySettings, DeliverySettingsProposalStatus,
+    DeliveryTask, DeliveryTaskMilestone, DeliveryTiming, NewBlocker, SCOPE_ROLE,
 };
 use super::phase::{
     check_fails, current_checks, current_setup, has_open_findings, is_broken, last_change,
@@ -195,6 +195,17 @@ const MONITOR_TICK: Duration = if cfg!(test) {
     Duration::from_millis(200)
 };
 
+/// The longest gap between two looks at a running job that counts towards
+/// its timeout. Looks come every [`MONITOR_TICK`]: a far longer gap is the
+/// computer asleep, not the job running.
+const COUNTED_GAP_MS: u64 = 60_000;
+
+/// `ran_ms` plus what of the time from `last_ms` to `now_ms` the job could
+/// run. A clock set back counts nothing.
+fn ran_until(ran_ms: u64, last_ms: u64, now_ms: u64) -> u64 {
+    ran_ms + now_ms.saturating_sub(last_ms).min(COUNTED_GAP_MS)
+}
+
 /// The end of a failed check's output its next stage reads.
 const CHECK_TAIL_CHARS: usize = 2_000;
 
@@ -249,6 +260,12 @@ pub(super) struct Inner {
     /// Jobs whose process outlived the last Tinto, which this one follows
     /// once the app is wired (see [`DeliveryService::follow_running`]).
     adopted: Mutex<Vec<String>>,
+    /// What held each queued job at the last scheduling tick, then what
+    /// its `job_started` event says of a long wait (see `Queue::note_waits`).
+    queue_notes: Mutex<HashMap<String, String>>,
+    /// Each live task's phase as last recorded (see `phase_log`); None
+    /// until the first overview reads it from the trail.
+    pub(super) phases_seen: Mutex<Option<HashMap<String, String>>>,
     /// Tests set it to stand for Tinto closing: its jobs keep running and
     /// nothing follows them any more.
     closed: AtomicBool,
@@ -612,6 +629,8 @@ impl DeliveryService {
                 pausing: Mutex::new(HashSet::new()),
                 restart_retries: Mutex::new(Vec::new()),
                 adopted: Mutex::new(Vec::new()),
+                queue_notes: Mutex::new(HashMap::new()),
+                phases_seen: Mutex::new(None),
                 closed: AtomicBool::new(false),
                 notify: Mutex::new(None),
                 changes: (Mutex::new(0), Condvar::new()),
@@ -1010,6 +1029,9 @@ impl DeliveryService {
             .iter()
             .map(|task| (task.id.clone(), super::phase::task_phase(task, &facts)))
             .collect();
+        if let Err(error) = self.record_phase_changes(&store, &phases) {
+            eprintln!("tinto: delivery could not record the phase changes: {error}");
+        }
         let archived_packages: Vec<DeliveryTask> = store
             .removed_tasks()?
             .into_iter()
@@ -1207,7 +1229,7 @@ impl DeliveryService {
                 let run = store
                     .run(run_id)?
                     .ok_or_else(|| DeliveryError::not_found("la ejecución", run_id))?;
-                if run.status != "active" {
+                if run.status != DeliveryRunStatus::Active {
                     return Err(DeliveryError::new(
                         "run_closed",
                         "la ejecución está cerrada",
@@ -2399,11 +2421,18 @@ impl DeliveryService {
     }
 
     pub fn cancel(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
+        self.cancel_because(job_id, "Cancelado por el usuario.")
+    }
+
+    /// Cancels a job; a queued one keeps `reason` as its error. A running
+    /// one ends as cancelled by the user once its process stops.
+    pub fn cancel_because(&self, job_id: &str, reason: &str) -> Result<DeliveryJob, DeliveryError> {
         let mut job = self.job(job_id)?;
         match job.status {
             DeliveryJobStatus::Queued => {
                 let store = self.store()?;
                 job.status = DeliveryJobStatus::Cancelled;
+                job.error = Some(reason.to_string());
                 job.ended_at_ms = Some(now_ms());
                 store.put_job(&job)?;
                 settle_lease(&store, &job, false, &[])?;
@@ -2412,7 +2441,7 @@ impl DeliveryService {
                     "job_cancelled",
                     Some(&job.task_id),
                     Some(&job.id),
-                    "",
+                    reason,
                 )?;
                 drop(store);
                 self.tick();
@@ -2444,7 +2473,8 @@ impl DeliveryService {
             {
                 let store = self.store()?;
                 job.status = DeliveryJobStatus::Cancelled;
-                job.error = Some("Pausado y cancelado por el usuario.".to_string());
+                let reason = "Pausado y cancelado por el usuario.";
+                job.error = Some(reason.to_string());
                 store.put_job(&job)?;
                 settle_lease(&store, &job, true, &[])?;
                 store.record_event(
@@ -2452,7 +2482,7 @@ impl DeliveryService {
                     "job_cancelled",
                     Some(&job.task_id),
                     Some(&job.id),
-                    "",
+                    reason,
                 )?;
                 drop(store);
                 self.tick();
@@ -2869,7 +2899,7 @@ impl DeliveryService {
         let pr = store.pr(task_id)?;
         let refusal = pr
             .as_ref()
-            .filter(|_| round.kind == "pr")
+            .filter(|_| round.kind == DeliveryRoundKind::Pr)
             .and_then(|pr| pr.threads_refusal("la ronda viene de comentarios del PR"));
         if let Some(refusal) = refusal {
             match unanswered_reason.map(resolve_note).transpose()? {
@@ -2972,7 +3002,8 @@ impl DeliveryService {
 
     // ---- scheduling ----
 
-    /// Starts every queued job that can run now, in FIFO order: one job per
+    /// Starts every queued job that can run now, oldest first (a task's own
+    /// checks quickest first): one job per
     /// task at a time, up to the capacity, and exclusive resources in the
     /// order they were requested.
     pub fn tick(&self) {
@@ -3024,6 +3055,9 @@ impl DeliveryService {
             store.put_job(job)?;
         }
         let (plan, leases) = queue.plan(now);
+        if let Ok(mut notes) = self.inner.queue_notes.lock() {
+            queue.note_waits(&plan, now, &mut notes);
+        }
         for lease in leases.iter().filter(|lease| !queue.leases.contains(lease)) {
             store.put_lease(lease)?;
         }
@@ -3247,12 +3281,18 @@ impl DeliveryService {
             if let Some(start) = &start {
                 store.set_start_snapshot(&job.id, start)?;
             }
+            let waited = self
+                .inner
+                .queue_notes
+                .lock()
+                .ok()
+                .and_then(|mut notes| notes.remove(&job.id));
             store.record_event(
                 now_ms(),
                 "job_started",
                 Some(&job.task_id),
                 Some(&job.id),
-                "",
+                waited.as_deref().unwrap_or_default(),
             )?;
             Ok(current)
         })();
@@ -3368,8 +3408,11 @@ impl DeliveryService {
             .ok()
             .and_then(|cancels| cancels.get(&job.id).cloned())
             .unwrap_or_default();
-        let deadline_ms =
-            job.started_at_ms.unwrap_or_else(now_ms) + u64::from(job.timeout_minutes) * 60_000;
+        let budget_ms = u64::from(job.timeout_minutes) * 60_000;
+        // A job adopted after a restart counts all the time since it
+        // started, Tinto closed or not; from here on, only time it can run.
+        let mut looked_ms = now_ms();
+        let mut ran_ms = looked_ms.saturating_sub(job.started_at_ms.unwrap_or(looked_ms));
         let mut cancelled = false;
         let mut timed_out = false;
         // When the job is being stopped: kill it outright once this passes.
@@ -3385,10 +3428,13 @@ impl DeliveryService {
                 Ok(None) => {}
                 Err(_) => break None,
             }
+            let now = now_ms();
+            ran_ms = ran_until(ran_ms, looked_ms, now);
+            looked_ms = now;
             if !cancelled && !timed_out {
                 if cancel.load(Ordering::SeqCst) {
                     cancelled = true;
-                } else if now_ms() >= deadline_ms {
+                } else if ran_ms >= budget_ms {
                     timed_out = true;
                 }
                 if cancelled || timed_out {
@@ -3741,9 +3787,9 @@ impl DeliveryService {
         let Some(mut job) = store.job(job_id)? else {
             return Ok(());
         };
+        let reason = "Cancelado por el usuario mientras Tinto preparaba el entorno de QA.";
         job.status = DeliveryJobStatus::Cancelled;
-        job.error =
-            Some("Cancelado por el usuario mientras Tinto preparaba el entorno de QA.".to_string());
+        job.error = Some(reason.to_string());
         job.ended_at_ms = Some(now_ms());
         job.current_command = None;
         job.current_command_at_ms = None;
@@ -3754,7 +3800,7 @@ impl DeliveryService {
             "job_cancelled",
             Some(&job.task_id),
             Some(&job.id),
-            "",
+            reason,
         )
     }
 
@@ -4013,7 +4059,10 @@ impl DeliveryService {
         let jobs = self.store()?.task_jobs(task_id)?;
         for job in jobs {
             if is_check(&job) && job.status.is_open() {
-                let _ = self.cancel(&job.id);
+                let _ = self.cancel_because(
+                    &job.id,
+                    "Cancelado para sincronizar la tarea; vuelve a correr después.",
+                );
             }
         }
         Ok(self
@@ -4765,7 +4814,7 @@ fn killed(job: &DeliveryJob) -> bool {
 
 /// A failed check of Tinto's whose failure may not be the code's: its first
 /// failure on this code, killed, or in a repo whose jobs need an
-/// environment (Docker, probes) that may be down.
+/// environment (Docker, probes, services) that may be down.
 fn doubtful_check(
     job: &DeliveryJob,
     task: &DeliveryTask,
@@ -4794,8 +4843,7 @@ fn doubtful_check(
     }
     killed(job)
         || store.repo_settings(&task.repo).is_ok_and(|settings| {
-            !settings.environment_probes.is_empty()
-                || super::environment::uses_docker(&task.repo, task.distro.as_deref(), &settings)
+            super::environment::may_be_down(&task.repo, task.distro.as_deref(), &settings)
         })
 }
 
@@ -5185,6 +5233,24 @@ mod tests {
     fn each_package_of_an_issue_gets_its_own_task_slug() {
         assert_eq!(task_slug("AGOS-129", None), "agos_129");
         assert_eq!(task_slug("AGOS-129", Some(3)), "agos_129_p3");
+    }
+
+    #[test]
+    fn time_asleep_does_not_count_towards_a_jobs_timeout() {
+        // Looked at every 200 ms for a minute: all of it counts.
+        let mut ran = 0;
+        for at in (200..=60_000).step_by(200) {
+            ran = ran_until(ran, at - 200, at);
+        }
+        assert_eq!(ran, 60_000);
+        // A night asleep between two looks counts no more than the cap.
+        let night = 10 * 60 * 60_000;
+        assert_eq!(
+            ran_until(ran, 60_000, 60_000 + night),
+            60_000 + COUNTED_GAP_MS
+        );
+        // A clock set back counts nothing.
+        assert_eq!(ran_until(ran, 60_000, 50_000), 60_000);
     }
 
     #[test]
