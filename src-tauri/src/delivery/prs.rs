@@ -2542,6 +2542,27 @@ impl DeliveryService {
             };
             self.set_drift(step, drift)?;
         }
+        // A merge waiting for the user that waiting will not make possible
+        // is taken back: the coordinator hears it and asks again once the
+        // PR is put right. Checks running or a review pending are not that.
+        let stale = match pr.state.as_str() {
+            "closed" => Some(format!("el PR #{} se cerró sin fusionar", pr.number)),
+            _ if pr.is_open() && pr.conflicts => {
+                Some(format!("el PR #{} tiene conflictos con su base", pr.number))
+            }
+            _ => None,
+        };
+        let pending = self
+            .latest_approval(&pr.task_id, DeliveryRung::Merge)?
+            .filter(|merge| merge.status == DeliveryApprovalStatus::Pending);
+        if let (Some(why), Some(merge)) = (stale, pending) {
+            let reason = format!("{why}; pídelo de nuevo cuando se pueda fusionar");
+            match self.withdraw(&merge.id, &reason, "step_withdrawn") {
+                // The user decided it meanwhile: its run checks the PR.
+                Err(error) if error.category == "approval_not_pending" => {}
+                other => other?,
+            }
+        }
         if pr.state != "merged" {
             return Ok(());
         }

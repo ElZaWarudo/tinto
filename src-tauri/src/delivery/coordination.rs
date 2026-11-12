@@ -1948,6 +1948,18 @@ impl DeliveryService {
     /// The coordinator takes back a request the user has not answered, to
     /// ask it again with other text. The reason stays in the log.
     pub fn withdraw_approval(&self, approval_id: &str, reason: &str) -> Result<(), DeliveryError> {
+        self.withdraw(approval_id, reason, "approval_withdrawn")
+    }
+
+    /// Takes back a request the user has not answered, recording `event`:
+    /// `approval_withdrawn` when the coordinator does it, `step_withdrawn`
+    /// (which wakes it) when Tinto does.
+    pub(super) fn withdraw(
+        &self,
+        approval_id: &str,
+        reason: &str,
+        event: &str,
+    ) -> Result<(), DeliveryError> {
         let lock = super::service::keyed_lock(&self.inner.deciding, approval_id);
         let _deciding = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let approval = self.approval(approval_id)?;
@@ -1971,7 +1983,7 @@ impl DeliveryService {
         store.delete_approval(&approval.id)?;
         store.record_event(
             now_ms(),
-            "approval_withdrawn",
+            event,
             Some(&approval.task_id),
             None,
             &format!("{rung}: {}", reason.trim()),

@@ -11536,6 +11536,27 @@ fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
     // The base moved after the green run, without conflicts: it merges
     // without a sync and a new run first.
     assert!(refused(green).is_none());
+
+    // While it waits for the user, checks running again leave it asked;
+    // conflicts with the base take it back and tell the coordinator.
+    let merge = || {
+        h.service
+            .latest_approval(&task.id, DeliveryRung::Merge)
+            .unwrap()
+    };
+    github.snapshot.lock().unwrap()["statusCheckRollup"] = json!([check("ci", "IN_PROGRESS", "")]);
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(merge().unwrap().status, DeliveryApprovalStatus::Pending);
+    github.snapshot.lock().unwrap()["mergeable"] = json!("CONFLICTING");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert!(merge().is_none());
+    let withdrawn = h
+        .service
+        .store()
+        .unwrap()
+        .event_details("step_withdrawn")
+        .unwrap();
+    assert!(withdrawn[0].starts_with("merge: el PR #7 tiene conflictos con su base"));
 }
 
 #[test]
