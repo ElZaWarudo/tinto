@@ -770,6 +770,75 @@ pub fn restack(
     rebase_step(place, worktree, &args, true)
 }
 
+/// Where the branch last met any of `heads` (commits of the package it was
+/// built on): the newest of its merge bases with them. Heads this git does
+/// not have are skipped.
+pub fn last_met(place: Place<'_>, worktree: &Path, heads: &[String]) -> Option<String> {
+    let mut newest: Option<String> = None;
+    for head in heads {
+        let Some(met) = git(place, worktree, &["merge-base", "HEAD", head])
+            .ok()
+            .filter(|met| !met.is_empty())
+        else {
+            continue;
+        };
+        if newest
+            .as_deref()
+            .is_none_or(|known| known != met && is_ancestor(place, worktree, known, &met))
+        {
+            newest = Some(met);
+        }
+    }
+    newest
+}
+
+/// How many commits, merges left out, HEAD has that none of `not` has.
+/// Commits in `not` this git does not have are skipped.
+fn count_own(place: Place<'_>, worktree: &Path, not: &[&str]) -> Result<usize, DeliveryError> {
+    let excluded: Vec<String> = not
+        .iter()
+        .filter(|commit| {
+            git_ok(
+                place,
+                worktree,
+                &["cat-file", "-e", &format!("{commit}^{{commit}}")],
+            )
+        })
+        .map(|commit| format!("^{commit}"))
+        .collect();
+    let mut args = vec!["rev-list", "--count", "--no-merges", "HEAD"];
+    args.extend(excluded.iter().map(String::as_str));
+    Ok(git(place, worktree, &args)?.parse().unwrap_or(0))
+}
+
+/// The commits a restack from `from` would replay (`from..HEAD`, merges
+/// left out) that `onto` or `heads` already have: the base's own, or the
+/// merged package's.
+pub fn replayed_twice(
+    place: Place<'_>,
+    worktree: &Path,
+    from: &str,
+    onto: &str,
+    heads: &[String],
+) -> Result<usize, DeliveryError> {
+    let replayed = count_own(place, worktree, &[from])?;
+    let mut not = vec![from, onto];
+    not.extend(heads.iter().map(String::as_str));
+    Ok(replayed.saturating_sub(count_own(place, worktree, &not)?))
+}
+
+/// Whether the branch still has commits of `heads` that `onto` lacks.
+pub fn carries(
+    place: Place<'_>,
+    worktree: &Path,
+    onto: &str,
+    heads: &[String],
+) -> Result<bool, DeliveryError> {
+    let mut not = vec![onto];
+    not.extend(heads.iter().map(String::as_str));
+    Ok(count_own(place, worktree, &[onto])? > count_own(place, worktree, &not)?)
+}
+
 /// Git settings every restack runs with, whatever the user's config says:
 /// no autosquash or ref updates rewriting more than the branch, no rerere
 /// reusing a recorded resolution unseen, and no editor waiting for input.

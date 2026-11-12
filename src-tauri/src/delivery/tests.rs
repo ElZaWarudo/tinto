@@ -14096,6 +14096,268 @@ fn a_restack_after_a_squash_drops_the_predecessors_commits_the_follower_synced_i
 }
 
 #[test]
+fn a_restack_starts_where_the_branch_merged_its_predecessor_rewritten_since_and_refuses_an_overlap()
+{
+    let h = harness();
+    let _origin = bare_origin(&h);
+    let create = |index: u32| {
+        h.service
+            .create_task(NewTask {
+                repo: h.repo.path().to_path_buf(),
+                distro: None,
+                key: "K-90".into(),
+                title: "K-90".into(),
+                read_dirs: Vec::new(),
+                base: None,
+                branch: None,
+                run_id: None,
+                package: Some(NewPackage {
+                    index,
+                    of: 2,
+                    title: format!("Parte {index}"),
+                    builds_on: (index > 1).then_some(index - 1),
+                    until: None,
+                    pr_after_merge: index > 1,
+                }),
+            })
+            .unwrap()
+    };
+    let first = create(1);
+    let second = create(2);
+    // Package 1 is published through Tinto; package 2 merges it in.
+    write_files(&first, &["one.txt"]);
+    commit_outside(&first, "one");
+    git(&first.worktree, &["push", "-q", "origin", &first.branch]);
+    let pushed = in_worktree(&first, &["rev-parse", "HEAD"]);
+    let mut push = executed_step(&first.id, "push");
+    push.tip = Some(pushed.clone());
+    h.service.store().unwrap().put_approval(&push).unwrap();
+    write_files(&second, &["two.txt"]);
+    commit_outside(&second, "two");
+    git(&second.worktree, &["fetch", "-q", "origin"]);
+    let theirs = format!("origin/{}", first.branch);
+    git(&second.worktree, &["merge", "-q", "--no-edit", &theirs]);
+
+    // Package 1 is rewritten afterwards, and that is what squash-merges.
+    std::fs::write(first.worktree.join("one.txt"), "one, reworded\n").unwrap();
+    git(&first.worktree, &["add", "--all"]);
+    git(
+        &first.worktree,
+        &["commit", "-q", "--amend", "-m", "one, reworded"],
+    );
+    let mut pr = super::prs::DeliveryPr::linked(
+        &first.id,
+        &super::prs::parse_pr_url("https://github.com/o/r/pull/1").unwrap(),
+    );
+    pr.state = super::prs::DeliveryPrState::Merged;
+    pr.head = Some(in_worktree(&first, &["rev-parse", "HEAD"]));
+    h.service.store().unwrap().put_pr(&pr).unwrap();
+    std::fs::write(h.repo.path().join("one.txt"), "one, reworded\n").unwrap();
+    git(h.repo.path(), &["add", "--all"]);
+    git(h.repo.path(), &["commit", "-q", "-m", "K-90 1/2 (#1)"]);
+    git(h.repo.path(), &["push", "-q", "origin", "main"]);
+    let mut merge = executed_step(&first.id, "merge");
+    merge.merge_method = Some("squash".into());
+    h.service.store().unwrap().put_approval(&merge).unwrap();
+
+    // The old base is package 1's last commit the branch has, not where it
+    // meets the rewritten head (the start of the chain).
+    assert_eq!(h.service.retarget_packages().unwrap(), 1);
+    let second = h.service.task(&second.id).unwrap();
+    assert_eq!(second.restack_from.as_deref(), Some(pushed.as_str()));
+
+    let restack = || {
+        let asked = h
+            .service
+            .request_approval(step(&second, DeliveryRung::Sync, "Restack"))
+            .unwrap();
+        h.service.decide_approval(&asked.id, true, None).unwrap()
+    };
+    // From a base that would replay package 1's commit, nothing is rebased
+    // and the error names the right one.
+    let head = in_worktree(&second, &["rev-parse", "HEAD"]);
+    h.service
+        .set_restack_from(&second.id, &second.base_commit)
+        .unwrap();
+    let refused = restack();
+    assert_eq!(refused.status, DeliveryApprovalStatus::Failed);
+    let outcome = refused.outcome.unwrap();
+    assert!(outcome.contains("restack_overlap"), "{outcome}");
+    assert!(outcome.contains("1 commit(s)"), "{outcome}");
+    assert!(outcome.contains(&pushed), "{outcome}");
+    assert_eq!(in_worktree(&second, &["rev-parse", "HEAD"]), head);
+
+    // From there, only package 2's own commit is replayed.
+    h.service.set_restack_from(&second.id, &pushed).unwrap();
+    let done = restack();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert_eq!(
+        in_worktree(&second, &["diff", "--name-only", "origin/main", "HEAD"]),
+        "two.txt"
+    );
+    assert_eq!(
+        in_worktree(&second, &["rev-list", "--count", "origin/main..HEAD"]),
+        "1"
+    );
+}
+
+#[test]
+fn a_paused_restack_whose_rebase_is_gone_is_never_started_again_by_tinto() {
+    for skipped in [false, true] {
+        let h = harness();
+        let _origin = bare_origin(&h);
+        let coordinator = Coordinator::start(&h);
+        let task = squashed_under(
+            &h,
+            "RG-1",
+            &["two.txt", "notes.txt"],
+            &[("notes.txt", "main's notes\n")],
+        );
+        // In the coordinator's batch, past its brainstorm: Tinto asks a due
+        // restack on its own.
+        let mut task = task;
+        task.run_id = Some(coordinator.run_id.clone());
+        h.service.store().unwrap().put_task(&task).unwrap();
+        h.service.end_brainstorm(&coordinator.run_id).unwrap();
+        let from = task.restack_from.clone().unwrap();
+        let place = super::tasks::Place::Native;
+        // Past the brainstorm a step asked runs at once.
+        let ask = |rung: DeliveryRung, title: &str| {
+            let asked = h
+                .service
+                .request_approval(step(&task, rung, title))
+                .unwrap();
+            match asked.status {
+                DeliveryApprovalStatus::Pending => {
+                    h.service.decide_approval(&asked.id, true, None).unwrap()
+                }
+                _ => asked,
+            }
+        };
+        // What Tinto last published, which the restacked branch replaces.
+        write_files(&task, &["more.txt"]);
+        ask(DeliveryRung::Commit, "Add more");
+        ask(DeliveryRung::Push, "Publish");
+        let published = in_worktree(&task, &["rev-parse", "HEAD"]);
+        let syncs = || {
+            h.service
+                .store()
+                .unwrap()
+                .approvals()
+                .unwrap()
+                .into_iter()
+                .filter(|approval| approval.rung == DeliveryRung::Sync)
+                .count()
+        };
+        let pause = || {
+            let paused = ask(DeliveryRung::Sync, "Restack");
+            assert_eq!(paused.conflicts, ["notes.txt"], "{:?}", paused.outcome);
+            // Tinto's own reads leave it paused.
+            h.service.overview().unwrap();
+            let paused = h.service.approval(&paused.id).unwrap();
+            assert!(paused.created.is_empty(), "{:?}", paused.outcome);
+            assert!(super::tasks::rebase_head(place, &task.worktree).is_some());
+            paused
+        };
+        // Nothing Tinto does on its own starts it again.
+        let asks_nothing = |count: usize| {
+            h.service.overview().unwrap();
+            h.service.advance_ladders().unwrap();
+            assert_eq!(syncs(), count);
+            assert!(super::tasks::rebase_head(place, &task.worktree).is_none());
+        };
+
+        let paused = pause();
+        if skipped {
+            // The paused rebase is edited outside Tinto so that it completes.
+            git(
+                &task.worktree,
+                &["-c", "core.editor=true", "rebase", "--skip"],
+            );
+        } else {
+            // The coordinator abandons it: the branch goes back.
+            let abandoned = coordinator.write(
+                "withdraw_approval",
+                json!({"approval_id": paused.id, "reason": "wrong old base"}),
+            );
+            assert_eq!(
+                abandoned["structuredContent"]["status"], "undone",
+                "{abandoned}"
+            );
+            assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), published);
+            asks_nothing(1);
+            // Asked again, then aborted in the shell: the step drifts.
+            let paused = pause();
+            git(&task.worktree, &["rebase", "--abort"]);
+            asks_nothing(2);
+            let drifted = h.service.approval(&paused.id).unwrap();
+            assert_eq!(drifted.status, DeliveryApprovalStatus::Drifted);
+            assert!(drifted.notice.is_some());
+            // Then restacked by hand.
+            let onto = in_worktree(&task, &["rev-parse", "origin/main"]);
+            git(
+                &task.worktree,
+                &[
+                    "-c",
+                    "core.editor=true",
+                    "rebase",
+                    "-q",
+                    "-X",
+                    "theirs",
+                    "--onto",
+                    &onto,
+                    &from,
+                ],
+            );
+        }
+        let count = syncs();
+        asks_nothing(count);
+        // Done outside Tinto: the step stands on the branch's own commits and
+        // the push replaces what Tinto published.
+        let latest = |rung: DeliveryRung| {
+            h.service
+                .store()
+                .unwrap()
+                .approvals()
+                .unwrap()
+                .into_iter()
+                .rev()
+                .find(|approval| approval.rung == rung)
+                .unwrap()
+        };
+        let done = latest(DeliveryRung::Sync);
+        assert_eq!(
+            done.status,
+            DeliveryApprovalStatus::Executed,
+            "{:?}",
+            done.outcome
+        );
+        assert!(!done.created.is_empty() && done.conflicts.is_empty());
+        assert_eq!(h.service.task(&task.id).unwrap().restack_from, None);
+        // Tinto may have published it already, as the repo lets it.
+        let push = match latest(DeliveryRung::Push) {
+            push if push.tip.as_deref() == Some(published.as_str()) => {
+                ask(DeliveryRung::Push, "Publish")
+            }
+            push => push,
+        };
+        assert!(
+            push.outcome
+                .as_deref()
+                .unwrap()
+                .contains("force-with-lease"),
+            "{:?}",
+            push.outcome
+        );
+    }
+}
+
+#[test]
 fn files_a_setup_command_rewrote_are_put_back_and_reported() {
     let h = harness();
     set_repo_setup(&h, &["touch=package-lock.json"]);

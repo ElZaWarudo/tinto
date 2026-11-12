@@ -3632,15 +3632,35 @@ function StageTrack({
                       title: approval.outcome ?? undefined,
                     }
                   : before;
+            const body = (
+              <>
+                <span className="delivery-node__name">
+                  <StatusMark icon={step.icon} />
+                  {label}
+                </span>
+                <small>{step.label}</small>
+              </>
+            );
+            // A paused restack opens on its step, where it can be abandoned.
+            const paused =
+              rung === "sync" && !!approval && pausedRestack(approvals)?.id === approval.id;
             return (
               <li key={stepKey(ladder)} className={`delivery-node delivery-node--${step.tone}`}>
-                <div title={step.title}>
-                  <span className="delivery-node__name">
-                    <StatusMark icon={step.icon} />
-                    {label}
-                  </span>
-                  <small>{step.label}</small>
-                </div>
+                {paused ? (
+                  <button
+                    type="button"
+                    title={step.title}
+                    onClick={() =>
+                      document
+                        .querySelector<HTMLButtonElement>(`#${PAUSED_RESTACK_ID} button`)
+                        ?.focus()
+                    }
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div title={step.title}>{body}</div>
+                )}
               </li>
             );
           })}
@@ -3926,24 +3946,37 @@ function CommitStep({ approvals }: { approvals: DeliveryApproval[] }) {
   );
 }
 
-/** A restack paused on conflicts: Tinto continues it once they are
- *  resolved, and the user can abandon it, keeping what was resolved. */
-function PausedRestack({ approvals }: { approvals: DeliveryApproval[] }) {
+const PAUSED_RESTACK_ID = "delivery-paused-restack";
+
+/** The task's latest sync when it is a restack paused on conflicts. */
+function pausedRestack(approvals: DeliveryApproval[]): DeliveryApproval | undefined {
   const sync = latestApproval(approvals, "sync");
   const paused =
     sync?.restack &&
     sync.status === "executed" &&
     (sync.conflicts?.length ?? 0) > 0 &&
     !(sync.created?.length ?? 0);
-  if (!sync || !paused) return null;
+  return paused ? sync : undefined;
+}
+
+/** A restack paused on conflicts: Tinto continues it once they are
+ *  resolved, and the user can abandon it, keeping what was resolved. */
+function PausedRestack({ approvals }: { approvals: DeliveryApproval[] }) {
+  const sync = pausedRestack(approvals);
+  if (!sync) return null;
   return (
-    <div className="delivery-commit-step" role="group" aria-label="Restack en pausa">
+    <div
+      id={PAUSED_RESTACK_ID}
+      className="delivery-commit-step"
+      role="group"
+      aria-label="Restack en pausa"
+    >
       {sync.notice && <p className="delivery-job__note">{sync.notice}</p>}
       <ActionButton
         title="La rama vuelve a donde estaba; lo resuelto se guarda en una referencia de recuperación."
         onAction={async () => {
           const ok = await confirm(
-            "La rama volverá a donde estaba antes del restack. Lo resuelto hasta ahora queda guardado en una referencia de recuperación, y la tarea sigue pendiente de restack.",
+            "La rama volverá a donde estaba antes del restack. Lo resuelto hasta ahora queda guardado en una referencia de recuperación; la tarea sigue pendiente de restack y Tinto no lo vuelve a empezar solo.",
             { title: "Abandonar el restack", okLabel: "Abandonar" },
           );
           if (!ok) return false;

@@ -2255,17 +2255,14 @@ impl DeliveryService {
                 .as_ref()
                 .is_some_and(|package| package.pr_after_merge);
             // The old base of the restack is the merged one's last commit
-            // this branch has: where its PR's head (as merged) and this
-            // branch last met. Commits of it the branch brought in by syncs
-            // are then left out, and the syncs' merge commits dropped.
+            // this branch has: where this branch last met any head of it
+            // Tinto knew (its PR's as merged, what it published or
+            // committed). Its PR's head alone misses it when that one was
+            // rewritten after this branch merged it (its own restack): they
+            // then meet only in the base. Commits of it the branch brought
+            // in by syncs are left out, and the syncs' merge commits dropped.
             let follower = Place::of(task.distro.as_deref());
-            let met = self
-                .task_pr(&other.id)?
-                .and_then(|pr| pr.head)
-                .and_then(|head| {
-                    tasks::git(follower, &task.worktree, &["merge-base", "HEAD", &head]).ok()
-                })
-                .filter(|commit| !commit.is_empty());
+            let met = tasks::last_met(follower, &task.worktree, &self.known_heads(&other)?);
             // Else, as before: a gated package's start, or what Tinto last
             // had of the merged branch (local, else published).
             let last_known = || -> Result<Option<String>, DeliveryError> {
@@ -2342,6 +2339,47 @@ impl DeliveryService {
             self.notify();
         }
         Ok(moved)
+    }
+
+    /// The commits of `task` Tinto knows: its PR's head, what its pushes
+    /// published and what its commit and sync steps created.
+    pub(super) fn known_heads(&self, task: &DeliveryTask) -> Result<Vec<String>, DeliveryError> {
+        let mut heads: Vec<String> = self
+            .task_pr(&task.id)?
+            .and_then(|pr| pr.head)
+            .into_iter()
+            .collect();
+        let steps = self.store()?.approvals()?;
+        for step in steps {
+            if step.task_id != task.id || !step.status.was_done() {
+                continue;
+            }
+            match step.rung {
+                DeliveryRung::Push => heads.extend(step.tip),
+                DeliveryRung::Commit | DeliveryRung::Sync => heads.extend(step.created),
+                _ => {}
+            }
+        }
+        heads.sort();
+        heads.dedup();
+        Ok(heads)
+    }
+
+    /// The known commits (see `known_heads`) of the package `task` builds
+    /// on, which a restack must not replay. Empty for a task that is not a
+    /// package built on another.
+    pub(super) fn predecessor_heads(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Vec<String>, DeliveryError> {
+        let Some(other_id) = task.package.as_ref().and_then(|p| p.builds_on.as_deref()) else {
+            return Ok(Vec::new());
+        };
+        let other = self.store()?.task(other_id)?;
+        match other {
+            Some(other) => self.known_heads(&other),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Why a package created with `pr_after: merged` cannot open its PR yet:
