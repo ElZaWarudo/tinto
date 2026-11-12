@@ -2121,5 +2121,14 @@ mod tests {
                 (Ci, "ci"),
             ]);
         }
+        {
+            use super::super::prs::DeliveryPrState::*;
+            same(&[
+                (Unknown, "unknown"),
+                (Open, "open"),
+                (Merged, "merged"),
+                (Closed, "closed"),
+            ]);
+        }
     }
 }

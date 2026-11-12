@@ -233,14 +233,36 @@ impl PrChecks {
     }
 }
 
+/// Where a PR is on GitHub.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryPrState {
+    /// Until the first read.
+    Unknown,
+    Open,
+    Merged,
+    Closed,
+}
+
+impl DeliveryPrState {
+    /// As stored, for messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Open => "open",
+            Self::Merged => "merged",
+            Self::Closed => "closed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryPr {
     pub task_id: String,
     pub url: String,
     pub repo: String,
     pub number: u64,
-    /// `open`, `merged`, `closed`, or `unknown` until the first read.
-    pub state: String,
+    pub state: DeliveryPrState,
     pub draft: bool,
     pub conflicts: bool,
     /// `approved`, `changes_requested`, `review_required` or none.
@@ -336,7 +358,7 @@ impl DeliveryPr {
             url: pr.url.clone(),
             repo: pr.repo.clone(),
             number: pr.number,
-            state: "unknown".to_string(),
+            state: DeliveryPrState::Unknown,
             draft: false,
             conflicts: false,
             review_decision: None,
@@ -467,7 +489,7 @@ impl DeliveryPr {
     }
 
     pub fn is_open(&self) -> bool {
-        self.state == "open" || self.state == "unknown"
+        self.state == DeliveryPrState::Open || self.state == DeliveryPrState::Unknown
     }
 
     /// Reviewed and approved: GitHub's decision when the repo requires
@@ -814,11 +836,10 @@ pub(super) fn head_checks(snapshot: &Value) -> PrChecks {
 /// approve it changed on GitHub, for the task's history.
 pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) -> Vec<String> {
     pr.state = match snapshot["state"].as_str().unwrap_or_default() {
-        "MERGED" => "merged",
-        "CLOSED" => "closed",
-        _ => "open",
-    }
-    .to_string();
+        "MERGED" => DeliveryPrState::Merged,
+        "CLOSED" => DeliveryPrState::Closed,
+        _ => DeliveryPrState::Open,
+    };
     let text = |value: &Value| {
         value
             .as_str()
@@ -2508,7 +2529,9 @@ impl DeliveryService {
         // into its base alone does not make it wait for a sync.
         self.sync_conflicted_pr(&pr)?;
         // Done with: the screenshots its replies showed are not kept.
-        let done = |pr: &DeliveryPr| pr.state == "merged" || pr.state == "closed";
+        let done = |pr: &DeliveryPr| {
+            pr.state == DeliveryPrState::Merged || pr.state == DeliveryPrState::Closed
+        };
         if done(&pr) && !done(&before) && before.checked_at_ms.is_some() {
             self.drop_evidence(&self.task(task_id)?);
         }
@@ -2533,7 +2556,7 @@ impl DeliveryService {
                 .error
                 .as_deref()
                 .is_some_and(|error| error.contains("Could not resolve"));
-            let drift = if pr.state == "closed" {
+            let drift = if pr.state == DeliveryPrState::Closed {
                 Some(format!("El PR #{} se cerró sin fusionar", pr.number))
             } else if gone {
                 Some(format!("El PR #{} ya no existe en GitHub", pr.number))
@@ -2545,8 +2568,8 @@ impl DeliveryService {
         // A merge waiting for the user that waiting will not make possible
         // is taken back: the coordinator hears it and asks again once the
         // PR is put right. Checks running or a review pending are not that.
-        let stale = match pr.state.as_str() {
-            "closed" => Some(format!("el PR #{} se cerró sin fusionar", pr.number)),
+        let stale = match pr.state {
+            DeliveryPrState::Closed => Some(format!("el PR #{} se cerró sin fusionar", pr.number)),
             _ if pr.is_open() && pr.conflicts => {
                 Some(format!("el PR #{} tiene conflictos con su base", pr.number))
             }
@@ -2563,7 +2586,7 @@ impl DeliveryService {
                 other => other?,
             }
         }
-        if pr.state != "merged" {
+        if pr.state != DeliveryPrState::Merged {
             return Ok(());
         }
         let merge = self.latest_approval(&pr.task_id, DeliveryRung::Merge)?;
@@ -2751,7 +2774,7 @@ impl DeliveryService {
             // What can change any moment is read on every pass: CI running,
             // red (it may be running again), not run yet, conflicts, and
             // what waits for the PR's head to have its fix.
-            let hot = pr.state == "unknown"
+            let hot = pr.state == DeliveryPrState::Unknown
                 || pr.checks.pending > 0
                 || pr.checks.failing > 0
                 || pr.ci == Some(CiState::NotRun)
@@ -2994,7 +3017,7 @@ impl DeliveryService {
         remove: Vec<String>,
     ) -> Result<Option<DeliveryPr>, DeliveryError> {
         let pr = self.linked_pr(task_id)?;
-        if pr.state != "open" {
+        if pr.state != DeliveryPrState::Open {
             return Err(DeliveryError::new(
                 "pr_not_open",
                 "solo se cambian los revisores de un PR abierto",
@@ -3506,7 +3529,7 @@ fn merged_outside(pr: &DeliveryPr) -> String {
 fn pr_news(before: &DeliveryPr, after: &DeliveryPr, reviewers: &[String]) -> Option<String> {
     let mut news = reviewers.to_vec();
     if after.state != before.state {
-        news.push(format!("ahora está {}", after.state));
+        news.push(format!("ahora está {}", after.state.as_str()));
     }
     if after.review_decision != before.review_decision {
         if let Some(decision) = after.review_decision.as_deref() {
@@ -3671,7 +3694,7 @@ mod tests {
         let mut pr = DeliveryPr::linked("t1", &reference);
         let before = json!([{"author": {"login": "ana"}, "state": "COMMENTED", "submittedAt": "2026-10-14T08:00:00Z"}]);
         apply_snapshot(&mut pr, &snapshot(before.clone(), json!([])), "me");
-        assert_eq!(pr.state, "open");
+        assert_eq!(pr.state, DeliveryPrState::Open);
         assert!(pr.conflicts);
         assert_eq!(pr.review_decision.as_deref(), Some("changes_requested"));
         assert_eq!(
@@ -3718,7 +3741,7 @@ mod tests {
         assert_eq!((pr.new_reviews, pr.new_comments), (0, 0));
 
         apply_snapshot(&mut pr, &json!({"state": "MERGED"}), "me");
-        assert_eq!(pr.state, "merged");
+        assert_eq!(pr.state, DeliveryPrState::Merged);
         assert!(!pr.is_open());
     }
 

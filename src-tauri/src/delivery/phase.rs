@@ -20,7 +20,7 @@ use super::model::{
     DeliveryQueueWait, DeliveryResultState, DeliveryRound, DeliveryRoundKind, DeliveryRun,
     DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
-use super::prs::{CiState, DeliveryPr};
+use super::prs::{CiState, DeliveryPr, DeliveryPrState};
 use super::reviews::ReviewState;
 use super::service::{CHECKS_ROLE, SETUP_ROLE};
 
@@ -957,7 +957,7 @@ pub fn split_issues(
             || facts
                 .prs
                 .iter()
-                .any(|pr| pr.task_id == task.id && pr.state == "merged");
+                .any(|pr| pr.task_id == task.id && pr.state == DeliveryPrState::Merged);
         let entry = DeliveryIssuePackage {
             task_id: task.id.clone(),
             index: package.index,
@@ -1048,7 +1048,7 @@ pub fn pr_wait(
     to_answer: &[String],
     review_optional: bool,
 ) -> PrWait {
-    if pr.state == "merged" {
+    if pr.state == DeliveryPrState::Merged {
         return PrWait::Ready;
     }
     let logins = |keep: fn(ReviewState) -> bool| -> Vec<String> {
@@ -1058,7 +1058,7 @@ pub fn pr_wait(
             .map(|reviewer| reviewer.login.clone())
             .collect()
     };
-    if pr.state == "open" && !replies.is_empty() {
+    if pr.state == DeliveryPrState::Open && !replies.is_empty() {
         let mut reviewers: Vec<String> = replies
             .iter()
             .flatten()
@@ -1077,7 +1077,7 @@ pub fn pr_wait(
     };
     let untracked_changes = pr.review_decision.as_deref() == Some("changes_requested")
         && (pr.changes_requested_by.is_empty() || !pr.changes_requested_by.iter().all(tracked));
-    let trouble = pr.state == "closed"
+    let trouble = pr.state == DeliveryPrState::Closed
         || pr.new_reviews + pr.new_comments > 0
         || pr.checks.failing > 0
         || pr.ci == Some(CiState::NotRun)
@@ -1629,7 +1629,7 @@ fn phase_in_round(
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         // A merged PR waits on nothing: the step left is what the task
         // waits on, named, so the coordinator sees it among the idle ones.
-        if pr.state == "merged" {
+        if pr.state == DeliveryPrState::Merged {
             return phase(Phase::NextStep {
                 rung,
                 stage: stage.map(str::to_string),

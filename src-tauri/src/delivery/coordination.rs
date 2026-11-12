@@ -27,6 +27,7 @@ use super::model::{
     DeliverySettingsProposalStatus, DeliveryTask, NewBlocker, StepEvent, SINGLE_COMMIT_MAX_FILES,
     SINGLE_COMMIT_MAX_LINES,
 };
+use super::prs::DeliveryPrState;
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
@@ -486,7 +487,7 @@ impl DeliveryService {
         Ok(merge_done
             || self
                 .task_pr(&task.id)?
-                .is_some_and(|pr| pr.state == "merged"))
+                .is_some_and(|pr| pr.state == DeliveryPrState::Merged))
     }
 
     /// Jira steps from when a task had a single one get their moment: done
@@ -1865,7 +1866,7 @@ impl DeliveryService {
             .refresh_pr(&task_id, std::time::Duration::ZERO)
             .ok()
             .flatten()
-            .is_some_and(|pr| pr.state == "merged"))
+            .is_some_and(|pr| pr.state == DeliveryPrState::Merged))
     }
 
     /// Says on a running step what it is doing now.
@@ -3512,7 +3513,7 @@ impl DeliveryService {
             .is_some_and(|merge| merge.status == DeliveryApprovalStatus::Executed)
             || self
                 .task_pr(&task.id)?
-                .is_some_and(|pr| pr.state == "merged");
+                .is_some_and(|pr| pr.state == DeliveryPrState::Merged);
         if merged {
             return self.set_drift(push, None);
         }
@@ -3739,10 +3740,11 @@ impl DeliveryService {
         // A package merged before it may have just freed this one.
         self.retarget_packages()?;
         let task = &self.task(&task.id)?;
-        let blocker = if pr.state != "open" {
+        let blocker = if pr.state != DeliveryPrState::Open {
             Some(format!(
                 "el PR #{} no está abierto ({})",
-                pr.number, pr.state
+                pr.number,
+                pr.state.as_str()
             ))
         } else if let Some(why) = self.package_merge_refusal(task)? {
             Some(format!("el PR #{} {why}", pr.number))

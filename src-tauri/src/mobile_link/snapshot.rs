@@ -250,7 +250,7 @@ pub fn build(overview: &DeliveryOverview, now: u64) -> Snapshot {
                 .map(|pr| Pr {
                     number: pr.number,
                     url: pr.url.clone(),
-                    state: pr.state.clone(),
+                    state: pr.state.as_str().to_string(),
                     draft: pr.draft,
                     conflicts: pr.conflicts,
                     ci: value(&pr.ci),

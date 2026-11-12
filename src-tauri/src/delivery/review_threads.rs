@@ -274,7 +274,7 @@ mod tests {
             "t1",
             &super::super::prs::parse_pr_url("https://github.com/o/r/pull/5").unwrap(),
         );
-        pr.state = "open".into();
+        pr.state = super::super::prs::DeliveryPrState::Open;
         pr
     }
 

@@ -5384,7 +5384,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         .refresh_pr(&task.id, Duration::ZERO)
         .unwrap()
         .unwrap();
-    assert_eq!(pr.state, "open");
+    assert_eq!(pr.state, super::prs::DeliveryPrState::Open);
     assert_eq!(
         pr.new_reviews, 0,
         "what was there before linking is not news"
@@ -5561,7 +5561,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     );
     assert_eq!(
         h.service.task_pr(&task.id).unwrap().unwrap().state,
-        "merged"
+        super::prs::DeliveryPrState::Merged
     );
 }
 
@@ -5861,7 +5861,10 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
     assert_eq!(status(), DeliveryApprovalStatus::Drifted);
     github.snapshot.lock().unwrap()["state"] = json!("MERGED");
     h.service.check_pushes(true).unwrap();
-    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().state, "open");
+    assert_eq!(
+        h.service.task_pr(&task.id).unwrap().unwrap().state,
+        super::prs::DeliveryPrState::Open
+    );
     assert_eq!(status(), DeliveryApprovalStatus::Executed);
 }
 
@@ -9059,7 +9062,7 @@ fn a_pr_with_conflicts_brings_its_base_in_without_asking() {
     let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/281").unwrap();
     h.service.link_pr(&task_id, &reference).unwrap();
     let mut pr = h.service.task_pr(&task_id).unwrap().unwrap();
-    pr.state = "open".into();
+    pr.state = super::prs::DeliveryPrState::Open;
     pr.conflicts = true;
     let syncs = || {
         h.service
@@ -9111,7 +9114,7 @@ fn a_merge_syncs_no_pr_without_conflicts_and_a_sync_replaces_the_checks_on_the_c
             super::prs::parse_pr_url(&format!("https://github.com/o/r/pull/{number}")).unwrap();
         // Stored as Tinto last read it, open and without conflicts.
         let mut pr = super::prs::DeliveryPr::linked(task_id, &reference);
-        pr.state = "open".into();
+        pr.state = super::prs::DeliveryPrState::Open;
         pr.base = Some("main".into());
         pr.checked_at_ms = Some(1);
         h.service.store().unwrap().put_pr(&pr).unwrap();
@@ -14027,7 +14030,7 @@ fn a_restack_after_a_squash_drops_the_predecessors_commits_the_follower_synced_i
         &first.id,
         &super::prs::parse_pr_url("https://github.com/o/r/pull/1").unwrap(),
     );
-    pr.state = "merged".into();
+    pr.state = super::prs::DeliveryPrState::Merged;
     pr.head = Some(head.clone());
     h.service.store().unwrap().put_pr(&pr).unwrap();
     for name in ["one.txt", "one-b.txt", "one-c.txt"] {
