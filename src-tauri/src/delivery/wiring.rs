@@ -296,63 +296,110 @@ pub fn proxy_stdio(given: Option<(&str, &str)>, session: Option<&str>) -> i32 {
             return 1;
         }
     };
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-    let mut target = resolve();
-    let mut opened = false;
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
-        if line.trim().is_empty() {
-            continue;
+    let stdout = Mutex::new(std::io::stdout());
+    forward_lines(std::io::stdin().lock(), &stdout, &client, resolve, session);
+    0
+}
+
+/// Forwards each line on its own thread and writes each answer as it comes:
+/// a long call (a wait_run, a read GitHub is slow to answer, one the client
+/// gave up on) never holds up the calls after it.
+fn forward_lines<W: Write + Send>(
+    input: impl BufRead,
+    output: &Mutex<W>,
+    client: &reqwest::blocking::Client,
+    resolve: impl Fn() -> Option<Target> + Sync,
+    session: Option<&str>,
+) {
+    let target = Mutex::new(resolve());
+    let opened = Mutex::new(false);
+    std::thread::scope(|scope| {
+        for line in input.lines() {
+            let Ok(line) = line else { break };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let (target, opened, resolve) = (&target, &opened, &resolve);
+            scope.spawn(move || {
+                let answer = forward(client, &line, session, target, opened, resolve);
+                if answer.trim().is_empty() {
+                    return;
+                }
+                let mut output = output
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let _ = writeln!(output, "{}", answer.trim()).and_then(|()| output.flush());
+            });
         }
-        let send = |target: &Option<Target>| {
-            let target = target.as_ref()?;
-            Some(
-                client
-                    .post(&target.url)
-                    .bearer_auth(&target.token)
-                    .header(SESSION_HEADER, session.unwrap_or_default())
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .body(line.clone())
-                    .send(),
-            )
-        };
-        let unreachable = |sent: &Option<reqwest::Result<reqwest::blocking::Response>>| {
-            sent.as_ref()
-                .is_none_or(|sent| sent.as_ref().is_err_and(reqwest::Error::is_connect))
-        };
-        let mut sent = send(&target);
-        // Nobody listening there: Tinto restarted on another port, or is
-        // closed. Read where it listens now; if nobody does, open Tinto,
-        // once, and wait for its server, so an agent never has to start
-        // Tinto some other way or be set up again.
-        if unreachable(&sent) {
-            target = resolve();
-            sent = send(&target);
-        }
-        if unreachable(&sent) && !opened {
-            opened = true;
+    });
+}
+
+/// Sends one message to Tinto: its answer, or the error to give the client.
+fn forward(
+    client: &reqwest::blocking::Client,
+    line: &str,
+    session: Option<&str>,
+    target: &Mutex<Option<Target>>,
+    opened: &Mutex<bool>,
+    resolve: &(impl Fn() -> Option<Target> + Sync),
+) -> String {
+    let current = || {
+        target
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    };
+    let set = |found: Option<Target>| {
+        *target
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = found;
+    };
+    let send = |target: &Option<Target>| {
+        let target = target.as_ref()?;
+        Some(
+            client
+                .post(&target.url)
+                .bearer_auth(&target.token)
+                .header(SESSION_HEADER, session.unwrap_or_default())
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .body(line.to_string())
+                .send(),
+        )
+    };
+    let unreachable = |sent: &Option<reqwest::Result<reqwest::blocking::Response>>| {
+        sent.as_ref()
+            .is_none_or(|sent| sent.as_ref().is_err_and(reqwest::Error::is_connect))
+    };
+    let mut sent = send(&current());
+    // Nobody listening there: Tinto restarted on another port, or is
+    // closed. Read where it listens now; if nobody does, open Tinto, once,
+    // and wait for its server, so an agent never has to start Tinto some
+    // other way or be set up again. Calls meanwhile wait for that opening.
+    if unreachable(&sent) {
+        set(resolve());
+        sent = send(&current());
+    }
+    if unreachable(&sent) {
+        let mut opened = opened
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !*opened {
+            *opened = true;
             if open_tinto() {
                 if let Some(found) = wait_for_server(resolve, std::time::Duration::from_secs(60)) {
-                    target = Some(found);
-                    sent = send(&target);
+                    set(Some(found));
                 }
             }
         }
-        let answer = match sent.map(|sent| sent.and_then(|response| response.text())) {
-            Some(Ok(body)) => body,
-            Some(Err(error)) => proxy_error(&line, &error.to_string()),
-            None => proxy_error(&line, "Tinto no ha iniciado nunca su servidor"),
-        };
-        if answer.trim().is_empty() {
-            continue;
-        }
-        if writeln!(stdout, "{}", answer.trim()).is_err() || stdout.flush().is_err() {
-            break;
-        }
+        drop(opened);
+        sent = send(&current());
     }
-    0
+    match sent.map(|sent| sent.and_then(|response| response.text())) {
+        Some(Ok(body)) => body,
+        Some(Err(error)) => proxy_error(line, &error.to_string()),
+        None => proxy_error(line, "Tinto no ha iniciado nunca su servidor"),
+    }
 }
 
 /// Starts this same executable as the Tinto app, detached from the agent
@@ -602,6 +649,82 @@ mod tests {
             wait_for_server(|| None, std::time::Duration::from_millis(600)),
             None
         );
+    }
+
+    #[test]
+    fn a_call_tinto_has_not_answered_does_not_hold_up_the_next() {
+        use std::io::{BufReader, Read};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let target = Target {
+            url: format!(
+                "http://127.0.0.1:{}/mcp",
+                listener.local_addr().unwrap().port()
+            ),
+            token: "t0k".into(),
+        };
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let output = Mutex::new(Vec::<u8>::new());
+        let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"slow\"}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"fast\"}\n";
+        let client = reqwest::blocking::Client::new();
+        std::thread::scope(|scope| {
+            // Moved in: a failing assertion drops it and lets `slow` go.
+            let release = release;
+            let (listener, released) = (&listener, &released);
+            // Tinto: it answers `slow` only once let go, `fast` at once.
+            scope.spawn(move || {
+                for stream in listener.incoming().take(2) {
+                    let mut stream = stream.unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        reader.read_line(&mut line).unwrap();
+                        if line.trim().is_empty() {
+                            break;
+                        }
+                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            length = value.trim().parse().unwrap();
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    scope.spawn(move || {
+                        let message: Value = serde_json::from_slice(&body).unwrap();
+                        if message["method"] == "slow" {
+                            let _ = released.lock().unwrap().recv();
+                        }
+                        let answer = json!({"jsonrpc": "2.0", "id": message["id"], "result": message["method"]}).to_string();
+                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len()).unwrap();
+                    });
+                }
+            });
+            let written = || String::from_utf8(output.lock().unwrap().clone()).unwrap();
+            let (output, client, target) = (&output, &client, &target);
+            let proxy = scope.spawn(move || {
+                forward_lines(
+                    input.as_bytes(),
+                    output,
+                    client,
+                    || Some(target.clone()),
+                    None,
+                )
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !written().contains("fast") {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the second call waited for the first"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            assert!(!written().contains("slow"));
+            release.send(()).unwrap();
+            proxy.join().unwrap();
+            let lines: Vec<String> = written().lines().map(str::to_string).collect();
+            assert_eq!(lines.len(), 2);
+            assert!(lines[1].contains("slow"));
+        });
     }
 
     #[test]

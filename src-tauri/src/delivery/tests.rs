@@ -5423,6 +5423,100 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
     assert_eq!(read["number"], 5);
 }
 
+/// A GitHub that never answers a PR read until the test lets it go.
+struct HangingGitHub(std::sync::Mutex<std::sync::mpsc::Receiver<()>>);
+
+impl super::prs::GitHub for HangingGitHub {
+    fn pr(&self, _url: &str) -> Result<serde_json::Value, super::DeliveryError> {
+        let _ = self.0.lock().unwrap().recv();
+        Err(super::DeliveryError::new("gh_failed", "let go"))
+    }
+    fn me(&self) -> Result<String, super::DeliveryError> {
+        self.pr("").map(|_| String::new())
+    }
+    fn branch_prs(
+        &self,
+        _repo: &str,
+        _branch: &str,
+    ) -> Result<serde_json::Value, super::DeliveryError> {
+        self.pr("")
+    }
+    fn assignees(&self, _repo: &str) -> Result<Vec<String>, super::DeliveryError> {
+        self.pr("").map(|_| Vec::new())
+    }
+    fn request_reviewers(
+        &self,
+        _url: &str,
+        _logins: &[String],
+    ) -> Result<(), super::DeliveryError> {
+        self.pr("").map(|_| ())
+    }
+    fn feed(&self, _etag: Option<&str>) -> Result<super::prs::Feed, super::DeliveryError> {
+        self.pr("")
+            .map(|_| super::prs::Feed::NotModified { poll_seconds: 60 })
+    }
+    fn merge(
+        &self,
+        _url: &str,
+        _method: &str,
+        _subject: &str,
+        _body: &str,
+        _delete_branch: bool,
+        _head: Option<&str>,
+    ) -> Result<(), super::DeliveryError> {
+        self.pr("").map(|_| ())
+    }
+}
+
+#[test]
+fn reads_answer_from_tinto_while_github_does_not() {
+    let h = harness();
+    let (_let_go, hanging) = std::sync::mpsc::channel();
+    h.service
+        .set_github(Arc::new(HangingGitHub(std::sync::Mutex::new(hanging))));
+    let timed = |name: &str, arguments: serde_json::Value, limit: Duration| {
+        let started = Instant::now();
+        let value = mcp_tool(&h, name, arguments);
+        assert!(
+            started.elapsed() < limit,
+            "{name} took {:?}",
+            started.elapsed()
+        );
+        value
+    };
+    // No PR: null at once, GitHub not asked.
+    let without = h.task("H-1");
+    assert_eq!(
+        timed(
+            "read_pr",
+            json!({"task_id": without.id}),
+            Duration::from_secs(1)
+        ),
+        json!({"result": null})
+    );
+    // A PR whose read hangs (the one linking starts holds the PR's read):
+    // what Tinto knows, said to be stale.
+    let with = h.task("H-2");
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/5").unwrap();
+    h.service.link_pr(&with.id, &reference).unwrap();
+    let pr = timed(
+        "read_pr",
+        json!({"task_id": with.id}),
+        Duration::from_secs(2),
+    );
+    assert_eq!(
+        (pr["number"].clone(), pr["stale"].clone()),
+        (json!(5), json!(true))
+    );
+    assert!(pr.get("checked_at_ms").is_some());
+    let overview = timed(
+        "delivery_overview",
+        json!({"task_id": with.id}),
+        Duration::from_secs(2),
+    );
+    assert!(overview.is_object(), "an answer, not an error");
+}
+
 #[test]
 fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     let h = harness();
