@@ -2409,9 +2409,10 @@ impl DeliveryService {
     }
 
     /// A round opened by failing checks gets its implementation stage from
-    /// Tinto, on the agent the user fixed for implementation: the round's
-    /// items already tell the job what failed. Only for the task's first
-    /// [`AUTO_FIX_ROUNDS`] such rounds; after that the coordinator judges.
+    /// Tinto, on the stage's settings over its last attempt (as a retry):
+    /// the round's items already tell the job what failed. Only for the
+    /// task's first [`AUTO_FIX_ROUNDS`] such rounds, and only with a model
+    /// fixed somewhere; otherwise the coordinator dispatches it.
     fn fix_failing_checks(
         &self,
         task: &DeliveryTask,
@@ -2427,28 +2428,38 @@ impl DeliveryService {
         else {
             return Ok(());
         };
+        let jobs = self.store()?.task_jobs(&task.id)?;
+        let implementations = jobs.iter().filter(|job| {
+            job.role == "implementation" && job.agent != super::model::DeliveryAgent::Shell
+        });
         // Once per round: a fix that did not settle it is the coordinator's.
-        let tried = self
-            .store()?
-            .task_jobs(&task.id)?
-            .iter()
-            .any(|job| job.role == "implementation" && job.created_at_ms >= round.opened_at_ms);
+        let tried = implementations
+            .clone()
+            .any(|job| job.created_at_ms >= round.opened_at_ms);
         if checks_rounds.len() > AUTO_FIX_ROUNDS || tried {
             return Ok(());
         }
-        let Some(stage) = self
+        let last = implementations.max_by_key(|job| job.created_at_ms);
+        let stage = self
             .store()?
             .repo_settings(&task.repo)?
             .stages
-            .remove("implementation")
-        else {
-            return Ok(());
+            .remove("implementation");
+        let (agent, model, reasoning, stage_default) = match (stage, last) {
+            (Some(stage), last) => super::service::on_stage(stage, last),
+            (None, Some(job)) => (job.agent, job.model.clone(), job.reasoning.clone(), false),
+            (None, None) => return Ok(()),
         };
+        // Never on the agent's default model: with no model fixed anywhere,
+        // the stage is the coordinator's.
+        if model.is_none() {
+            return Ok(());
+        }
         let job = self.dispatch(super::service::NewJob {
             task_id: task.id.clone(),
             role: "implementation".to_string(),
-            agent: stage.agent,
-            model: stage.model,
+            agent,
+            model,
             access: super::model::DeliveryAccess::Workspace,
             prompt: format!(
                 "Make the task's failing checks pass (round {}): fix the code, not the checks, with the smallest change that does it, and keep the task's decisions.",
@@ -2457,10 +2468,10 @@ impl DeliveryService {
             writes: None,
             lease: None,
             timeout_minutes: None,
-            reasoning: stage.reasoning,
+            reasoning,
             platform: None,
             read_dirs: Vec::new(),
-            stage_default: true,
+            stage_default,
             needs_environment: false,
         });
         if let Err(error) = job {

@@ -85,7 +85,7 @@ listed under [Gaps](#gaps) until it gets one.
 | ID | Criterion | Proof |
 |---|---|---|
 | G1 | Every send-back (findings, QA problems, failing checks, PR changes, conflicts) opens one round naming cause and items; it closes once its work is committed. | `each_send_back_opens_a_round_that_closes_once_its_work_is_committed`, `changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push`, `a_sync_with_conflicts_opens_a_round_once` |
-| G2 | Past the brainstorm, the first two failing-checks rounds get their fix stage from Tinto. | `past_the_brainstorm_a_failing_checks_round_gets_its_fix_stage_from_tinto` |
+| G2 | Past the brainstorm, the first two failing-checks rounds get their fix stage from Tinto, on the model of the stage's last attempt (the stage's setting over it), and none when no model is fixed anywhere. | `past_the_brainstorm_a_failing_checks_round_gets_its_fix_stage_from_tinto` |
 | G3 | Rounds survive a restart. | `rounds_survive_a_restart` |
 
 ## H. Context budget
