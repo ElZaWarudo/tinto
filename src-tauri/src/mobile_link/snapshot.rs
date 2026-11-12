@@ -10,7 +10,8 @@ use std::collections::HashSet;
 use crate::delivery::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryDecision, DeliveryDecisionKind,
     DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJobStatus, DeliveryOverview,
-    DeliveryQaProblemStatus, DeliveryRecommendation, DeliveryRung, DeliverySettingsProposalStatus,
+    DeliveryQaProblemStatus, DeliveryRecommendation, DeliveryRunStatus, DeliveryRung,
+    DeliverySettingsProposalStatus,
 };
 use crate::delivery::phase::{DeliveryTaskPhase, Phase, PrWait};
 
@@ -220,7 +221,7 @@ pub fn build(overview: &DeliveryOverview, now: u64) -> Snapshot {
     let runs: Vec<Run> = overview
         .runs
         .iter()
-        .filter(|run| run.status == "active")
+        .filter(|run| run.status == DeliveryRunStatus::Active)
         .map(|run| Run {
             id: run.id.clone(),
             title: run.title.clone(),

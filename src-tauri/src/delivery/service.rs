@@ -23,8 +23,8 @@ use super::model::{
     DeliveryJob, DeliveryJobLog, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
     DeliveryOverview, DeliveryPackage, DeliveryPlatform, DeliveryPreparedStack, DeliveryQaPrepare,
     DeliveryQaStack, DeliveryRepoSettings, DeliveryResultState, DeliveryRoundKind,
-    DeliveryScopeMode, DeliverySettings, DeliverySettingsProposalStatus, DeliveryTask,
-    DeliveryTaskMilestone, DeliveryTiming, NewBlocker, SCOPE_ROLE,
+    DeliveryRunStatus, DeliveryScopeMode, DeliverySettings, DeliverySettingsProposalStatus,
+    DeliveryTask, DeliveryTaskMilestone, DeliveryTiming, NewBlocker, SCOPE_ROLE,
 };
 use super::phase::{
     check_fails, current_checks, current_setup, has_open_findings, is_broken, last_change,
@@ -1229,7 +1229,7 @@ impl DeliveryService {
                 let run = store
                     .run(run_id)?
                     .ok_or_else(|| DeliveryError::not_found("la ejecución", run_id))?;
-                if run.status != "active" {
+                if run.status != DeliveryRunStatus::Active {
                     return Err(DeliveryError::new(
                         "run_closed",
                         "la ejecución está cerrada",

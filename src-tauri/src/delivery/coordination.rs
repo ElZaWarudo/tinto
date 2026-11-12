@@ -23,9 +23,9 @@
 use super::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryBlockerKind, DeliveryCommit,
     DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJob,
-    DeliveryMergeConflicts, DeliveryRound, DeliveryRoundKind, DeliveryRun, DeliveryRung,
-    DeliverySettingsProposalStatus, DeliveryTask, NewBlocker, StepEvent, SINGLE_COMMIT_MAX_FILES,
-    SINGLE_COMMIT_MAX_LINES,
+    DeliveryMergeConflicts, DeliveryRound, DeliveryRoundKind, DeliveryRun, DeliveryRunStatus,
+    DeliveryRung, DeliverySettingsProposalStatus, DeliveryTask, NewBlocker, StepEvent,
+    SINGLE_COMMIT_MAX_FILES, SINGLE_COMMIT_MAX_LINES,
 };
 use super::prs::DeliveryPrState;
 use super::service::DeliveryService;
@@ -670,7 +670,7 @@ impl DeliveryService {
             id: format!("run-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
             repo,
             title: title.trim().to_string(),
-            status: "active".to_string(),
+            status: DeliveryRunStatus::Active,
             generation: 1,
             owner,
             created_at_ms: now,
@@ -948,7 +948,7 @@ impl DeliveryService {
 
     pub fn close_run(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
         let mut run = self.run(run_id)?;
-        run.status = "closed".to_string();
+        run.status = DeliveryRunStatus::Closed;
         run.owner = None;
         run.generation += 1;
         run.updated_at_ms = now_ms();
@@ -979,7 +979,7 @@ impl DeliveryService {
 
     fn active_run(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
         let run = self.run(run_id)?;
-        if run.status != "active" {
+        if run.status != DeliveryRunStatus::Active {
             return Err(DeliveryError::new(
                 "run_closed",
                 "la ejecución está cerrada",
@@ -2287,7 +2287,7 @@ impl DeliveryService {
             .store()?
             .runs()?
             .into_iter()
-            .filter(|run| run.unattended && !run.paused && run.status == "active")
+            .filter(|run| run.unattended && !run.paused && run.status == DeliveryRunStatus::Active)
             .map(|run| run.id)
             .collect();
         if runs.is_empty() {

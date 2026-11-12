@@ -1495,13 +1495,19 @@ pub struct DeliverySettingsProposal {
     pub decided_at_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryRunStatus {
+    Active,
+    Closed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryRun {
     pub id: String,
     pub repo: std::path::PathBuf,
     pub title: String,
-    /// `active` or `closed`.
-    pub status: String,
+    pub status: DeliveryRunStatus,
     /// Increases on every takeover; older generations are fenced.
     pub generation: u64,
     pub owner: Option<String>,
@@ -2129,6 +2135,10 @@ mod tests {
                 (Merged, "merged"),
                 (Closed, "closed"),
             ]);
+        }
+        {
+            use super::DeliveryRunStatus::*;
+            same(&[(Active, "active"), (Closed, "closed")]);
         }
     }
 }

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::decisions::norm;
-use super::model::{DeliveryGuideKind, DeliveryGuidePerson};
+use super::model::{DeliveryGuideKind, DeliveryGuidePerson, DeliveryRunStatus};
 use super::prs::github_repo;
 use super::service::DeliveryService;
 use super::tasks::{self, plain_path, Place};
@@ -416,7 +416,7 @@ impl DeliveryService {
             .runs()?
             .into_iter()
             .filter(|run| {
-                run.status == "active"
+                run.status == DeliveryRunStatus::Active
                     && norm(&plain_path(&run.repo)) == key
                     && run.owner.as_deref().is_some_and(|owner| owner != "user")
             })

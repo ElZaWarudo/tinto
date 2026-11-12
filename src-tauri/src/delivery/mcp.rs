@@ -22,8 +22,8 @@ use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryCommit,
     DeliveryCoordinatorEndpoint, DeliveryDecisionKind, DeliveryDecisionOption,
     DeliveryDecisionStatus, DeliveryJob, DeliveryOverview, DeliveryPlatform,
-    DeliveryQaProblemStatus, DeliveryRung, DeliverySettingsChanges, DeliverySettingsProposalStatus,
-    DeliveryTaskMilestone,
+    DeliveryQaProblemStatus, DeliveryRunStatus, DeliveryRung, DeliverySettingsChanges,
+    DeliverySettingsProposalStatus, DeliveryTaskMilestone,
 };
 use super::phase::Phase;
 use super::service::{DeliveryService, NewJob, NewPackage, NewTask, CHECKS_ROLE, QA_ROLE};
@@ -1409,7 +1409,7 @@ fn narrow_overview(
             .map(|task| task.run_id.clone())
     });
     overview.runs.retain(|run| {
-        (closed || run.status != "closed")
+        (closed || run.status != DeliveryRunStatus::Closed)
             && run_id.is_none_or(|id| run.id == id)
             && task_run
                 .as_ref()
