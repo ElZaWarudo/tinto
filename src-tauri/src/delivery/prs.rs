@@ -23,8 +23,8 @@ use serde_json::Value;
 
 use super::coordination::found_step;
 use super::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryFixCommit, DeliveryRung,
-    DeliveryTask, StepEvent,
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryFixCommit,
+    DeliveryRoundKind, DeliveryRung, DeliveryTask, StepEvent,
 };
 use super::reviews::ReviewEvent;
 use super::service::DeliveryService;
@@ -2628,7 +2628,7 @@ impl DeliveryService {
             &store,
             &task.id,
             super::rounds::NewRound {
-                kind: "ci",
+                kind: DeliveryRoundKind::Ci,
                 short: "CI en rojo".to_string(),
                 cause: format!(
                     "El PR #{} se fusionó en GitHub con checks fallando: arréglalo en {base}",

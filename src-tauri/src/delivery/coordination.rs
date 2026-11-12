@@ -23,7 +23,7 @@
 use super::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryBlockerKind, DeliveryCommit,
     DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJob,
-    DeliveryMergeConflicts, DeliveryRound, DeliveryRun, DeliveryRung,
+    DeliveryMergeConflicts, DeliveryRound, DeliveryRoundKind, DeliveryRun, DeliveryRung,
     DeliverySettingsProposalStatus, DeliveryTask, NewBlocker, StepEvent, SINGLE_COMMIT_MAX_FILES,
     SINGLE_COMMIT_MAX_LINES,
 };
@@ -2421,7 +2421,7 @@ impl DeliveryService {
     ) -> Result<(), DeliveryError> {
         let checks_rounds: Vec<&super::model::DeliveryRound> = rounds
             .iter()
-            .filter(|round| round.task_id == task.id && round.kind == "checks")
+            .filter(|round| round.task_id == task.id && round.kind == DeliveryRoundKind::Checks)
             .collect();
         let Some(round) = checks_rounds
             .iter()
@@ -2816,7 +2816,7 @@ impl DeliveryService {
             &store,
             &task.id,
             super::rounds::NewRound {
-                kind: "sync",
+                kind: DeliveryRoundKind::Sync,
                 short: "conflictos del restack".to_string(),
                 cause: format!("Conflictos del restack en el commit {at}"),
                 items: files,
@@ -3658,7 +3658,10 @@ impl DeliveryService {
         task: &DeliveryTask,
         mut round: super::model::DeliveryRound,
     ) -> Result<(), DeliveryError> {
-        if round.kind != "checks" || round.waits_merge_commit || task.checks.is_empty() {
+        if round.kind != DeliveryRoundKind::Checks
+            || round.waits_merge_commit
+            || task.checks.is_empty()
+        {
             return Ok(());
         }
         {

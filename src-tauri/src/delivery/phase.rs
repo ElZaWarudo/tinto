@@ -17,8 +17,8 @@ use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
     DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJob, DeliveryJobStatus,
     DeliveryLease, DeliveryLeaseState, DeliveryQaProblem, DeliveryQaProblemStatus,
-    DeliveryQueueWait, DeliveryResultState, DeliveryRound, DeliveryRun, DeliveryRung,
-    DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
+    DeliveryQueueWait, DeliveryResultState, DeliveryRound, DeliveryRoundKind, DeliveryRun,
+    DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
 use super::prs::{CiState, DeliveryPr};
 use super::reviews::ReviewState;
@@ -628,7 +628,7 @@ pub const MERGE_STAGES: [&str; 2] = ["implementation", "review"];
 /// Whether a round is one of `sync`'s conflicts: its first, or one of the
 /// later stops of a restack (`<sync id>#<when>`).
 pub fn is_sync_round(round: &DeliveryRound, sync: &DeliveryApproval) -> bool {
-    round.kind == "sync"
+    round.kind == DeliveryRoundKind::Sync
         && round.source.as_deref().is_some_and(|source| {
             source == sync.id
                 || source
@@ -645,11 +645,13 @@ pub fn resolves_merge(
     jobs: &[&DeliveryJob],
 ) -> bool {
     let at = sync.executed_at_ms.unwrap_or(0);
-    (round.kind == "sync" && round.source.as_deref() == Some(sync.id.as_str()))
-        || (matches!(round.kind.as_str(), "review" | "checks")
-            && jobs.iter().any(|job| {
-                Some(job.id.as_str()) == round.source.as_deref() && job.created_at_ms > at
-            }))
+    (round.kind == DeliveryRoundKind::Sync && round.source.as_deref() == Some(sync.id.as_str()))
+        || (matches!(
+            round.kind,
+            DeliveryRoundKind::Review | DeliveryRoundKind::Checks
+        ) && jobs
+            .iter()
+            .any(|job| Some(job.id.as_str()) == round.source.as_deref() && job.created_at_ms > at))
 }
 
 /// The merge's conflicts are resolved and verified: since the sync an
@@ -1292,7 +1294,7 @@ fn phase_in_round(
     // Changes asked on the PR sent the work back and no stage answered
     // them yet: implementation does.
     let unanswered = round.is_some_and(|round| {
-        round.kind == "pr"
+        round.kind == DeliveryRoundKind::Pr
             && !round.waits_merge_commit
             && !jobs.iter().any(|job| {
                 job.agent != DeliveryAgent::Shell && job.created_at_ms >= round.opened_at_ms
@@ -1600,11 +1602,9 @@ fn phase_in_round(
             });
         }
     }
-    if let Some(pr) = facts
-        .prs
-        .iter()
-        .find(|pr| pr.task_id == task.id && round.is_some_and(|round| round.kind == "ci"))
-    {
+    if let Some(pr) = facts.prs.iter().find(|pr| {
+        pr.task_id == task.id && round.is_some_and(|round| round.kind == DeliveryRoundKind::Ci)
+    }) {
         if let Some(why) = &pr.merged_failing_ci {
             return phase(Phase::MergedFailingCi {
                 number: pr.number,

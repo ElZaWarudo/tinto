@@ -518,7 +518,7 @@ export type DeliveryQaProblemStatus =
   "open" | "sent" | "fixing" | "verified" | "still_failing" | "dismissed" | "superseded";
 
 /** What sent a task's work back. */
-export type DeliveryRoundKind = "review" | "qa" | "qa_problems" | "checks" | "pr" | "sync";
+export type DeliveryRoundKind = "review" | "qa" | "qa_problems" | "checks" | "pr" | "sync" | "ci";
 
 /** A pass of work sent back on a task, recorded when it happened. Round 1,
  *  the initial delivery, is never stored. */
