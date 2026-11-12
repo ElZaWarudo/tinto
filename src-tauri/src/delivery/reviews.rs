@@ -139,24 +139,55 @@ pub fn follow(
         })
         .collect();
     reviews.sort_by(|a, b| a.0.cmp(b.0));
-    // When the user last wrote on the PR: a review, a comment or a reply in
-    // a review thread.
+    let ours = |item: &Value, who: &str| {
+        item[who]["login"]
+            .as_str()
+            .is_some_and(|author| same(author, me))
+    };
+    // Who opened the thread a review comment replies to: GitHub points
+    // `in_reply_to_id` at the thread's first comment. `None` for a comment
+    // that is not a reply, or whose first comment is not in the snapshot.
+    let comments = snapshot["reviewComments"].as_array();
+    let opener = |item: &Value| {
+        let root = item["in_reply_to_id"].as_u64()?;
+        comments
+            .into_iter()
+            .flatten()
+            .find(|first| first["id"].as_u64() == Some(root))?["user"]["login"]
+            .as_str()
+    };
+    // The user's replies in review threads, as (opener, time): each answers
+    // only who opened that thread, so nobody when the user opened it.
+    let replies: Vec<(&str, &str)> = comments
+        .into_iter()
+        .flatten()
+        .filter(|item| ours(item, "user"))
+        .filter_map(|item| Some((opener(item)?, item["created_at"].as_str()?)))
+        .collect();
+    // GitHub wraps the user's thread replies in a review of theirs with no
+    // body and the replies' time (one review for a batch of them); gh gives
+    // it no id to join on, so the time does. It is no answer to everyone.
+    let wraps_replies = |item: &Value| {
+        item["body"].as_str().is_some_and(str::is_empty)
+            && item["submittedAt"]
+                .as_str()
+                .is_some_and(|at| replies.iter().any(|(_, time)| *time == at))
+    };
+    // When the user last wrote on the PR otherwise: a review, a comment, or
+    // a review comment that is not such a reply (one whose thread is not in
+    // the snapshot included). It answers every reviewer.
     let mine = [
-        ("reviews", "submittedAt", "author", "login"),
-        ("comments", "createdAt", "author", "login"),
-        ("reviewComments", "created_at", "user", "login"),
+        ("reviews", "submittedAt", "author"),
+        ("comments", "createdAt", "author"),
+        ("reviewComments", "created_at", "user"),
     ]
     .iter()
-    .flat_map(|(list, time, who, login)| {
+    .flat_map(|(list, time, who)| {
         snapshot[*list]
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|item| {
-                item[*who][*login]
-                    .as_str()
-                    .is_some_and(|author| same(author, me))
-            })
+            .filter(|item| ours(item, who) && opener(item).is_none() && !wraps_replies(item))
             .filter_map(|item| item[*time].as_str())
     })
     .max();
@@ -191,9 +222,16 @@ pub fn follow(
                 state.state = next;
             }
         }
-        // The user answered on GitHub, by hand or through Tinto.
+        // The user answered on GitHub, by hand or through Tinto: in one of
+        // their threads or to everyone.
         let last = theirs.last().map(|(time, _, _)| *time);
-        if mine.is_some_and(|mine| last.is_some_and(|last| mine > last)) {
+        let answer = replies
+            .iter()
+            .filter(|(opener, _)| same(opener, &state.login))
+            .map(|(_, time)| *time)
+            .chain(mine)
+            .max();
+        if answer.is_some_and(|answer| last.is_some_and(|last| answer > last)) {
             if let Some(next) = state.state.on(ReviewEvent::Answered) {
                 state.state = next;
             }
@@ -311,5 +349,36 @@ mod tests {
         assert_eq!(state_of(&states, "ana"), ReviewState::Approved);
         assert_eq!(state_of(&states, "luis"), ReviewState::ChangesRequested);
         assert_eq!(states.len(), 2);
+    }
+
+    #[test]
+    fn a_reply_in_a_thread_answers_only_who_opened_it() {
+        let reviewers = vec!["ana".to_string(), "luis".to_string()];
+        let mut states = Vec::new();
+        let comment = |id: u64, reply_to: Option<u64>, login: &str, at: &str| {
+            json!({"id": id, "in_reply_to_id": reply_to, "user": {"login": login},
+                   "created_at": at})
+        };
+        let mut snapshot = json!({
+            "reviews": [
+                review("ana", "COMMENTED", "2026-11-04T10:00:00Z"),
+                review("luis", "COMMENTED", "2026-11-04T10:30:00Z"),
+                // The review GitHub wraps the user's reply in.
+                {"author": {"login": "me"}, "state": "COMMENTED", "body": "",
+                 "submittedAt": "2026-11-04T11:00:00Z"},
+            ],
+            "reviewComments": [
+                comment(1, None, "ana", "2026-11-04T10:00:00Z"),
+                comment(2, Some(1), "me", "2026-11-04T11:00:00Z"),
+            ],
+        });
+        follow(&mut states, &reviewers, &[], &snapshot, "me");
+        assert_eq!(state_of(&states, "ana"), ReviewState::Answered);
+        assert_eq!(state_of(&states, "luis"), ReviewState::Commented);
+        // A general comment answers everyone.
+        snapshot["comments"] =
+            json!([{"author": {"login": "me"}, "createdAt": "2026-11-04T12:00:00Z"}]);
+        follow(&mut states, &reviewers, &[], &snapshot, "me");
+        assert_eq!(state_of(&states, "luis"), ReviewState::Answered);
     }
 }
