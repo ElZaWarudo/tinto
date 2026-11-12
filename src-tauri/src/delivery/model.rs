@@ -635,9 +635,8 @@ pub struct DeliveryRound {
     pub task_id: String,
     /// From 2.
     pub number: u32,
-    /// What sent the work back: `review`, `qa`, `qa_problems`, `checks`,
-    /// `pr` or `sync`.
-    pub kind: String,
+    /// What sent the work back.
+    pub kind: DeliveryRoundKind,
     /// In a few words, for the task list: "5 hallazgos de QA", "PR".
     pub short: String,
     /// One line: "Cambios pedidos en el PR #308 por ana (3 comentarios)".
@@ -673,6 +672,26 @@ impl DeliveryRound {
     pub fn is_current(&self) -> bool {
         self.is_open() && !self.waits_merge_commit
     }
+}
+
+/// What sent a round's work back.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryRoundKind {
+    /// Findings of a review.
+    Review,
+    /// Findings of QA.
+    Qa,
+    /// QA problems the user sent to fix.
+    QaProblems,
+    /// A failing check of Tinto.
+    Checks,
+    /// Changes asked or comments on the PR.
+    Pr,
+    /// Conflicts of a sync.
+    Sync,
+    /// The PR merged in GitHub with checks failing.
+    Ci,
 }
 
 /// One item of an agent's task list.
@@ -955,6 +974,26 @@ pub struct DeliveryCommit {
     pub paths: Vec<String>,
 }
 
+/// When a task's Jira step happens: it comes twice.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryJiraStage {
+    /// The PR is open: the issue goes to review.
+    AfterPr,
+    /// The PR is merged: the issue is closed.
+    AfterMerge,
+}
+
+impl DeliveryJiraStage {
+    /// As stored and as the coordinator names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AfterPr => "after_pr",
+            Self::AfterMerge => "after_merge",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryApproval {
     pub id: String,
@@ -974,10 +1013,9 @@ pub struct DeliveryApproval {
     /// `merge` only: `squash`, `merge` or `rebase`.
     #[serde(default)]
     pub merge_method: Option<String>,
-    /// `jira` only: when it happens, `after_pr` (the PR is open, the issue
-    /// goes to review) or `after_merge` (the issue is closed).
+    /// `jira` only: when it happens.
     #[serde(default)]
-    pub stage: Option<String>,
+    pub stage: Option<DeliveryJiraStage>,
     /// `jira` only: the statuses Tinto walks the issue through, in order,
     /// when the repo's Jira is set in Tinto. Empty: the coordinator does the
     /// step and reports it.
@@ -1476,13 +1514,19 @@ pub struct DeliverySettingsProposal {
     pub decided_at_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryRunStatus {
+    Active,
+    Closed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryRun {
     pub id: String,
     pub repo: std::path::PathBuf,
     pub title: String,
-    /// `active` or `closed`.
-    pub status: String,
+    pub status: DeliveryRunStatus,
     /// Increases on every takeover; older generations are fenced.
     pub generation: u64,
     pub owner: Option<String>,
@@ -2074,6 +2118,50 @@ mod tests {
                 assert_eq!(Rejected.on(rung, event), None, "{rung:?} {event:?}");
                 assert_eq!(Undone.on(rung, event), None, "{rung:?} {event:?}");
             }
+        }
+    }
+
+    /// Typed states keep the strings stored before them: saved rows still
+    /// load, and the frontend and the coordinator see the same values.
+    #[test]
+    fn typed_states_keep_their_stored_strings() {
+        fn same<T>(pairs: &[(T, &str)])
+        where
+            T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+        {
+            for (value, text) in pairs {
+                assert_eq!(serde_json::to_value(value).unwrap(), *text);
+                assert_eq!(&serde_json::from_value::<T>((*text).into()).unwrap(), value);
+            }
+        }
+        {
+            use super::DeliveryRoundKind::*;
+            same(&[
+                (Review, "review"),
+                (Qa, "qa"),
+                (QaProblems, "qa_problems"),
+                (Checks, "checks"),
+                (Pr, "pr"),
+                (Sync, "sync"),
+                (Ci, "ci"),
+            ]);
+        }
+        {
+            use super::super::prs::DeliveryPrState::*;
+            same(&[
+                (Unknown, "unknown"),
+                (Open, "open"),
+                (Merged, "merged"),
+                (Closed, "closed"),
+            ]);
+        }
+        {
+            use super::DeliveryRunStatus::*;
+            same(&[(Active, "active"), (Closed, "closed")]);
+        }
+        {
+            use super::DeliveryJiraStage::*;
+            same(&[(AfterPr, "after_pr"), (AfterMerge, "after_merge")]);
         }
     }
 }

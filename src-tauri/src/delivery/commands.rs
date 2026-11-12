@@ -12,8 +12,8 @@ use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision,
     DeliveryJiraSettings, DeliveryJob, DeliveryJobLog, DeliveryLease, DeliveryOverview,
     DeliveryPlatform, DeliveryQaStack, DeliveryQuota, DeliveryRepoSettings, DeliveryRun,
-    DeliveryRung, DeliverySettings, DeliverySettingsChanges, DeliverySettingsProposal,
-    DeliveryStageAgent, DeliveryStageFallback, DeliveryTask,
+    DeliveryRunStatus, DeliveryRung, DeliverySettings, DeliverySettingsChanges,
+    DeliverySettingsProposal, DeliveryStageAgent, DeliveryStageFallback, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::service::{DeliveryService, NewJob, NewTask};
@@ -688,7 +688,7 @@ pub fn delivery_set_repo_settings(
     std::thread::spawn(move || {
         for run in runs
             .iter()
-            .filter(|run| run.repo == repo && run.status == "active")
+            .filter(|run| run.repo == repo && run.status == DeliveryRunStatus::Active)
         {
             if let Err(error) = service.take_allowed_steps(&run.id) {
                 eprintln!(

@@ -11,7 +11,7 @@ use super::model::{
     DeliveryUnblock, NewBlocker,
 };
 use super::phase::{is_delivered, step_done};
-use super::prs::{parse_pr_url, DeliveryPr};
+use super::prs::{parse_pr_url, DeliveryPr, DeliveryPrState};
 use super::service::DeliveryService;
 use super::{now_ms, DeliveryError};
 
@@ -87,7 +87,7 @@ fn blocker_state(blocker: &DeliveryBlocker, world: &World<'_>) -> (String, bool)
             let reached = if is_delivered(other, &approvals) {
                 Some(DeliveryTaskMilestone::Delivered)
             } else if step_done(&approvals, DeliveryRung::Merge)
-                || pr.is_some_and(|pr| pr.state == "merged")
+                || pr.is_some_and(|pr| pr.state == DeliveryPrState::Merged)
             {
                 Some(DeliveryTaskMilestone::Merged)
             } else if step_done(&approvals, DeliveryRung::Pr) || pr.is_some() {
@@ -104,7 +104,7 @@ fn blocker_state(blocker: &DeliveryBlocker, world: &World<'_>) -> (String, bool)
                 .prs
                 .iter()
                 .find(|pr| same_pr(pr, url))
-                .map(|pr| pr.state.clone())
+                .map(|pr| pr.state.as_str().to_string())
                 .or_else(|| state.clone());
             let status = match state.as_deref() {
                 Some("open") => "abierto",

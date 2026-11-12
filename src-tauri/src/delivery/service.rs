@@ -22,9 +22,9 @@ use super::model::{
     DeliveryDecision, DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy,
     DeliveryJob, DeliveryJobLog, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
     DeliveryOverview, DeliveryPackage, DeliveryPlatform, DeliveryPreparedStack, DeliveryQaPrepare,
-    DeliveryQaStack, DeliveryRepoSettings, DeliveryResultState, DeliveryScopeMode,
-    DeliverySettings, DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone,
-    DeliveryTiming, NewBlocker, SCOPE_ROLE,
+    DeliveryQaStack, DeliveryRepoSettings, DeliveryResultState, DeliveryRoundKind,
+    DeliveryRunStatus, DeliveryScopeMode, DeliverySettings, DeliverySettingsProposalStatus,
+    DeliveryTask, DeliveryTaskMilestone, DeliveryTiming, NewBlocker, SCOPE_ROLE,
 };
 use super::phase::{
     check_fails, current_checks, current_setup, has_open_findings, is_broken, last_change,
@@ -1229,7 +1229,7 @@ impl DeliveryService {
                 let run = store
                     .run(run_id)?
                     .ok_or_else(|| DeliveryError::not_found("la ejecución", run_id))?;
-                if run.status != "active" {
+                if run.status != DeliveryRunStatus::Active {
                     return Err(DeliveryError::new(
                         "run_closed",
                         "la ejecución está cerrada",
@@ -2899,7 +2899,7 @@ impl DeliveryService {
         let pr = store.pr(task_id)?;
         let refusal = pr
             .as_ref()
-            .filter(|_| round.kind == "pr")
+            .filter(|_| round.kind == DeliveryRoundKind::Pr)
             .and_then(|pr| pr.threads_refusal("la ronda viene de comentarios del PR"));
         if let Some(refusal) = refusal {
             match unanswered_reason.map(resolve_note).transpose()? {

@@ -11,16 +11,16 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::coordination::{JIRA_AFTER_MERGE, JIRA_AFTER_PR};
 use super::model::SCOPE_ROLE;
 use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
-    DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJob, DeliveryJobStatus,
-    DeliveryLease, DeliveryLeaseState, DeliveryQaProblem, DeliveryQaProblemStatus,
-    DeliveryQueueWait, DeliveryResultState, DeliveryRound, DeliveryRun, DeliveryRung,
-    DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
+    DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJiraStage, DeliveryJob,
+    DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryQaProblem,
+    DeliveryQaProblemStatus, DeliveryQueueWait, DeliveryResultState, DeliveryRound,
+    DeliveryRoundKind, DeliveryRun, DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue,
+    DeliveryTask,
 };
-use super::prs::{CiState, DeliveryPr};
+use super::prs::{CiState, DeliveryPr, DeliveryPrState};
 use super::reviews::ReviewState;
 use super::service::{CHECKS_ROLE, SETUP_ROLE};
 
@@ -28,13 +28,13 @@ use super::service::{CHECKS_ROLE, SETUP_ROLE};
 pub const STAGES: [&str; 4] = ["tests", "implementation", "review", "qa"];
 
 /// The delivery ladder: Jira comes twice, once the PR is open and once merged.
-pub const STEPS: [(DeliveryRung, Option<&str>); 6] = [
+pub const STEPS: [(DeliveryRung, Option<DeliveryJiraStage>); 6] = [
     (DeliveryRung::Commit, None),
     (DeliveryRung::Push, None),
     (DeliveryRung::Pr, None),
-    (DeliveryRung::Jira, Some(JIRA_AFTER_PR)),
+    (DeliveryRung::Jira, Some(DeliveryJiraStage::AfterPr)),
     (DeliveryRung::Merge, None),
-    (DeliveryRung::Jira, Some(JIRA_AFTER_MERGE)),
+    (DeliveryRung::Jira, Some(DeliveryJiraStage::AfterMerge)),
 ];
 
 /// Who has to act for the task to move.
@@ -70,7 +70,7 @@ pub enum Phase {
     /// The user approves a delivery step.
     Approval {
         rung: DeliveryRung,
-        stage: Option<String>,
+        stage: Option<DeliveryJiraStage>,
     },
     /// An approved step Tinto is running apart (a merge): what it is doing
     /// and since when. Nobody has to act.
@@ -82,12 +82,12 @@ pub enum Phase {
     /// An approved PR or Jira step the coordinator still has to report.
     Record {
         rung: DeliveryRung,
-        stage: Option<String>,
+        stage: Option<DeliveryJiraStage>,
     },
     /// A done step git or GitHub no longer bear out.
     Drifted {
         rung: DeliveryRung,
-        stage: Option<String>,
+        stage: Option<DeliveryJiraStage>,
     },
     Running {
         job_id: String,
@@ -192,7 +192,7 @@ pub enum Phase {
     },
     NextStep {
         rung: DeliveryRung,
-        stage: Option<String>,
+        stage: Option<DeliveryJiraStage>,
     },
 }
 
@@ -331,7 +331,7 @@ pub struct CurrentRound {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryStep {
     pub rung: DeliveryRung,
-    pub stage: Option<String>,
+    pub stage: Option<DeliveryJiraStage>,
 }
 
 /// Everything the phase of a task depends on, as the overview has it.
@@ -628,7 +628,7 @@ pub const MERGE_STAGES: [&str; 2] = ["implementation", "review"];
 /// Whether a round is one of `sync`'s conflicts: its first, or one of the
 /// later stops of a restack (`<sync id>#<when>`).
 pub fn is_sync_round(round: &DeliveryRound, sync: &DeliveryApproval) -> bool {
-    round.kind == "sync"
+    round.kind == DeliveryRoundKind::Sync
         && round.source.as_deref().is_some_and(|source| {
             source == sync.id
                 || source
@@ -645,11 +645,13 @@ pub fn resolves_merge(
     jobs: &[&DeliveryJob],
 ) -> bool {
     let at = sync.executed_at_ms.unwrap_or(0);
-    (round.kind == "sync" && round.source.as_deref() == Some(sync.id.as_str()))
-        || (matches!(round.kind.as_str(), "review" | "checks")
-            && jobs.iter().any(|job| {
-                Some(job.id.as_str()) == round.source.as_deref() && job.created_at_ms > at
-            }))
+    (round.kind == DeliveryRoundKind::Sync && round.source.as_deref() == Some(sync.id.as_str()))
+        || (matches!(
+            round.kind,
+            DeliveryRoundKind::Review | DeliveryRoundKind::Checks
+        ) && jobs
+            .iter()
+            .any(|job| Some(job.id.as_str()) == round.source.as_deref() && job.created_at_ms > at))
 }
 
 /// The merge's conflicts are resolved and verified: since the sync an
@@ -745,18 +747,22 @@ fn paused_job<'a>(jobs: &[&'a DeliveryJob]) -> Option<&'a DeliveryJob> {
         .copied()
 }
 
-fn step_matches(approval: &DeliveryApproval, rung: DeliveryRung, stage: Option<&str>) -> bool {
+fn step_matches(
+    approval: &DeliveryApproval,
+    rung: DeliveryRung,
+    stage: Option<DeliveryJiraStage>,
+) -> bool {
     approval.rung == rung
         && match stage {
             None => true,
-            Some(stage) => approval.stage.as_deref().unwrap_or(JIRA_AFTER_PR) == stage,
+            Some(stage) => approval.stage.unwrap_or(DeliveryJiraStage::AfterPr) == stage,
         }
 }
 
 fn latest_step<'a>(
     approvals: &[&'a DeliveryApproval],
     rung: DeliveryRung,
-    stage: Option<&str>,
+    stage: Option<DeliveryJiraStage>,
 ) -> Option<&'a DeliveryApproval> {
     approvals
         .iter()
@@ -773,7 +779,7 @@ pub fn step_done(approvals: &[&DeliveryApproval], rung: DeliveryRung) -> bool {
 
 /// The ladder the task climbs. A middle package of a split issue ends at
 /// its merge: the issue closes in Jira with its last package.
-pub fn steps_for(task: &DeliveryTask) -> Vec<(DeliveryRung, Option<&'static str>)> {
+pub fn steps_for(task: &DeliveryTask) -> Vec<(DeliveryRung, Option<DeliveryJiraStage>)> {
     let middle = task
         .package
         .as_ref()
@@ -781,7 +787,9 @@ pub fn steps_for(task: &DeliveryTask) -> Vec<(DeliveryRung, Option<&'static str>
     STEPS
         .into_iter()
         .filter(|(rung, stage)| {
-            !(middle && *rung == DeliveryRung::Jira && *stage == Some(JIRA_AFTER_MERGE))
+            !(middle
+                && *rung == DeliveryRung::Jira
+                && *stage == Some(DeliveryJiraStage::AfterMerge))
         })
         .collect()
 }
@@ -795,20 +803,16 @@ pub fn is_delivered(task: &DeliveryTask, approvals: &[&DeliveryApproval]) -> boo
 pub(super) fn next_step(
     task: &DeliveryTask,
     approvals: &[&DeliveryApproval],
-) -> Option<(DeliveryRung, Option<&'static str>)> {
+) -> Option<(DeliveryRung, Option<DeliveryJiraStage>)> {
     steps_for(task).into_iter().find(|(rung, stage)| {
         latest_step(approvals, *rung, *stage)
             .is_none_or(|step| step.status != DeliveryApprovalStatus::Executed)
     })
 }
 
-fn stage_of(approval: &DeliveryApproval) -> Option<String> {
-    (approval.rung == DeliveryRung::Jira).then(|| {
-        approval
-            .stage
-            .clone()
-            .unwrap_or_else(|| JIRA_AFTER_PR.into())
-    })
+fn stage_of(approval: &DeliveryApproval) -> Option<DeliveryJiraStage> {
+    (approval.rung == DeliveryRung::Jira)
+        .then(|| approval.stage.unwrap_or(DeliveryJiraStage::AfterPr))
 }
 
 /// The stage to run next: none while a stage or Tinto's checks run, wait
@@ -955,7 +959,7 @@ pub fn split_issues(
             || facts
                 .prs
                 .iter()
-                .any(|pr| pr.task_id == task.id && pr.state == "merged");
+                .any(|pr| pr.task_id == task.id && pr.state == DeliveryPrState::Merged);
         let entry = DeliveryIssuePackage {
             task_id: task.id.clone(),
             index: package.index,
@@ -1046,7 +1050,7 @@ pub fn pr_wait(
     to_answer: &[String],
     review_optional: bool,
 ) -> PrWait {
-    if pr.state == "merged" {
+    if pr.state == DeliveryPrState::Merged {
         return PrWait::Ready;
     }
     let logins = |keep: fn(ReviewState) -> bool| -> Vec<String> {
@@ -1056,7 +1060,7 @@ pub fn pr_wait(
             .map(|reviewer| reviewer.login.clone())
             .collect()
     };
-    if pr.state == "open" && !replies.is_empty() {
+    if pr.state == DeliveryPrState::Open && !replies.is_empty() {
         let mut reviewers: Vec<String> = replies
             .iter()
             .flatten()
@@ -1075,7 +1079,7 @@ pub fn pr_wait(
     };
     let untracked_changes = pr.review_decision.as_deref() == Some("changes_requested")
         && (pr.changes_requested_by.is_empty() || !pr.changes_requested_by.iter().all(tracked));
-    let trouble = pr.state == "closed"
+    let trouble = pr.state == DeliveryPrState::Closed
         || pr.new_reviews + pr.new_comments > 0
         || pr.checks.failing > 0
         || pr.ci == Some(CiState::NotRun)
@@ -1154,10 +1158,7 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         .iter()
         .filter(|approval| approval.task_id == task.id)
         .collect();
-    phase.next_step = next_step(task, &approvals).map(|(rung, stage)| DeliveryStep {
-        rung,
-        stage: stage.map(str::to_string),
-    });
+    phase.next_step = next_step(task, &approvals).map(|(rung, stage)| DeliveryStep { rung, stage });
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         phase.threads_unanswered = pr.unanswered().count();
         phase.threads_to_answer = threads_to_answer(pr, &approvals)
@@ -1292,7 +1293,7 @@ fn phase_in_round(
     // Changes asked on the PR sent the work back and no stage answered
     // them yet: implementation does.
     let unanswered = round.is_some_and(|round| {
-        round.kind == "pr"
+        round.kind == DeliveryRoundKind::Pr
             && !round.waits_merge_commit
             && !jobs.iter().any(|job| {
                 job.agent != DeliveryAgent::Shell && job.created_at_ms >= round.opened_at_ms
@@ -1308,10 +1309,7 @@ fn phase_in_round(
     } else {
         ladder
             .into_iter()
-            .map(|(rung, stage)| DeliveryStep {
-                rung,
-                stage: stage.map(str::to_string),
-            })
+            .map(|(rung, stage)| DeliveryStep { rung, stage })
             .collect()
     };
     let warning = jobs
@@ -1421,7 +1419,7 @@ fn phase_in_round(
     }
     if let Some(step) = approvals.iter().find(|approval| {
         approval.status == DeliveryApprovalStatus::Drifted
-            && latest_step(&approvals, approval.rung, stage_of(approval).as_deref())
+            && latest_step(&approvals, approval.rung, stage_of(approval))
                 .is_some_and(|latest| latest.id == approval.id)
     }) {
         return phase(Phase::Drifted {
@@ -1600,11 +1598,9 @@ fn phase_in_round(
             });
         }
     }
-    if let Some(pr) = facts
-        .prs
-        .iter()
-        .find(|pr| pr.task_id == task.id && round.is_some_and(|round| round.kind == "ci"))
-    {
+    if let Some(pr) = facts.prs.iter().find(|pr| {
+        pr.task_id == task.id && round.is_some_and(|round| round.kind == DeliveryRoundKind::Ci)
+    }) {
         if let Some(why) = &pr.merged_failing_ci {
             return phase(Phase::MergedFailingCi {
                 number: pr.number,
@@ -1629,11 +1625,8 @@ fn phase_in_round(
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         // A merged PR waits on nothing: the step left is what the task
         // waits on, named, so the coordinator sees it among the idle ones.
-        if pr.state == "merged" {
-            return phase(Phase::NextStep {
-                rung,
-                stage: stage.map(str::to_string),
-            });
+        if pr.state == DeliveryPrState::Merged {
+            return phase(Phase::NextStep { rung, stage });
         }
         // Replies to reviewers are outside the ladder, but waiting for the
         // user's approval they are what the PR waits on.
@@ -1679,10 +1672,7 @@ fn phase_in_round(
             });
         }
     }
-    phase(Phase::NextStep {
-        rung,
-        stage: stage.map(str::to_string),
-    })
+    phase(Phase::NextStep { rung, stage })
 }
 
 #[cfg(test)]
@@ -2064,7 +2054,7 @@ mod tests {
             world.phase().next_step,
             Some(DeliveryStep {
                 rung: DeliveryRung::Jira,
-                stage: Some(JIRA_AFTER_PR.into())
+                stage: Some(DeliveryJiraStage::AfterPr)
             })
         );
     }
@@ -2545,7 +2535,7 @@ mod tests {
         let mut world = World::new(vec![job("j1", "qa", Finished, Some("pass"))]);
         for (rung, stage) in STEPS {
             let mut done = step(&format!("{rung:?}").to_lowercase(), "executed", Some(1));
-            done.stage = stage.map(str::to_string);
+            done.stage = stage;
             done.id = format!("{rung:?}-{stage:?}");
             world.approvals.push(done);
         }
@@ -2569,7 +2559,7 @@ mod tests {
             (
                 Phase::NextStep {
                     rung: DeliveryRung::Jira,
-                    stage: Some(JIRA_AFTER_PR.into()),
+                    stage: Some(DeliveryJiraStage::AfterPr),
                 },
                 Waiter::Coordinator
             )

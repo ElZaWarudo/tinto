@@ -9,8 +9,9 @@ use std::collections::HashSet;
 
 use crate::delivery::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryDecision, DeliveryDecisionKind,
-    DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJobStatus, DeliveryOverview,
-    DeliveryQaProblemStatus, DeliveryRecommendation, DeliveryRung, DeliverySettingsProposalStatus,
+    DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJiraStage, DeliveryJobStatus,
+    DeliveryOverview, DeliveryQaProblemStatus, DeliveryRecommendation, DeliveryRunStatus,
+    DeliveryRung, DeliverySettingsProposalStatus,
 };
 use crate::delivery::phase::{DeliveryTaskPhase, Phase, PrWait};
 
@@ -152,7 +153,7 @@ pub fn approval(approval: &DeliveryApproval) -> Approval {
         id: approval.id.clone(),
         task_id: approval.task_id.clone(),
         rung: value(&approval.rung),
-        stage: approval.stage.clone(),
+        stage: approval.stage.map(|stage| stage.as_str().to_string()),
         title: approval.title.clone(),
         body: approval.body.clone(),
         commits: approval.commits.iter().map(|c| c.message.clone()).collect(),
@@ -220,7 +221,7 @@ pub fn build(overview: &DeliveryOverview, now: u64) -> Snapshot {
     let runs: Vec<Run> = overview
         .runs
         .iter()
-        .filter(|run| run.status == "active")
+        .filter(|run| run.status == DeliveryRunStatus::Active)
         .map(|run| Run {
             id: run.id.clone(),
             title: run.title.clone(),
@@ -250,7 +251,7 @@ pub fn build(overview: &DeliveryOverview, now: u64) -> Snapshot {
                 .map(|pr| Pr {
                     number: pr.number,
                     url: pr.url.clone(),
-                    state: pr.state.clone(),
+                    state: pr.state.as_str().to_string(),
                     draft: pr.draft,
                     conflicts: pr.conflicts,
                     ci: value(&pr.ci),
@@ -368,14 +369,14 @@ fn stage(role: &str) -> String {
     .to_string()
 }
 
-fn step(rung: DeliveryRung, jira_stage: Option<&str>) -> &'static str {
+fn step(rung: DeliveryRung, jira_stage: Option<DeliveryJiraStage>) -> &'static str {
     match (rung, jira_stage) {
         (DeliveryRung::Commit, _) => "commit",
         (DeliveryRung::Sync, _) => "sync con la base",
         (DeliveryRung::Push, _) => "push",
         (DeliveryRung::Pr, _) => "PR",
         (DeliveryRung::Merge, _) => "merge",
-        (DeliveryRung::Jira, Some("after_merge")) => "Jira (merge)",
+        (DeliveryRung::Jira, Some(DeliveryJiraStage::AfterMerge)) => "Jira (merge)",
         (DeliveryRung::Jira, _) => "Jira (PR)",
         (DeliveryRung::PrReply, _) => "respuesta al revisor",
     }
@@ -387,16 +388,13 @@ fn task_phase(phase: &DeliveryTaskPhase) -> TaskPhase {
         Phase::Decisions { count } => format!("{count} decisiones pendientes"),
         Phase::QaProblems { count: 1 } => "Un problema de QA por decidir".to_string(),
         Phase::QaProblems { count } => format!("{count} problemas de QA por decidir"),
-        Phase::Approval { rung, stage } => format!("Aprobar {}", step(*rung, stage.as_deref())),
+        Phase::Approval { rung, stage } => format!("Aprobar {}", step(*rung, *stage)),
         Phase::StepRunning { rung, .. } => format!("En curso: {}", step(*rung, None)),
         Phase::Record { rung, stage } => {
-            format!("El coordinador informa: {}", step(*rung, stage.as_deref()))
+            format!("El coordinador informa: {}", step(*rung, *stage))
         }
         Phase::Drifted { rung, stage } => {
-            format!(
-                "{} ya no coincide con GitHub",
-                step(*rung, stage.as_deref())
-            )
+            format!("{} ya no coincide con GitHub", step(*rung, *stage))
         }
         Phase::Running { role, .. } => format!("En marcha: {}", stage(role)),
         Phase::Paused { role, .. } => format!("En pausa: {}", stage(role)),
@@ -436,7 +434,7 @@ fn task_phase(phase: &DeliveryTaskPhase) -> TaskPhase {
         Phase::MergedFailingCi { number, .. } => format!("PR #{number} fusionado con CI en rojo"),
         Phase::NextStage { role } => format!("Siguiente: {}", stage(role)),
         Phase::NextStep { rung, stage } => {
-            format!("Siguiente: {}", step(*rung, stage.as_deref()))
+            format!("Siguiente: {}", step(*rung, *stage))
         }
     };
     let kind = value(&phase.phase)

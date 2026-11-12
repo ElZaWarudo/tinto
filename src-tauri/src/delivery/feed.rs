@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 use super::model::{
     DeliveryCoordinatorState, DeliveryEvent, DeliveryJobStatus, DeliveryLeaseState, DeliveryRun,
-    DeliveryUnblock,
+    DeliveryRunStatus, DeliveryUnblock,
 };
 use super::service::DeliveryService;
 use super::{now_ms, DeliveryError};
@@ -488,7 +488,7 @@ impl DeliveryService {
             let Some(session) = run.coordinator_session.clone() else {
                 continue;
             };
-            if run.status != "active" {
+            if run.status != DeliveryRunStatus::Active {
                 continue;
             }
             match sessions.iter_mut().find(|(id, _)| *id == session) {
@@ -550,7 +550,10 @@ impl DeliveryService {
             .unwrap_or_default();
         let mut states = Vec::new();
         let now = now_ms();
-        for run in runs.into_iter().filter(|run| run.status == "active") {
+        for run in runs
+            .into_iter()
+            .filter(|run| run.status == DeliveryRunStatus::Active)
+        {
             let after = handed_cursor(&run);
             let (events, _) = self.coordinator_events(&run.id, after)?;
             states.push(DeliveryCoordinatorState {

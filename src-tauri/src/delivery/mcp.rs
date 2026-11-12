@@ -21,9 +21,9 @@ use super::decisions::NewDecision;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryCommit,
     DeliveryCoordinatorEndpoint, DeliveryDecisionKind, DeliveryDecisionOption,
-    DeliveryDecisionStatus, DeliveryJob, DeliveryOverview, DeliveryPlatform,
-    DeliveryQaProblemStatus, DeliveryRung, DeliverySettingsChanges, DeliverySettingsProposalStatus,
-    DeliveryTaskMilestone,
+    DeliveryDecisionStatus, DeliveryJiraStage, DeliveryJob, DeliveryOverview, DeliveryPlatform,
+    DeliveryQaProblemStatus, DeliveryRunStatus, DeliveryRung, DeliverySettingsChanges,
+    DeliverySettingsProposalStatus, DeliveryTaskMilestone,
 };
 use super::phase::Phase;
 use super::service::{DeliveryService, NewJob, NewPackage, NewTask, CHECKS_ROLE, QA_ROLE};
@@ -1409,7 +1409,7 @@ fn narrow_overview(
             .map(|task| task.run_id.clone())
     });
     overview.runs.retain(|run| {
-        (closed || run.status != "closed")
+        (closed || run.status != DeliveryRunStatus::Closed)
             && run_id.is_none_or(|id| run.id == id)
             && task_run
                 .as_ref()
@@ -1534,22 +1534,15 @@ fn compact_overview(overview: &DeliveryOverview) -> Result<Value, DeliveryError>
         jobs.push(Value::Object(value));
     }
     // Approvals come oldest first: the last one of each step stands.
-    let mut standing: BTreeMap<(&str, DeliveryRung, Option<&str>), &str> = BTreeMap::new();
+    let mut standing: BTreeMap<(&str, DeliveryRung, Option<DeliveryJiraStage>), &str> =
+        BTreeMap::new();
     for approval in &overview.approvals {
-        let step = (
-            approval.task_id.as_str(),
-            approval.rung,
-            approval.stage.as_deref(),
-        );
+        let step = (approval.task_id.as_str(), approval.rung, approval.stage);
         standing.insert(step, approval.id.as_str());
     }
     let mut approvals = Vec::new();
     for approval in &overview.approvals {
-        let step = (
-            approval.task_id.as_str(),
-            approval.rung,
-            approval.stage.as_deref(),
-        );
+        let step = (approval.task_id.as_str(), approval.rung, approval.stage);
         let settled = standing.get(&step) != Some(&approval.id.as_str())
             || delivered.contains(approval.task_id.as_str());
         approvals.push(

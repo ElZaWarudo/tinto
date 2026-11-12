@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 use super::model::DeliveryOverview;
 use super::phase::Phase;
+use super::prs::DeliveryPrState;
 
 /// Paths listed per overlap; the rest are only counted.
 const FILES_SHOWN: usize = 5;
@@ -20,7 +21,7 @@ pub(super) fn task_overlaps(overview: &DeliveryOverview) -> Option<Value> {
         overview
             .prs
             .iter()
-            .any(|pr| pr.task_id == task && pr.state == "merged")
+            .any(|pr| pr.task_id == task && pr.state == DeliveryPrState::Merged)
             || overview
                 .phases
                 .get(task)
