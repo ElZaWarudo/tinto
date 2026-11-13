@@ -24,6 +24,7 @@ import {
 } from "./agentChoice";
 import { parseStatuses } from "./taskStatus";
 import { ExternalLink } from "./ExternalLink";
+import { Icon } from "../../workbench/Icon";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import type {
   DeliveryAutonomy,
@@ -1599,7 +1600,8 @@ function SettingsFrame({
     <div className="delivery-settings">
       <header className="delivery-settings__bar">
         <button type="button" className="delivery-settings__back" onClick={onBack}>
-          ← Volver
+          <Icon name="left" />
+          Volver
         </button>
         <h2>Ajustes</h2>
         {actions}

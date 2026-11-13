@@ -23,9 +23,6 @@ function CodeThread({ thread, open }: { thread: DeliveryCodeThread; open: boolea
   return (
     <details className="delivery-thread" open={open}>
       <summary className="delivery-thread__head">
-        <span className="delivery-thread__chevron" aria-hidden="true">
-          ▶
-        </span>
         <span className="delivery-thread__path">
           {where}
           {thread.line && !thread.error ? `:${thread.line}` : ""}

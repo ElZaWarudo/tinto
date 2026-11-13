@@ -24,6 +24,7 @@ import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import { WorkspaceActionsContext, useWorkspaceActions } from "../../workspace/actions";
 
 import { confirm } from "../../workbench/confirmDialog";
+import { Icon } from "../../workbench/Icon";
 import { ActionButton } from "./ActionButton";
 import { errorText } from "./errorText";
 import {
@@ -359,7 +360,7 @@ export function CoordinatorDock({
                 aria-label="Cerrar el coordinador"
                 onClick={() => onOpenChange(false)}
               >
-                ×
+                <Icon name="x" />
               </button>
             </div>
             <div className="delivery-coordinator__status">
@@ -406,7 +407,7 @@ export function CoordinatorDock({
                 aria-expanded={chatShown}
                 onClick={() => setChatShown(!chatShown)}
               >
-                <span aria-hidden>{chatShown ? "▾" : "▸"}</span>
+                <Icon name={chatShown ? "down" : "right"} />
                 Conversación
               </button>
               {chatShown && (
@@ -495,21 +496,24 @@ export function CoordinatorDock({
                     ))}
                   </select>
                 </label>
-                <label title="Sin sandbox ni confirmaciones de permisos: puede ejecutar cualquier comando con tus permisos.">
-                  <input
-                    type="checkbox"
-                    checked={privileged}
-                    onChange={(event) => setFullAccess(event.target.checked)}
-                  />
-                  Acceso completo
-                </label>
-                <ActionButton
-                  className="delivery-button--primary"
-                  disabled={chosen.length === 0}
-                  onAction={start}
-                >
-                  Iniciar coordinador
-                </ActionButton>
+                {/* Under the three choices: the access on the left, the start on the right. */}
+                <div className="delivery-coordinator__go">
+                  <label title="Sin sandbox ni confirmaciones de permisos: puede ejecutar cualquier comando con tus permisos.">
+                    <input
+                      type="checkbox"
+                      checked={privileged}
+                      onChange={(event) => setFullAccess(event.target.checked)}
+                    />
+                    Acceso completo
+                  </label>
+                  <ActionButton
+                    className="delivery-button--primary"
+                    disabled={chosen.length === 0}
+                    onAction={start}
+                  >
+                    Iniciar coordinador
+                  </ActionButton>
+                </div>
               </div>
             </div>
           )}

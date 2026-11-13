@@ -179,7 +179,6 @@ import {
   quietFor,
   stepKey,
   taskLabel,
-  issueProgress,
   entryTasks,
   issueRowId,
   packageState,
@@ -289,8 +288,17 @@ const TONE_ICON: Record<Tone, StatusIcon> = {
 };
 
 /** The task's state; `who` it waits on follows it, unless the state already
- *  asks the user or an agent is at work. */
-function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }) {
+ *  asks the user or an agent is at work. `oneLine` (a row not selected): who
+ *  it waits on follows the state in the same line, cut to fit. */
+function StatusLine({
+  status,
+  who,
+  oneLine = false,
+}: {
+  status: TaskStatus;
+  who?: string | null;
+  oneLine?: boolean;
+}) {
   const shown =
     status.group !== "attention" && status.group !== "running" && who
       ? waitsOnPhrase(who, status.label)
@@ -298,11 +306,20 @@ function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }
   // Amber says the task waits on the user; a PR in trouble the coordinator handles does not.
   const tone =
     status.tone === "attention" && status.group !== "attention" ? "waiting" : status.tone;
+  // How long it has run ("1:04"), one of the label's parts, closes the line.
+  const parts = status.label.split(" · ");
+  const at = parts.findIndex((part) => /^\d+:\d{2}$/.test(part));
+  const label = at < 0 ? status.label : parts.filter((_, index) => index !== at).join(" · ");
+  const text = oneLine && shown ? `${label} · ${shown}` : label;
   return (
-    <span className={`delivery-status-line delivery-tone--${tone}`}>
+    <span
+      className={`delivery-status-line delivery-tone--${tone}${oneLine ? " delivery-status-line--one" : ""}`}
+      title={oneLine ? text : undefined}
+    >
       <StatusMark icon={status.icon} />
-      {status.label}
-      {shown && <small className="delivery-status-line__who">{shown}</small>}
+      <span className="delivery-status-line__text">{text}</span>
+      {!oneLine && shown && <small className="delivery-status-line__who">{shown}</small>}
+      {at >= 0 && <span className="delivery-status-line__time">{parts[at]}</span>}
     </span>
   );
 }
@@ -2010,13 +2027,14 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     const qaHere =
       qaLease?.state === "active" || qaLease?.state === "quarantined" ? qaLease.state : null;
     const track = tracks.get(task.id);
+    const selected = selectedTask?.id === task.id;
     return (
       <button
         key={task.id}
         type="button"
         className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${qaHere === "active" ? " delivery-task-row--qa" : ""}`}
         data-task-id={task.id}
-        aria-current={selectedTask?.id === task.id ? "true" : undefined}
+        aria-current={selected ? "true" : undefined}
         onClick={() => select(repo, task.id)}
         onContextMenu={(event) => {
           const host = event.currentTarget.closest(".delivery-panel");
@@ -2062,8 +2080,13 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           {task.package ? task.package.title || task.title : task.title || task.branch}
         </span>
         {!task.package && parentTag(task)}
-        <StatusLine status={status} who={overview ? waitsOnLabel(overview, task.id) : null} />
-        {status.detail && (
+        {/* One status line; the selected row also says why. */}
+        <StatusLine
+          status={status}
+          who={overview ? waitsOnLabel(overview, task.id) : null}
+          oneLine={!selected}
+        />
+        {selected && status.detail && (
           <span className="delivery-task-row__blocker" title={status.detail}>
             {status.detail}
           </span>
@@ -2107,6 +2130,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
             <StatusLine
               status={statuses.get(current.id)!}
               who={overview ? waitsOnLabel(overview, current.id) : null}
+              oneLine
             />
           </>
         )}
@@ -2657,7 +2681,6 @@ function TaskDetail({
   const qaProblemsToDecide = problemsToDecide(overview, task.id);
   const newestFirst = [...jobs].reverse();
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
-  const taskRun = overview.runs.find((candidate) => candidate.id === task.run_id);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(newestFirst[0]?.id ?? null);
   // A stage launched while the task is open shows its log as it runs.
   const newestStage = newestFirst.find((job) => job.agent !== "shell")?.id ?? null;
@@ -2689,7 +2712,6 @@ function TaskDetail({
     (approval) =>
       approval.status === "pending" || approval.status === "approved" || approval.progress,
   );
-  const progress = issueProgress(overview, task);
   // A reply to a reviewer holds nothing: the next step can still be asked.
   const ladderStep = nextStepOf(overview, task.id);
   const step = openApprovals.every((approval) => approval.rung === "pr_reply") ? ladderStep : null;
@@ -2809,6 +2831,10 @@ function TaskDetail({
     const target = asks.some((ask) => ask.id === askedHere.ask) ? askedHere.ask! : askTarget;
     const opener = document.getElementById(`${askId(target)}-open`);
     const card = document.getElementById(askId(target)) ?? opener;
+    // A card inside a folded section opens it.
+    for (let fold = card?.closest("details"); fold; fold = fold.parentElement?.closest("details")) {
+      fold.open = true;
+    }
     card?.scrollIntoView?.({ block: "nearest" });
     card?.focus();
     // Pressed as the user would; a card that opens on top takes the focus itself.
@@ -3052,7 +3078,10 @@ function TaskDetail({
       )}
       <header className="delivery-task__header">
         <div className="delivery-task__heading">
-          <h2>
+          {/* Two lines at most; the whole title on hover. */}
+          <h2
+            title={[taskLabel(task), task.package?.title, task.title].filter(Boolean).join(" · ")}
+          >
             {taskLabel(task)}
             {task.package?.title && <span> {task.package.title} ·</span>}
             {task.title && <span> {task.title}</span>}
@@ -3123,12 +3152,7 @@ function TaskDetail({
               <code title={task.worktree}>{task.branch}</code> desde {task.base_ref} (
               {shortCommit(task.base_commit)})
             </span>
-            {taskRun && <span>{batchName(taskRun.title || taskRun.id)}</span>}
-            {progress && (
-              <span title="El issue, por paquetes">
-                {task.key}: {progress}
-              </span>
-            )}
+            {/* The batch and the sibling packages are in the bar and the list. */}
             {cost && (
               <span title={cost.partial ? COST_PARTIAL : undefined}>Costo: {cost.label}</span>
             )}
@@ -3496,7 +3520,16 @@ function TaskDetail({
 
       {qaRecord && <QaRecordNotice job={qaRecord} />}
 
-      {pr && <PrSection pr={pr} yours={yours} />}
+      {/* Folded sections, one line each; the PR's opens by itself while it
+          waits on the user: replies to its reviewers, or what it needs. */}
+      {pr && (
+        <PrSection
+          id={askId("pr")}
+          pr={pr}
+          yours={yours}
+          open={replies.length > 0 || (yours && prMood(pr) === "attention")}
+        />
+      )}
 
       <DeliveryResults approvals={approvals} onCorrect={setCorrecting} />
       {correcting && (
@@ -4068,63 +4101,78 @@ function DeliveryResults({
       (approval.status === "executed" || approval.status === "failed"),
   );
   if (done.length === 0 && replies.length === 0) return null;
+  // Folded: the delivery line already says each step; the gist counts them.
+  const gist = [
+    done.length > 0 && (done.length === 1 ? "1 paso" : `${done.length} pasos`),
+    replies.length > 0 &&
+      (replies.length === 1
+        ? "1 respuesta al revisor"
+        : `${replies.length} respuestas a revisores`),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <section className="delivery-section" aria-label="Resultados de la entrega">
-      <h3>Resultados de la entrega</h3>
-      <ul className="delivery-results">
-        {done.map(({ step: { rung, label, stage }, approval }) => {
-          const corrections = approval.corrections ?? [];
-          // Oldest first: what was recorded, then each correction.
-          const history = [
-            {
-              text: corrections[0]?.previous ?? approval.outcome ?? "—",
-              at: approval.executed_at_ms,
-              reason: null as string | null,
-            },
-            ...corrections.map((c) => ({ text: c.outcome, at: c.at_ms, reason: c.reason })),
-          ];
-          return (
-            <li key={stage ?? rung} aria-label={label}>
-              <strong>{label}</strong>
-              <ol className="delivery-results__history">
-                {history.map((entry, index) => (
-                  <li
-                    key={index}
-                    className={index < history.length - 1 ? "delivery-muted" : undefined}
+      <details className="delivery-fold">
+        <summary>
+          <h3>Resultados de la entrega</h3>
+          <span className="delivery-fold__gist">{gist}</span>
+        </summary>
+        <ul className="delivery-results">
+          {done.map(({ step: { rung, label, stage }, approval }) => {
+            const corrections = approval.corrections ?? [];
+            // Oldest first: what was recorded, then each correction.
+            const history = [
+              {
+                text: corrections[0]?.previous ?? approval.outcome ?? "—",
+                at: approval.executed_at_ms,
+                reason: null as string | null,
+              },
+              ...corrections.map((c) => ({ text: c.outcome, at: c.at_ms, reason: c.reason })),
+            ];
+            return (
+              <li key={stage ?? rung} aria-label={label}>
+                <strong>{label}</strong>
+                <ol className="delivery-results__history">
+                  {history.map((entry, index) => (
+                    <li
+                      key={index}
+                      className={index < history.length - 1 ? "delivery-muted" : undefined}
+                    >
+                      <span>{entry.text}</span>{" "}
+                      <small className="delivery-muted">
+                        {index === 0 ? when(entry.at) : `Corregido el ${when(entry.at)}`}
+                        {entry.reason && ` · Por qué: ${entry.reason}`}
+                      </small>
+                    </li>
+                  ))}
+                </ol>
+                {rung !== "commit" && rung !== "push" && (
+                  <button
+                    type="button"
+                    className="delivery-link-button"
+                    onClick={() => onCorrect(approval.id)}
                   >
-                    <span>{entry.text}</span>{" "}
-                    <small className="delivery-muted">
-                      {index === 0 ? when(entry.at) : `Corregido el ${when(entry.at)}`}
-                      {entry.reason && ` · Por qué: ${entry.reason}`}
-                    </small>
-                  </li>
-                ))}
-              </ol>
-              {rung !== "commit" && rung !== "push" && (
-                <button
-                  type="button"
-                  className="delivery-link-button"
-                  onClick={() => onCorrect(approval.id)}
-                >
-                  Corregir resultado…
-                </button>
-              )}
+                    Corregir resultado…
+                  </button>
+                )}
+              </li>
+            );
+          })}
+          {replies.map((reply) => (
+            <li key={reply.id} aria-label={reply.title}>
+              <strong>{reply.title}</strong>{" "}
+              {reply.status === "executed" && reply.outcome ? (
+                <ExternalLink href={reply.outcome}>{reply.outcome}</ExternalLink>
+              ) : (
+                <span className="delivery-job__note">No se publicó: {reply.outcome}</span>
+              )}{" "}
+              <small className="delivery-muted">{when(reply.executed_at_ms)}</small>
+              {reply.notice && <p className="delivery-job__note">{reply.notice}</p>}
             </li>
-          );
-        })}
-        {replies.map((reply) => (
-          <li key={reply.id} aria-label={reply.title}>
-            <strong>{reply.title}</strong>{" "}
-            {reply.status === "executed" && reply.outcome ? (
-              <ExternalLink href={reply.outcome}>{reply.outcome}</ExternalLink>
-            ) : (
-              <span className="delivery-job__note">No se publicó: {reply.outcome}</span>
-            )}{" "}
-            <small className="delivery-muted">{when(reply.executed_at_ms)}</small>
-            {reply.notice && <p className="delivery-job__note">{reply.notice}</p>}
-          </li>
-        ))}
-      </ul>
+          ))}
+        </ul>
+      </details>
     </section>
   );
 }
