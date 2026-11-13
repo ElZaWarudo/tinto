@@ -1132,8 +1132,24 @@ describe("taskTrack", () => {
       task,
     );
     const commit = track.steps.find((stop) => stepKey(stop.step) === "commit")!;
-    expect(commit).toMatchObject({ station: "passed", label: "Resuelto" });
+    // Drawn as passed in every theme: no warning or failure tone left.
+    expect(commit).toMatchObject({
+      station: "passed",
+      tone: "ok",
+      icon: "check",
+      label: "Resuelto",
+    });
     expect(commit.title).toMatch(/Conflictos/);
+    const review = taskTrack(
+      overview({
+        jobs: [
+          job({ role: "review", status: "failed", created_at_ms: 1 }),
+          job({ role: "qa", created_at_ms: 2 }),
+        ],
+      }),
+      task,
+    ).agents.find((stop) => stop.role === "review")!;
+    expect(review).toMatchObject({ station: "passed", tone: "ok", label: "Resuelto" });
   });
 
   it("joins two passed stations with only skipped ones between them", () => {

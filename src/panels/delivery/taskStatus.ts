@@ -986,17 +986,32 @@ export interface TaskTrack {
  *  a delivered task, is passed; a station never reached, not the one due next,
  *  that the task is past (or delivered) is skipped; and whether the rail into
  *  each one is done: passed at both ends, skipped ones in between. */
-function settleLine<T extends { station: Station; label: string; title?: string }>(
+function settleLine<
+  T extends {
+    station: Station;
+    tone: Tone | "todo";
+    icon?: StatusIcon;
+    label: string;
+    title?: string;
+  },
+>(
   stops: T[],
   at: (stop: T) => number | null,
   isNext: (stop: T) => boolean,
   delivered: boolean,
 ): (T & { joined: boolean })[] {
-  // A problem left behind is passed, and its words stop naming the problem:
-  // what it was stays in its title.
+  // A problem left behind is passed, drawn as passed in every theme (tone and
+  // icon), and its words stop naming the problem: what it was stays in its title.
   const past = (stop: T): T =>
     stop.station === "attention" || stop.station === "broke"
-      ? { ...stop, station: "passed", label: "Resuelto", title: stop.title ?? stop.label }
+      ? {
+          ...stop,
+          station: "passed",
+          tone: "ok",
+          ...(stop.icon && { icon: "check" }),
+          label: "Resuelto",
+          title: stop.title ?? stop.label,
+        }
       : { ...stop, station: "passed" };
   const settled = stops.map((stop, index): T => {
     if (stop.station === "skipped") return stop;
