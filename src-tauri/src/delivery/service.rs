@@ -2506,6 +2506,20 @@ impl DeliveryService {
                 "el trabajo todavía no terminó",
             ));
         }
+        // A second retry of the same job before the first one ends would
+        // run the stage twice: the newer attempt still open answers it.
+        let superseded = self.store()?.task_jobs(&job.task_id)?.iter().any(|other| {
+            other.status.is_open()
+                && other.role == job.role
+                && other.attempt > job.attempt
+                && (job.agent != DeliveryAgent::Shell || other.prompt == job.prompt)
+        });
+        if superseded {
+            return Err(DeliveryError::new(
+                "retry_superseded",
+                "ya hay un intento nuevo de esta etapa en curso",
+            ));
+        }
         let mut assignment = self.same_assignment(job)?;
         if timeout_minutes.is_some() {
             assignment.timeout_minutes = timeout_minutes;

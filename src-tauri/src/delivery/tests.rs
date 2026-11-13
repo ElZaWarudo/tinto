@@ -2254,6 +2254,43 @@ fn a_stages_time_limit_applies_when_its_dispatch_gives_none_and_a_retry_can_chan
 }
 
 #[test]
+fn a_second_retry_of_a_job_is_refused_while_its_first_retry_is_open() {
+    let h = harness();
+    h.service
+        .update_settings(DeliverySettings {
+            capacity: 1,
+            ..Default::default()
+        })
+        .unwrap();
+    let task = h.task("R-2");
+    let failed = h.wait(&h.dispatch(&task, "tests", "exit=1 events=codex-failed").id);
+    assert_eq!(failed.status, DeliveryJobStatus::Failed);
+    // A long job holds the only slot, so the retry stays queued.
+    let busy = h.dispatch(&task, "implementation", "sleep=30");
+    h.wait_status(&busy.id, DeliveryJobStatus::Started);
+    let retry = h.service.retry(&failed.id, None).unwrap();
+    assert!(retry.status.is_open());
+
+    let again = h.service.retry(&failed.id, None).unwrap_err();
+    assert_eq!(again.category, "retry_superseded");
+    let tests = |h: &Harness| {
+        h.service
+            .store()
+            .unwrap()
+            .task_jobs(&task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|job| job.role == "tests")
+            .count()
+    };
+    assert_eq!(tests(&h), 2);
+
+    h.service.cancel(&retry.id).unwrap();
+    h.service.cancel(&busy.id).unwrap();
+    h.wait(&busy.id);
+}
+
+#[test]
 fn a_job_that_ran_out_of_time_or_was_cut_off_goes_on_in_its_session() {
     let h = harness();
     let task = h.task("C-1");
