@@ -2469,6 +2469,8 @@ describe("DeliveryPanel", () => {
     // Its sheet opens on the batch, with what to tell it.
     const notice = await screen.findByRole("group", { name: "Coordinador parado" });
     expect(notice).toHaveTextContent(/claude-coord-1 no está esperando: tiene 2 cambios sin leer/);
+    // It takes the focus, so Tab goes on to its actions.
+    expect(notice).toHaveFocus();
     await user.click(within(notice).getByRole("button", { name: "Copiar mensaje" }));
     expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^Sigue con wait_run/));
 

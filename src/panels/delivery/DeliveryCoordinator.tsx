@@ -404,7 +404,7 @@ export function CoordinatorDock({
               </p>
             )}
           </header>
-          {stall && <StallNotice stall={stall} onHide={() => onHideStall(stall)} />}
+          {stall && <StallNotice stall={stall} asked={request} onHide={() => onHideStall(stall)} />}
           {error && (
             <p className="delivery-coordinator__error" role="alert">
               {error}
@@ -536,13 +536,34 @@ export function CoordinatorDock({
 
 /** Why a stopped coordinator holds its batch and what to tell it: the stop's
  *  one home, where the queue's "Ver" opens. Hidden, it comes back if it stops again. */
-function StallNotice({ stall, onHide }: { stall: CoordinatorStall; onHide: () => void }) {
+function StallNotice({
+  stall,
+  asked,
+  onHide,
+}: {
+  stall: CoordinatorStall;
+  /** The request that opened the sheet on this stop, if one did. */
+  asked: object | null;
+  onHide: () => void;
+}) {
+  // Opened from the queue, the notice takes the focus, so Tab goes on to its
+  // actions; once per request.
+  const notice = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (asked) notice.current?.focus();
+  }, [asked]);
   const { run, unread, since } = stall;
   const changes = unread === 1 ? "1 cambio" : `${unread} cambios`;
   const at = new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const message = `Sigue con wait_run de Tinto Delivery: tienes ${changes} sin leer desde las ${at}. Si las herramientas de Delivery fallan, reconéctalas.`;
   return (
-    <div className="delivery-coordinator__stall" role="group" aria-label="Coordinador parado">
+    <div
+      ref={notice}
+      tabIndex={-1}
+      className="delivery-coordinator__stall"
+      role="group"
+      aria-label="Coordinador parado"
+    >
       <p>
         {run.owner && run.owner !== "user" ? run.owner : "Su coordinador"} no está esperando: tiene{" "}
         {changes} sin leer desde las {at}. Pídele que siga con wait_run; si sus herramientas de
