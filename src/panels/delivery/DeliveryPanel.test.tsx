@@ -252,6 +252,14 @@ async function openStep(button: string, rung: string) {
   return screen.getByRole("group", { name: `Aprobación ${rung}` });
 }
 
+/** An entry of the batch bar's one menu: "Lote" with a batch, "⋯" without. */
+async function openBarItem(user: ReturnType<typeof userEvent.setup>, item: string | RegExp) {
+  await user.click(
+    await screen.findByRole("button", { name: /^(Acciones del lote|Más de agentos)$/ }),
+  );
+  return within(screen.getByRole("menu")).getByRole("menuitem", { name: item });
+}
+
 function renderPanel() {
   return render(
     <WorkspaceActionsContext.Provider value={actions}>
@@ -843,16 +851,19 @@ describe("DeliveryPanel", () => {
     await user.click(await screen.findByRole("button", { name: "Reanudar" }));
     await waitFor(() => expect(client.resumeDeliveryJob).toHaveBeenCalledWith("j1"));
     expect(screen.queryByRole("button", { name: "Nuevo intento" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Pausar lote" }));
-    await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledTimes(1));
-    expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true);
-    // A narrow pane folds the batch's actions into one menu that keeps them all.
+    // At any width the batch's and the repo's actions are in one menu, not
+    // loose buttons in the bar.
+    for (const loose of ["Pausar lote", "Tomar el control", "Registro de GitHub", "Guías"]) {
+      expect(screen.queryByRole("button", { name: loose })).toBeNull();
+    }
     await user.click(screen.getByRole("button", { name: "Acciones del lote" }));
     const menu = screen.getByRole("menu");
-    expect(within(menu).getByRole("menuitem", { name: "Tomar el control" })).toBeInTheDocument();
+    for (const item of ["Tomar el control", "Registro de GitHub", "Guías", "Ajustes de agentos"]) {
+      expect(within(menu).getByRole("menuitem", { name: item })).toBeInTheDocument();
+    }
     expect(within(menu).getByText("Cambiar coordinador")).toBeInTheDocument();
     await user.click(within(menu).getByRole("menuitem", { name: "Pausar lote" }));
-    await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true));
     // Overlays never stack: one opened without a press outside (a key, a
     // shortcut) closes the one open.
     await user.click(screen.getByRole("button", { name: "Acciones del lote" }));
@@ -2297,10 +2308,9 @@ describe("DeliveryPanel", () => {
         name: "1 propuesta de reglas te necesita",
       });
       expect(
-        within(await screen.findByRole("button", { name: /^Guías/ })).getByLabelText(
-          "reglas propuestas",
-        ),
+        within(await openBarItem(user, /^Guías/)).getByLabelText("reglas propuestas"),
       ).toBeInTheDocument();
+      await user.keyboard("{Escape}");
       await user.click(needs);
       expect(screen.queryByRole("menu")).toBeNull();
       const proposal = await screen.findByRole("group", { name: "Reglas propuestas" });
@@ -2325,7 +2335,7 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(overview({ runs: [batch("r1", "Lote A")] }));
     const { unmount } = renderPanel();
     expect(await screen.findByText("Lote A")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Tomar el control" })).toBeInTheDocument();
+    expect(await openBarItem(user, "Tomar el control")).toBeInTheDocument();
     unmount();
 
     client.getDeliveryOverview.mockResolvedValue(
@@ -2992,8 +3002,8 @@ describe("DeliveryPanel", () => {
       expect(client.createDeliveryRun).toHaveBeenCalledWith(REPO, "Lote B", true),
     );
 
-    // The repo's setup is behind its tab's gear, in place of its tasks.
-    await user.click(screen.getByRole("button", { name: "Ajustes de agentos" }));
+    // The repo's setup is behind the bar's menu, in place of its tasks.
+    await user.click(await openBarItem(user, "Ajustes de agentos"));
     expect(screen.queryByRole("navigation", { name: "Tareas de Delivery" })).toBeNull();
     const qa = screen.getByRole("region", { name: "Ajustes de agentos" });
     const save = await screen.findByRole("button", { name: "Guardar" });
@@ -3093,7 +3103,7 @@ describe("DeliveryPanel", () => {
       default_base: null,
     });
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Guías" }));
+    await user.click(await openBarItem(user, "Guías"));
     const rail = await screen.findByRole("navigation", { name: "Secciones de los ajustes" });
     await waitFor(() =>
       expect(within(rail).getByRole("button", { name: "Guías" })).toHaveAttribute(
@@ -3125,7 +3135,7 @@ describe("DeliveryPanel", () => {
       Promise.resolve(settings),
     );
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Ajustes de agentos" }));
+    await user.click(await openBarItem(user, "Ajustes de agentos"));
     const settings = screen.getByRole("region", { name: "Ajustes de agentos" });
     const save = await screen.findByRole("button", { name: "Guardar" });
     await waitFor(() => expect(save).toBeEnabled());
@@ -3165,7 +3175,7 @@ describe("DeliveryPanel", () => {
     const opened = { worktree_root: null, bootstrap: null, default_base: null };
     client.getDeliveryRepoSettings.mockResolvedValue(opened);
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Ajustes de agentos" }));
+    await user.click(await openBarItem(user, "Ajustes de agentos"));
     const settings = screen.getByRole("region", { name: "Ajustes de agentos" });
     const save = await screen.findByRole("button", { name: "Guardar" });
     await waitFor(() => expect(save).toBeEnabled());
@@ -3667,8 +3677,11 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: /Cambiar coordinador/ }));
-    const choices = screen.getAllByRole("menuitem");
+    await user.click(await screen.findByRole("button", { name: "Acciones del lote" }));
+    // The conversations offered, after the menu's own entries.
+    const choices = within(screen.getByRole("menu"))
+      .getAllByRole("menuitem")
+      .filter((item) => item.textContent?.includes(" · "));
     expect(choices.map((choice) => choice.textContent)).toEqual(["Muse Code · next-coo"]);
     await user.click(choices[0]);
     expect(client.handOverDeliveryRun).toHaveBeenCalledWith(["run-1"], "next-coordinator");

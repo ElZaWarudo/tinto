@@ -70,12 +70,11 @@ export function MergeFailed({ approval, pr }: { approval: DeliveryApproval; pr: 
   );
 }
 
-/** The latest GitHub calls Tinto made, newest first, read while open. */
-export function GitHubLog() {
-  const [from, setFrom] = useState<HTMLElement | null>(null);
+/** The latest GitHub calls Tinto made, newest first, read while open: a card
+ *  under the control that opened it. */
+export function GitHubLog({ anchor, onClose }: { anchor: Element; onClose: () => void }) {
   const [calls, setCalls] = useState<DeliveryGhCall[] | null>(null);
   useEffect(() => {
-    if (!from) return;
     let live = true;
     const read = () =>
       getDeliveryGithubLog().then(
@@ -88,51 +87,37 @@ export function GitHubLog() {
       live = false;
       window.clearInterval(timer);
     };
-  }, [from]);
+  }, []);
   const failed = (calls ?? []).filter(
     (call) => call.outcome.kind === "failed" || call.outcome.kind === "timed_out",
   ).length;
   return (
-    <>
-      <button
-        type="button"
-        className="delivery-env"
-        aria-expanded={from !== null}
-        onClick={(event) => setFrom(from ? null : event.currentTarget)}
-      >
-        Registro de GitHub
-      </button>
-      {from && (
-        <Overlay
-          anchor={from}
-          label="Registro de GitHub"
-          className="delivery-float delivery-ghlog"
-          onClose={() => setFrom(null)}
-        >
-          <p className="delivery-muted">
-            Las últimas llamadas de Tinto a GitHub, la más reciente primero
-            {failed > 0 ? ` · ${failed} con error` : ""}.
-          </p>
-          {calls === null ? (
-            <p className="delivery-muted">Leyendo…</p>
-          ) : calls.length === 0 ? (
-            <p className="delivery-muted">Tinto no ha llamado a GitHub desde que se abrió.</p>
-          ) : (
-            <ol className="delivery-ghlog__list">
-              {calls.map((call, index) => (
-                <li key={`${call.at_ms}-${index}`}>
-                  <span className="delivery-muted">
-                    {new Date(call.at_ms).toLocaleTimeString()}
-                  </span>
-                  <span className={callTone(call)}>{callResult(call)}</span>
-                  <code>{call.command}</code>
-                </li>
-              ))}
-            </ol>
-          )}
-        </Overlay>
+    <Overlay
+      anchor={anchor}
+      label="Registro de GitHub"
+      className="delivery-float delivery-ghlog"
+      onClose={onClose}
+    >
+      <p className="delivery-muted">
+        Las últimas llamadas de Tinto a GitHub, la más reciente primero
+        {failed > 0 ? ` · ${failed} con error` : ""}.
+      </p>
+      {calls === null ? (
+        <p className="delivery-muted">Leyendo…</p>
+      ) : calls.length === 0 ? (
+        <p className="delivery-muted">Tinto no ha llamado a GitHub desde que se abrió.</p>
+      ) : (
+        <ol className="delivery-ghlog__list">
+          {calls.map((call, index) => (
+            <li key={`${call.at_ms}-${index}`}>
+              <span className="delivery-muted">{new Date(call.at_ms).toLocaleTimeString()}</span>
+              <span className={callTone(call)}>{callResult(call)}</span>
+              <code>{call.command}</code>
+            </li>
+          ))}
+        </ol>
       )}
-    </>
+    </Overlay>
   );
 }
 

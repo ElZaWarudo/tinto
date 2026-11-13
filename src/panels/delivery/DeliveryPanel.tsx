@@ -1146,6 +1146,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             <span className="delivery-panel__spacer" />
             {reviewRequests.length > 0 && (
               <Menu
+                className="delivery-button--quiet"
                 listClassName="delivery-needs"
                 trigger={
                   <>
@@ -1264,12 +1265,16 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
                 },
               )
             )}
-            <button type="button" onClick={() => setDialog({ kind: "archived" })}>
+            <button
+              type="button"
+              className="delivery-button--quiet"
+              onClick={() => setDialog({ kind: "archived" })}
+            >
               Archivadas…
             </button>
             <button
               type="button"
-              className="delivery-icon-button"
+              className="delivery-icon-button delivery-button--quiet"
               aria-label="Ajustes de Delivery"
               title="Agentes en paralelo y conexión de coordinadores"
               disabled={!hasSettingsRepo}
@@ -1535,9 +1540,8 @@ function CoordinatorStallChip({
               <span className="delivery-stall__batch">{batch.replace(/^lote\s+/i, "")}</span>
             )}
             <span className="delivery-muted">
-              {named ? "coordinador parado" : "Coordinador parado"}
+              {named ? "coordinador parado" : "Coordinador parado"} · {changes} sin leer
             </span>
-            <span className="delivery-stall__count">{unread}</span>
           </>
         }
       >
@@ -1672,7 +1676,7 @@ function EnvironmentStatus({ repo, distro }: { repo: string; distro: string | nu
   return (
     <button
       type="button"
-      className={`delivery-env${tone ? ` delivery-env--${tone}` : ""}`}
+      className={`delivery-button--quiet delivery-env${tone ? ` delivery-env--${tone}` : ""}`}
       title={`${details}\n\nClic para comprobar de nuevo.`.trim()}
       aria-label={`Entorno: ${state}. Comprobar de nuevo`}
       disabled={checking}
@@ -2100,6 +2104,9 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     <span className="delivery-repo-tab__needs" aria-label="reglas propuestas" />
   );
   const toggleSettings = () => setSettingsAt(settingsOpen && !guidesOpen ? null : "");
+  // The GitHub log, opened from the bar's menu and shown under it.
+  const moreRef = useRef<HTMLSpanElement>(null);
+  const [githubLogAt, setGithubLogAt] = useState<Element | null>(null);
 
   const toggleIssue = (id: string) =>
     setListView((view) => ({
@@ -2111,8 +2118,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
 
   return (
     <div className="delivery-repo" aria-label={`Delivery de ${choice.label}`}>
-      {/* One bar: the batch on the left, what acts on it and on the repo on the
-          right. A narrow pane (split screen) folds the actions into menus. */}
+      {/* One bar: the batch on the left; on the right one menu with what acts on
+          the batch and the repo, the environment's state and the coordinator. */}
       <div className="delivery-repo__bar">
         <div className="delivery-run">
           {active ? (
@@ -2175,98 +2182,69 @@ function DeliveryRepoView({ repo }: { repo: string }) {
             </span>
           )}
         </div>
-        {active && (
-          <span className="delivery-repo__wide">
-            {takeable && (
-              <ActionButton onAction={() => shared.takeover(active)}>Tomar el control</ActionButton>
-            )}
-            <Menu
-              trigger={
+        {/* "Lote" while the bar shows one batch; with none or several (each
+            acted on from its list) the menu holds the repo's own entries. */}
+        <span ref={moreRef} className="delivery-repo__more">
+          <Menu
+            className="delivery-button--quiet"
+            label={active ? "Acciones del lote" : `Más de ${choice.label}`}
+            trigger={
+              active ? (
                 <>
-                  Cambiar coordinador <Icon name="down" />
+                  Lote{guidesMark} <Icon name="down" />
                 </>
-              }
-            >
-              {(close) => handOverItems(active, close)}
-            </Menu>
-            <ActionButton title={pauseTitle} onAction={togglePause}>
-              {active.paused ? "Reanudar lote" : "Pausar lote"}
-            </ActionButton>
-          </span>
-        )}
-        {active && (
-          <span className="delivery-repo__narrow">
-            <Menu
-              label="Acciones del lote"
-              trigger={
-                <>
-                  Lote <Icon name="down" />
-                </>
-              }
-            >
-              {(close) => (
-                <>
-                  {takeable && (
+              ) : (
+                <>⋯{guidesMark}</>
+              )
+            }
+          >
+            {(close) => (
+              <>
+                {active && (
+                  <>
+                    {takeable && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          close();
+                          void run(() => shared.takeover(active));
+                        }}
+                      >
+                        Tomar el control
+                      </button>
+                    )}
                     <button
                       type="button"
                       role="menuitem"
+                      title={pauseTitle}
                       onClick={() => {
                         close();
-                        void run(() => shared.takeover(active));
+                        void run(togglePause);
                       }}
                     >
-                      Tomar el control
+                      {active.paused ? "Reanudar lote" : "Pausar lote"}
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    title={pauseTitle}
-                    onClick={() => {
-                      close();
-                      void run(togglePause);
-                    }}
-                  >
-                    {active.paused ? "Reanudar lote" : "Pausar lote"}
-                  </button>
-                  <hr />
-                  <small className="delivery-menu__heading">Cambiar coordinador</small>
-                  {handOverItems(active, close)}
-                </>
-              )}
-            </Menu>
-          </span>
-        )}
-        <EnvironmentStatus repo={choice.path} distro={choice.distro} />
-        <GitHubLog />
-        <span className="delivery-repo__wide">
-          <button
-            type="button"
-            aria-pressed={guidesOpen}
-            title={`Guías de ${choice.label}: reglas que salen de sus revisores${guidesWait ? ". Hay reglas propuestas por aprobar" : ""}`}
-            onClick={toggleGuides}
-          >
-            Guías
-            {guidesMark}
-          </button>
-          <button
-            type="button"
-            className="delivery-icon-button"
-            aria-label={`Ajustes de ${choice.label}`}
-            aria-pressed={settingsOpen && !guidesOpen}
-            title={`Ajustes de ${choice.label}`}
-            onClick={toggleSettings}
-          >
-            <Icon name="gear" />
-          </button>
-        </span>
-        <span className="delivery-repo__narrow">
-          <Menu label={`Más de ${choice.label}`} trigger={<>⋯{guidesMark}</>}>
-            {(close) => (
-              <>
+                    <hr />
+                    <small className="delivery-menu__heading">Cambiar coordinador</small>
+                    {handOverItems(active, close)}
+                    <hr />
+                  </>
+                )}
                 <button
                   type="button"
                   role="menuitem"
+                  onClick={() => {
+                    close();
+                    setGithubLogAt(moreRef.current);
+                  }}
+                >
+                  Registro de GitHub
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  title={`Guías de ${choice.label}: reglas que salen de sus revisores${guidesWait ? ". Hay reglas propuestas por aprobar" : ""}`}
                   onClick={() => {
                     close();
                     toggleGuides();
@@ -2289,6 +2267,18 @@ function DeliveryRepoView({ repo }: { repo: string }) {
             )}
           </Menu>
         </span>
+        {githubLogAt && <GitHubLog anchor={githubLogAt} onClose={() => setGithubLogAt(null)} />}
+        <EnvironmentStatus repo={choice.path} distro={choice.distro} />
+        {overview && activeRuns.length > 0 && (
+          <CoordinatorDock
+            runs={activeRuns}
+            focus={lot}
+            overview={overview}
+            stalled={repoStalls.map((stall) => stall.run.id)}
+            open={coordinatorOpen}
+            onOpenChange={setCoordinatorOpen}
+          />
+        )}
       </div>
 
       {settingsOpen ? (
@@ -2500,16 +2490,6 @@ function DeliveryRepoView({ repo }: { repo: string }) {
             )}
           </main>
         </div>
-      )}
-      {overview && activeRuns.length > 0 && (
-        <CoordinatorDock
-          runs={activeRuns}
-          focus={lot}
-          overview={overview}
-          stalled={repoStalls.map((stall) => stall.run.id)}
-          open={coordinatorOpen}
-          onOpenChange={setCoordinatorOpen}
-        />
       )}
     </div>
   );
@@ -3796,13 +3776,18 @@ function StageTrack({
                   <StatusMark icon={tone === "todo" ? "ring" : TONE_ICON[tone]} />
                   {stageLabel(role)}
                 </span>
-                <small title={outcome.title}>{outcome.label}</small>
+                {/* A line cut short keeps its full text on hover. */}
+                <small title={outcome.title ?? outcome.label}>{outcome.label}</small>
                 {job?.visual_record && !inRound && <small>Con registro visual ↓</small>}
                 {job && isOpen(job) && job.activity && (
-                  <small className="delivery-node__activity">{job.activity}</small>
+                  <small className="delivery-node__activity" title={job.activity}>
+                    {job.activity}
+                  </small>
                 )}
                 {job && job.agent !== "shell" && (
-                  <small className="delivery-node__runtime">{runtimeLabel(job)}</small>
+                  <small className="delivery-node__runtime" title={runtimeLabel(job)}>
+                    {runtimeLabel(job)}
+                  </small>
                 )}
               </>
             );
@@ -3855,7 +3840,8 @@ function StageTrack({
                 ? { ...live, title: `${pr?.repo}#${pr?.number}` }
                 : unlinked
                   ? {
-                      tone: "step" as const,
+                      // Done, and nothing the user has to give: neutral.
+                      tone: "waiting" as const,
                       icon: "alert" as const,
                       label: "Hecho · sin PR vinculado",
                       title: approval.outcome ?? undefined,
@@ -3867,7 +3853,7 @@ function StageTrack({
                   <StatusMark icon={step.icon} />
                   {label}
                 </span>
-                <small>{step.label}</small>
+                <small title={step.title ? undefined : step.label}>{step.label}</small>
               </>
             );
             // A paused restack opens on its step, where it can be abandoned.

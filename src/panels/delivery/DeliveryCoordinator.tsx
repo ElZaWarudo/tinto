@@ -1,10 +1,11 @@
-// A batch's coordinator inside Tinto: a floating button with its state that
-// unfolds its Agents conversation (messages, files, everything Agents does),
+// A batch's coordinator inside Tinto: a button at the end of the batch bar,
+// with its state, that unfolds under the bar its Agents conversation
+// (messages, files, everything Agents does),
 // resumes it here once it ended, starts one when the batch has none here (for
 // that batch and any others the user ticks: one conversation may coordinate
 // several), stops new tasks, and detaches the conversation into its own window.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { pendingRequests } from "../../agent/sessionSignal";
 import { useAgentSessionState } from "../../agent/sessionStore";
@@ -73,7 +74,8 @@ const drawerApi = {
   onDidActiveChange: () => ({ dispose: () => {} }),
 } as unknown as IDockviewPanelProps<TerminalPanelParams>["api"];
 
-/** The floating button and, when open, the drawer with the conversation. */
+/** The button, placed in the batch bar, and, when open, the sheet with the
+ *  conversation under that bar. */
 export function CoordinatorDock({
   runs,
   focus = null,
@@ -114,6 +116,13 @@ export function CoordinatorDock({
   // The conversation stays folded until the user opens it.
   const [chatShown, setChatShown] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The sheet opens right under the bar that holds the button, however many
+  // lines the bar takes: its top follows the bar's bottom.
+  const sheet = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const bar = sheet.current?.closest<HTMLElement>(".delivery-repo__bar");
+    if (bar) sheet.current!.style.setProperty("--below", `${bar.offsetTop + bar.offsetHeight}px`);
+  });
 
   // A conversation that ended coordinates nothing: the batch can start another.
   const ended = (id: string) => {
@@ -296,7 +305,10 @@ export function CoordinatorDock({
     <>
       <button
         type="button"
-        className={`delivery-coordinator-button delivery-coordinator-button--${state}`}
+        className={`delivery-button--quiet delivery-coordinator-button delivery-coordinator-button--${state}${
+          // A stop its chip in the bar already shows: said in words, not in warn twice.
+          stalled.includes(run.id) ? " delivery-coordinator-button--told" : ""
+        }`}
         aria-expanded={open}
         aria-label={`Coordinador de ${batchName(run.title || run.id)}: ${STATE_LABEL[state]}`}
         onClick={toggle}
@@ -306,6 +318,7 @@ export function CoordinatorDock({
       </button>
       {open && (
         <aside
+          ref={sheet}
           className={`delivery-coordinator${chatOpen ? " delivery-coordinator--chat" : ""}`}
           aria-label="Coordinador del lote"
         >
