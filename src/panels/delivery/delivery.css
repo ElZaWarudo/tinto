@@ -48,6 +48,20 @@
   background: var(--accent);
   filter: brightness(1.12);
 }
+/* A secondary control: no box, muted until pointed at; the focus ring stays. */
+.delivery-panel .delivery-button--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--fg-muted);
+}
+.delivery-panel .delivery-button--quiet:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--fg);
+}
+.delivery-panel .delivery-button--quiet:focus-visible {
+  outline: 2px solid var(--accent-fg);
+  outline-offset: 1px;
+}
 .delivery-icon {
   width: 14px;
   height: 14px;
@@ -112,7 +126,8 @@
   display: grid;
   justify-items: start;
   gap: 1px;
-  flex: 1;
+  /* Below this the controls go to their own line, not the name to slivers. */
+  flex: 1 1 16em;
   min-width: 0;
 }
 .delivery-run strong {
@@ -146,21 +161,18 @@
   display: inline-flex;
   gap: 2px;
 }
+/* Free slots recede; the ones in use read as running. */
 .delivery-meter i {
   width: 9px;
   height: 8px;
-  border: 1px solid var(--accent-fg);
+  background: color-mix(in srgb, var(--fg-muted) 30%, transparent);
 }
 .delivery-meter i.on {
   background: var(--accent-fg);
 }
-/* QA has a colour of its own: not a warning, the task is being tested. */
+/* A task in QA is running: teal words, no box. */
 .delivery-lease--active {
-  color: var(--info);
-  border: 1px solid color-mix(in srgb, var(--info) 55%, transparent);
-  background: color-mix(in srgb, var(--info) 12%, transparent);
-  padding: 2px 8px;
-  font-weight: 600;
+  color: var(--accent-fg);
 }
 .delivery-lease--quarantined {
   color: var(--danger);
@@ -251,6 +263,10 @@
   min-width: 0;
   padding: 4px 8px;
   font-size: 12px;
+}
+.delivery-panel .delivery-search input::placeholder {
+  color: var(--fg-muted);
+  opacity: 1;
 }
 .delivery-search__results {
   display: grid;
@@ -1619,20 +1635,27 @@
 }
 
 /* ---------- Stage track ---------- */
+/* Agentes and Entrega side by side only while every cell keeps its room
+   (144px for an agent, whose name and menu share a line; 96px for a step);
+   narrower, Entrega goes under Agentes, and a group whose cells still do not
+   fit wraps them into a second row instead of cutting their names. */
 .delivery-track {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   min-width: 0;
 }
 .delivery-track__part {
-  flex: 1.25 1 0;
+  /* Five agents of 144px, their dividers and border. */
+  flex: 1 1 726px;
   min-width: 0;
   display: grid;
   gap: 4px;
   align-content: start;
 }
 .delivery-track__part--rungs {
-  flex: 1 1 0;
+  /* Seven steps of 96px. */
+  flex: 1 1 680px;
 }
 .delivery-track h3,
 .delivery-section h3 {
@@ -1643,21 +1666,22 @@
   letter-spacing: 0.05em;
   color: var(--fg-muted);
 }
-/* One row of equal steps; the 1px gaps over the list's background draw the
-   dividers, so they stay right when the steps wrap into two rows. */
+/* A row of equal steps; the 1px gaps over the list's background draw the
+   dividers, and a row's cells grow to fill it, so a wrapped row leaves no
+   empty slot. */
 .delivery-track ol {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 1px;
   background: var(--border);
   border: 1px solid var(--border);
 }
 .delivery-node {
   position: relative;
+  flex: 1 1 96px;
   min-width: 0;
   background: var(--bg);
   border-top: 2px solid var(--border);
@@ -1713,14 +1737,14 @@
   background: transparent;
   text-align: left;
 }
+/* A name too long for its cell takes a second line, never an ellipsis. */
 .delivery-node__name {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 /* Who runs the stage from now on: a small menu in the card's corner. */
 .delivery-node > .delivery-menu {
@@ -1734,8 +1758,12 @@
   background: transparent;
   color: var(--fg-muted);
 }
-.delivery-node > div,
-.delivery-panel .delivery-node > button {
+/* Only an agent's cell has that menu: room for it, and for its name beside it. */
+.delivery-node:has(> .delivery-menu) {
+  flex-basis: 144px;
+}
+.delivery-node:has(> .delivery-menu) > div,
+.delivery-panel .delivery-node:has(> .delivery-menu) > button {
   padding-right: 26px;
 }
 .delivery-stage-agent {
@@ -1764,24 +1792,19 @@
 .delivery-node--ok .delivery-icon {
   color: var(--accent-fg);
 }
-.delivery-node--attention {
-  border-top-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 8%, var(--bg));
-}
-.delivery-node--attention .delivery-icon,
-.delivery-node--attention small {
-  color: var(--warn);
-}
+/* Amber only where the step waits on the user (an approval to give, one to
+   give again); findings, conflicts or news the agents handle stay neutral,
+   their icon saying what they are. */
 .delivery-node--danger {
   border-top-color: var(--danger);
 }
 .delivery-node--step {
-  border-top-color: var(--step);
-  background: color-mix(in srgb, var(--step) 8%, var(--bg));
+  border-top-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, var(--bg));
 }
 .delivery-node--step .delivery-icon,
 .delivery-node--step small {
-  color: var(--step);
+  color: var(--warn);
 }
 .delivery-node--danger .delivery-icon,
 .delivery-node--danger small {
@@ -1894,6 +1917,9 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+.delivery-job__time small {
+  font-size: 11px;
 }
 .delivery-outcome {
   display: inline-flex;
@@ -2180,16 +2206,7 @@
 
 /* Layout follows the detail pane's own width: it can be narrow in a wide
    window when the panel is docked beside others. */
-@container delivery-detail (max-width: 880px) {
-  .delivery-track {
-    flex-direction: column;
-  }
-}
 @container delivery-detail (max-width: 560px) {
-  .delivery-track ol {
-    grid-auto-flow: row;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .delivery-panel .delivery-job__summary {
     grid-template-columns: 14px minmax(0, 1fr) auto auto;
   }
@@ -2528,6 +2545,11 @@
   color: var(--fg-muted);
   font-size: 11px;
 }
+/* On the shown tab's coloured ground, muted grey would sink: the tab's own
+   colour, which is already only about 4.6:1 there, so not faded further. */
+.dv-tab.dv-active-tab .delivery-repo-tab__count {
+  color: inherit;
+}
 /* «te necesita» with several things waiting: one row each, where and what. */
 .delivery-panel .delivery-needs button {
   gap: 24px;
@@ -2565,62 +2587,36 @@
   height: 100%;
   min-height: 0;
 }
+/* The batch bar: a narrow pane wraps its controls under the batch's name. */
 .delivery-repo__bar {
-  /* Its width, not the window's, decides what folds into menus. */
-  container-type: inline-size;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   padding: 5px 12px;
   border-bottom: 1px solid var(--border);
 }
-.delivery-repo__wide,
-.delivery-repo__narrow {
+.delivery-repo__more {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
   flex: none;
-  white-space: nowrap;
-}
-.delivery-repo__narrow {
-  display: none;
 }
 .delivery-menu__heading {
   padding: 2px 12px;
 }
-@container (max-width: 1100px) {
-  .delivery-repo__wide {
-    display: none;
-  }
-  .delivery-repo__narrow {
-    display: inline-flex;
-  }
-  /* "Entorno" and its dot; the words only when it fails. */
-  .delivery-env:not(.delivery-env--fail) .delivery-env__state {
-    display: none;
-  }
-}
-/* "Entorno": the dot's colour goes with the words that say it. */
-.delivery-env {
-  display: inline-flex;
-  align-items: center;
-  font: inherit;
+/* "Entorno": a state, not an action; the dot's colour goes with its words. */
+.delivery-panel .delivery-env {
   font-size: 12px;
-  color: var(--fg-muted);
-  background: none;
-  border: 0;
-  padding: 2px 4px;
-  cursor: pointer;
+  padding: 2px 6px;
   flex: none;
   white-space: nowrap;
 }
-.delivery-env:disabled {
+.delivery-panel .delivery-env:disabled {
   cursor: progress;
 }
 .delivery-env--ok .delivery-dot {
   background: var(--accent-fg);
 }
-.delivery-env--fail {
+.delivery-panel .delivery-env--fail {
   color: var(--danger);
 }
 .delivery-env--fail .delivery-dot {
@@ -2985,18 +2981,13 @@
   margin: 0;
 }
 
-/* The batch's coordinator: a floating button that unfolds a small square
-   sheet above it — the batch, who coordinates and how, its controls — and,
-   when the user opens it, the conversation. */
+/* The batch's coordinator: a quiet control at the end of the batch bar that
+   unfolds a small square sheet under the bar — the batch, who coordinates
+   and how, its controls — and, when the user opens it, the conversation. */
 .delivery-panel .delivery-coordinator-button {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 30;
-  padding: 4px 10px;
+  flex: none;
   font-size: 12px;
-  background: var(--bg-elev);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  white-space: nowrap;
 }
 .delivery-coordinator-button__dot {
   width: 7px;
@@ -3005,41 +2996,43 @@
   border-radius: 50%;
   background: var(--fg-muted);
 }
-.delivery-coordinator-button--waiting .delivery-coordinator-button__dot,
-.delivery-coordinator-button__dot.delivery-coordinator-button--waiting {
-  background: var(--added);
-}
+/* Teal while it works; waiting for news is neutral, like having none. */
 .delivery-coordinator-button--working .delivery-coordinator-button__dot,
 .delivery-coordinator-button__dot.delivery-coordinator-button--working {
   background: var(--accent-fg);
 }
+/* Stopped or asking: it waits on the user. */
 .delivery-coordinator-button--stalled .delivery-coordinator-button__dot,
 .delivery-coordinator-button__dot.delivery-coordinator-button--stalled {
   background: var(--warn);
 }
-/* It waits on the user: the button itself says so, not only its dot. */
-.delivery-coordinator-button--asks {
-  border-color: var(--warn);
-  color: var(--fg-strong);
+/* It asks permission: the button itself says so, not only its dot. */
+.delivery-panel .delivery-coordinator-button--asks {
+  color: var(--warn);
 }
 .delivery-coordinator-button--asks .delivery-coordinator-button__dot,
 .delivery-coordinator-button__dot.delivery-coordinator-button--asks {
   background: var(--warn);
 }
+/* A stop the bar's chip already shows: the button says it in words only. */
+.delivery-coordinator-button--told .delivery-coordinator-button__dot {
+  background: var(--fg-muted);
+}
+/* Under the batch bar, at its right; --below is the bar's bottom. */
 .delivery-coordinator {
   position: absolute;
-  right: 16px;
-  bottom: 50px;
+  top: var(--below, 48px);
+  right: 12px;
   z-index: 35;
   display: flex;
   flex-direction: column;
-  width: min(460px, calc(100% - 32px));
-  max-height: calc(100% - 66px);
+  width: min(460px, calc(100% - 24px));
+  max-height: calc(100% - var(--below, 48px) - 12px);
   border: 1px solid var(--border);
   background: var(--bg);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  /* It grows from its button, below on the right. */
-  transform-origin: bottom right;
+  /* It grows from its button, above on the right. */
+  transform-origin: top right;
   transition:
     opacity 200ms var(--ease-out),
     transform 200ms var(--ease-out);
@@ -3052,7 +3045,7 @@
 }
 /* With the conversation open, the sheet takes the height it needs. */
 .delivery-coordinator--chat {
-  height: calc(100% - 66px);
+  height: calc(100% - var(--below, 48px) - 12px);
 }
 .delivery-coordinator__header {
   display: grid;
@@ -3306,6 +3299,7 @@
 .delivery-status-line__who {
   margin-left: 6px;
   color: var(--fg-muted);
+  font-size: 11px;
   font-weight: normal;
 }
 
