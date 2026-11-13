@@ -4,6 +4,43 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.4.0] - 2026-11-13
+
+### Features
+
+- **delivery:** a task's history reads by rounds, newest first
+- **delivery:** in the Tinto theme, a task's stages are stations on a line
+- **theme:** Tinto, a light theme drawn from line diagrams
+- **delivery:** a queue of what needs you, answered in place when one click is enough
+- **delivery:** one bar with one primary, a readable stage strip and nothing floating over the task
+- **delivery:** open a task on what is yours and give each state colour one meaning
+- **delivery:** motion for what changes on its own, and fixes to what already moved
+- **shell:** entrances for what opens on top, motion tokens, and instant keyboard navigation
+- **dashboard:** confirm what happened and stop animating layout
+- **agents:** make agent state changes legible and fix activity motion
+
+### Fixes
+
+- **delivery:** a retried job can be retried again later, a paused stage's jump reaches «Reanudar», and a resolved stage loses its failure tone
+- **delivery:** check for a newer attempt under the lock that enqueues the retry
+- **delivery:** a history row with an older attempt open closes in one click
+- **theme:** in Tinto what opens on top is edged in ink, and DESIGN.md records the system
+- **delivery:** refuse a retry while a newer attempt of the same stage is open
+- **delivery:** the queue approves only what publishes no text, and a stage is retried once
+- **delivery:** a stage opens its latest attempt even after a round was resumed
+- **delivery:** station names on one line and one colour for every link of the panel
+- **delivery:** the last findings of the design review
+- **delivery:** fold what restates the line, one status line per row, and themed links and marks
+- **delivery:** the queue, «Ahora» and the line say the same thing
+- **delivery:** no second run while a slow refresh is pending, and three smaller review findings
+- **delivery:** a stage's hover is not cut, names what it opens and colours its name
+- **delivery:** pointing at a stage on the line lights its station and its words, not a grey box
+- **delivery:** the line says only what is done, and a problem is not drawn as passed
+- **delivery:** the button that opens another repo is a quiet icon, not a boxed plus sign
+- **delivery:** a task that waits on something else does not say it goes on alone
+- **delivery:** reach the proposed rules from «te necesita» and list each repo once
+- **delivery:** show the check before the refresh and keep opened tasks from fading their asks
+
 ## [1.3.4] - 2026-11-13
 
 ### Features
