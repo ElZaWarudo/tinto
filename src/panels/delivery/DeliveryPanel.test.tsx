@@ -6,7 +6,7 @@ import type { AgentSession } from "../../bus/contract";
 import { agentSessionStore } from "../../agent/sessionStore";
 import { setWindowsHostOverrideForTests } from "../../workbench/platform";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../../workspace/actions";
-import { THEME_STORAGE_KEY, themeStore, type ThemeSetting } from "../../qol/theme";
+import { THEME_STORAGE_KEY, themeStore } from "../../qol/theme";
 import type {
   DeliveryApproval,
   DeliveryDecision,
@@ -659,7 +659,7 @@ describe("DeliveryPanel", () => {
 
   it("ends each task row with its stages as a small line only in the Tinto theme", async () => {
     client.getDeliveryOverview.mockResolvedValue(overview());
-    act(() => themeStore.set("tinto" as ThemeSetting));
+    act(() => themeStore.set("tinto"));
     try {
       renderPanel();
       await screen.findByRole("heading", { name: /AGOS-501/ });

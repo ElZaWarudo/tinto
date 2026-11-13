@@ -1751,8 +1751,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   );
   // The Tinto theme ends each row with its stages as a small line: read once
   // per overview, not on every tick of the clock.
-  const theme: string = useResolvedTheme();
-  const tinto = theme === "tinto";
+  const tinto = useResolvedTheme() === "tinto";
   const tracks = useMemo(
     () =>
       new Map(
