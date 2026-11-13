@@ -38,6 +38,9 @@ export async function openAppWindow(options: AppWindowOptions): Promise<boolean>
       minHeight,
       resizable: true,
       focus: true,
+      // The theme's surface instead of a white flash before the page paints.
+      backgroundColor:
+        getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#1e1e1e",
     });
     return await new Promise<boolean>((resolve) => {
       void webview.once("tauri://created", () => resolve(true));

@@ -100,6 +100,7 @@
   --active: rgba(255, 255, 255, 0.16);
   --accent-soft: rgba(78, 201, 176, 0.14);
   --ease: 120ms ease;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --scrollbar-thumb: rgba(121, 121, 121, 0.5);
   --scrollbar-thumb-hover: rgba(154, 154, 154, 0.68);
   /* Open-file text scale (Ctrl +/-/0); only file-content rules consume it. */
@@ -347,6 +348,28 @@
   filter: brightness(0.62) saturate(1.5);
 }
 
+/* A theme change lands in one frame (theme.ts sets the attribute for it), so
+   colour transitions don't keep fading on top of surfaces that already flipped. */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
+}
+
+/* Choosing a theme with the mouse cross-fades the window (ThemePicker.tsx). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}
+
 html,
 body,
 #root {
@@ -410,9 +433,12 @@ input[type="checkbox"]::before {
   height: 8px;
   clip-path: polygon(14% 44%, 0 59%, 39% 100%, 100% 20%, 85% 6%, 37% 68%);
   background: currentColor;
-  transform: scale(0);
+  opacity: 0;
+  transform: scale(0.9);
   transform-origin: center;
-  transition: transform var(--ease);
+  transition:
+    opacity var(--ease),
+    transform var(--ease);
 }
 
 input[type="checkbox"]:checked {
@@ -421,6 +447,7 @@ input[type="checkbox"]:checked {
 }
 
 input[type="checkbox"]:checked::before {
+  opacity: 1;
   transform: scale(1);
 }
 
@@ -622,12 +649,34 @@ select option:checked {
   border-left: 3px solid var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, var(--bg-elev));
   color: var(--fg);
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
+}
+
+@starting-style {
+  .app-shell__notice {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
 }
 
 .app-shell__notice span {
   min-width: 0;
   flex: 1;
   overflow-wrap: anywhere;
+}
+
+/* Update download progress along the notice's bottom edge (UpdateNotice.tsx). */
+.app-shell__notice .app-shell__notice-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent-fg);
+  transform-origin: left;
+  transition: transform 150ms linear;
 }
 
 .app-shell__notice button,
@@ -2665,6 +2714,31 @@ select option:checked {
 }
 .first-run__retry {
   margin-top: 10px;
+}
+
+/* A fast boot never shows "Preparando Tinto": it fades in only after 300ms. */
+.first-run--loading {
+  animation: startup-reveal 150ms var(--ease-out) 300ms both;
+}
+@keyframes startup-reveal {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The real first-run screen settles in; the brand stays put. */
+.first-run:not(.first-run--status) > h1,
+.first-run__form {
+  animation: first-run-in 300ms var(--ease-out) both;
+}
+.first-run__form {
+  animation-delay: 60ms;
+}
+@keyframes first-run-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 @media (max-width: 440px) {
@@ -12078,19 +12152,23 @@ select option:checked {
    ===================================================================== */
 
 /* Every interactive element animates state changes and shows a clear keyboard
-   focus ring. */
+   focus ring. Highlights that arrow keys move (menu items, file-tree rows, dock
+   tabs) snap instead of fading. */
 button,
 [role="button"],
-[role="tab"],
 select,
-input,
-.tree-file {
+input {
   transition:
     background var(--ease),
     border-color var(--ease),
     color var(--ease),
     box-shadow var(--ease),
-    transform var(--ease);
+    transform 120ms var(--ease-out);
+}
+/* Every button gives under the pointer, except the window controls. Zero
+   specificity, so any component's own transform wins. */
+:where(button:not(:disabled, .window-controls__button):active) {
+  transform: translateY(1px);
 }
 button:focus-visible,
 [role="button"]:focus-visible,
@@ -12121,6 +12199,7 @@ a:focus-visible {
 .menu__item {
   padding: 8px 10px;
   gap: 10px;
+  transition: transform 120ms var(--ease-out);
 }
 
 /* Segmented toggles (Hunks/Full, Inline/Side, Formateado/Fuente). */
@@ -12132,9 +12211,6 @@ a:focus-visible {
 .seg__btn:not(.seg__btn--on):not(:disabled):hover {
   background: var(--hover-strong);
   color: var(--fg);
-}
-.seg__btn:not(:disabled):active {
-  transform: translateY(1px);
 }
 
 /* Explorer tree: full-row highlights and finger-friendly rows. */
@@ -12223,7 +12299,6 @@ a:focus-visible {
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   transform-origin: 25% 50%;
-  transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .tree-dir__caret--open::before {
   transform: rotate(90deg);
@@ -12719,12 +12794,6 @@ a:focus-visible {
 .timeline__error button {
   padding: 5px 10px;
 }
-.repo-panel__remove:active,
-.empty-state button:active,
-.repo-card__retry:active,
-.menu__item:active {
-  transform: translateY(1px);
-}
 
 /* Timeline rows: highlight the whole clickable commit row. */
 .timeline-row {
@@ -13010,6 +13079,34 @@ a:focus-visible {
 
   .file-op-modal__hint {
     text-align: left;
+  }
+}
+
+/* Modals (shortcuts, add-ons, file operations and confirm(), agent install)
+   fade their backdrop in and settle the box from slightly smaller. */
+:is(.shortcuts-backdrop, .addons-backdrop, .file-op-modal-overlay, .agent-install-dialog-backdrop) {
+  transition: opacity 150ms ease;
+}
+:is(.shortcuts-modal, .addons-modal, .file-op-modal, .agent-install-dialog) {
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
+}
+@starting-style {
+  :is(
+    .shortcuts-backdrop,
+    .addons-backdrop,
+    .file-op-modal-overlay,
+    .agent-install-dialog-backdrop,
+    .shortcuts-modal,
+    .addons-modal,
+    .file-op-modal,
+    .agent-install-dialog
+  ) {
+    opacity: 0;
+  }
+  :is(.shortcuts-modal, .addons-modal, .file-op-modal, .agent-install-dialog) {
+    transform: scale(0.97);
   }
 }
 

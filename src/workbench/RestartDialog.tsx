@@ -11,7 +11,8 @@ import { useAccessibleDialog } from "./useAccessibleDialog";
 export function RestartDialog({ onClose }: { onClose: () => void }) {
   const [plan, setPlan] = useState<RestartPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Which button started the restart, so only that one says it is working.
+  const [busy, setBusy] = useState<"restart" | "install" | null>(null);
   const dialogRef = useAccessibleDialog<HTMLDivElement>({ onClose });
 
   useEffect(() => {
@@ -26,13 +27,13 @@ export function RestartDialog({ onClose }: { onClose: () => void }) {
   }, []);
 
   const restart = async (installer?: string) => {
-    setBusy(true);
+    setBusy(installer ? "install" : "restart");
     setError(null);
     try {
       await restartTinto(installer);
     } catch (failure) {
       setError(message(failure, "No se pudo reiniciar Tinto."));
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -111,7 +112,7 @@ export function RestartDialog({ onClose }: { onClose: () => void }) {
             type="button"
             className="file-op-modal__button file-op-modal__button--cancel"
             onClick={onClose}
-            disabled={busy}
+            disabled={busy !== null}
           >
             Cancelar
           </button>
@@ -119,7 +120,7 @@ export function RestartDialog({ onClose }: { onClose: () => void }) {
             type="button"
             className="file-op-modal__button"
             onClick={() => void install()}
-            disabled={busy || !plan}
+            disabled={busy !== null || !plan}
           >
             Instalar actualización…
           </button>
@@ -127,9 +128,9 @@ export function RestartDialog({ onClose }: { onClose: () => void }) {
             type="button"
             className="file-op-modal__button restart-modal__primary"
             onClick={() => void restart()}
-            disabled={busy || !plan}
+            disabled={busy !== null || !plan}
           >
-            Reiniciar
+            {busy === "restart" ? "Reiniciando…" : "Reiniciar"}
           </button>
         </div>
       </div>

@@ -21,7 +21,7 @@ function Brand() {
 
 export function StartupLoading() {
   return (
-    <main className="first-run first-run--status" data-testid="startup-loading">
+    <main className="first-run first-run--status first-run--loading" data-testid="startup-loading">
       <Brand />
       <h1>Preparando Tinto</h1>
       <p role="status" aria-live="polite">

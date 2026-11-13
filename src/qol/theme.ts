@@ -83,7 +83,20 @@ class ThemeStore {
 
   private apply(setting: ThemeSetting) {
     this.setting = setting;
-    document.documentElement.dataset.theme = this.resolved();
+    const root = document.documentElement;
+    const theme = this.resolved();
+    if (root.dataset.theme !== theme) {
+      // Without this, elements with colour transitions keep fading for up to
+      // 400ms on top of surfaces that already flipped: switch everything at once.
+      root.dataset.themeSwitching = "";
+      root.dataset.theme = theme;
+      void getComputedStyle(root).color;
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => delete root.dataset.themeSwitching);
+      } else {
+        delete root.dataset.themeSwitching;
+      }
+    }
     this.listeners.forEach((l) => l());
   }
 }
