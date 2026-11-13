@@ -484,7 +484,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.delivery-queue__need--broke {
+/* Each kind by its mark, the stage line's: a flag for what holds (amber, it
+   waits on you), a cross for what broke (red), a PR for a review. */
+.delivery-queue__mark {
+  display: inline-flex;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+  color: var(--fg-muted);
+}
+.delivery-queue__row--holds .delivery-queue__mark {
+  color: var(--warn);
+}
+.delivery-queue__row--broke .delivery-queue__mark,
+.delivery-queue__row--broke .delivery-queue__need {
   color: var(--danger);
 }
 .delivery-panel .delivery-queue__control {
@@ -3511,47 +3524,6 @@
   gap: 2px;
 }
 
-/* A coordinator that stopped: a small chip in its repo's batch bar. */
-/* A stopped coordinator: a quiet line in the bar, its dot and count in warn. */
-.delivery-stall {
-  min-width: 0;
-}
-.delivery-panel .delivery-stall > .delivery-menu > button {
-  gap: 6px;
-  max-width: 100%;
-  padding: 2px 6px;
-  border: 0;
-  font-size: 12px;
-  background: transparent;
-  white-space: nowrap;
-}
-.delivery-panel .delivery-stall > .delivery-menu > button:hover,
-.delivery-panel .delivery-stall > .delivery-menu > button[aria-expanded="true"] {
-  background: var(--hover);
-}
-.delivery-panel .delivery-stall .delivery-dot {
-  margin: 0;
-}
-.delivery-dot--warn {
-  background: var(--warn);
-}
-.delivery-stall__batch {
-  min-width: 0;
-  max-width: 30ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.delivery-stall__card {
-  display: grid;
-  gap: 6px;
-  width: min(340px, calc(100vw - 48px));
-  padding: 4px 6px;
-  white-space: normal;
-}
-.delivery-stall__card p {
-  margin: 0;
-}
-
 /* The batch's coordinator: a quiet control at the end of the batch bar that
    unfolds a small square sheet under the bar — the batch, who coordinates
    and how, its controls — and, when the user opens it, the conversation. */
@@ -3584,10 +3556,6 @@
 .delivery-coordinator-button--asks .delivery-coordinator-button__dot,
 .delivery-coordinator-button__dot.delivery-coordinator-button--asks {
   background: var(--warn);
-}
-/* A stop the bar's chip already shows: the button says it in words only. */
-.delivery-coordinator-button--told .delivery-coordinator-button__dot {
-  background: var(--fg-muted);
 }
 /* Under the batch bar, at its right; --below is the bar's bottom. */
 .delivery-coordinator {
@@ -3730,6 +3698,17 @@
 .delivery-coordinator__chat > * {
   flex: 1 1 0;
   min-height: 0;
+}
+/* A stopped coordinator: why, and what to tell it, under the sheet's header. */
+.delivery-coordinator__stall {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.delivery-coordinator__stall p {
+  margin: 0;
+  font-size: 12px;
 }
 .delivery-coordinator__start {
   display: grid;

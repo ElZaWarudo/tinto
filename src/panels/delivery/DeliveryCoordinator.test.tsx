@@ -99,7 +99,12 @@ function Dock({
       runs={runs}
       focus={focus}
       overview={overview}
-      stalled={stalled}
+      stalls={stalled.map((id) => ({
+        run: runs.find((candidate) => candidate.id === id)!,
+        unread: 1,
+        since: 0,
+      }))}
+      onHideStall={() => {}}
       open={open}
       onOpenChange={() => {}}
     />

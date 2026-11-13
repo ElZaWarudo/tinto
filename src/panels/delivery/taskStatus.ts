@@ -279,6 +279,18 @@ export function historyKey(job: DeliveryJob): string {
   return byCommand(job) ? `${job.role} ${job.prompt}` : job.role;
 }
 
+/** What broke on a stage, said one way wherever it shows (the list, the queue,
+ *  the detail's "Ahora" and its stop box): "Bloqueada en QA · intento 2". */
+export function brokePhrase(blocked: boolean, role: string, attempt: number): string {
+  return `${blocked ? "Bloqueada en" : "Falló"} ${lower(stageLabel(role))} · intento ${attempt}`;
+}
+
+/** A broken job's phrase: one that finished and broke was blocked, as Tinto
+ *  derives it; one that failed or stopped, failed. */
+export function jobBrokePhrase(job: DeliveryJob): string {
+  return brokePhrase(job.status === "finished", job.role, job.attempt);
+}
+
 /** "Implementación" → "implementación", but keep "QA", "PR" and "Jira…" as written. */
 export function lower(label: string): string {
   return label === label.toUpperCase() || label.startsWith("Jira") || label.startsWith("CI ")
@@ -1299,11 +1311,17 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
       return attention("Aprobar cambio de ajustes");
     case "blocked": {
       const open = openBlockers(task);
+      // Blocked by a stage that broke: said as that stage's break is.
+      const broke = brokenJobOf(overview, task.id);
       return {
         group: "waiting",
         tone: "blocked",
         icon: "lock",
-        label: open.length > 1 ? `Bloqueada · ${open.length} bloqueos` : "Bloqueada",
+        label: broke
+          ? jobBrokePhrase(broke)
+          : open.length > 1
+            ? `Bloqueada · ${open.length} bloqueos`
+            : "Bloqueada",
         detail: open.map(blockerWait).join(" · ") || undefined,
       };
     }
@@ -1314,10 +1332,7 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
         detail: `${phase.by === "user" ? "Quitaste" : "Se resolvió"}: ${phase.cleared}`,
       };
     case "broken":
-      return danger(
-        `${phase.blocked ? "Bloqueada en" : "Falló"} ${lower(stageLabel(phase.role))} · intento ${phase.attempt}`,
-        "x",
-      );
+      return danger(brokePhrase(phase.blocked, phase.role, phase.attempt), "x");
     case "delivered":
       return { group: "delivered", tone: "ok", icon: "check", label: "Entregada" };
     case "waits_merge_commit":

@@ -27,6 +27,7 @@ import { confirm } from "../../workbench/confirmDialog";
 import { Icon } from "../../workbench/Icon";
 import { ActionButton } from "./ActionButton";
 import { errorText } from "./errorText";
+import type { CoordinatorStall } from "./DeliveryNotifications";
 import {
   agentChoice,
   effortChoices,
@@ -81,7 +82,8 @@ export function CoordinatorDock({
   runs,
   focus = null,
   overview,
-  stalled,
+  stalls,
+  onHideStall,
   open,
   onOpenChange,
 }: {
@@ -90,14 +92,19 @@ export function CoordinatorDock({
   /** The batch shown until the user picks another; else the first. */
   focus?: string | null;
   overview: DeliveryOverview;
-  /** Batches whose coordinator stopped with changes unread. */
-  stalled: string[];
+  /** Batches whose coordinator stopped with changes unread (not hidden). */
+  stalls: CoordinatorStall[];
+  /** Hides a stop until the coordinator stops again. */
+  onHideStall: (stall: CoordinatorStall) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   const sessions = useAgentSessionState().sessions;
   const actions = useWorkspaceActions();
-  const [runId, setRunId] = useState<string | null>(null);
+  // The batch the user picked, while the one to show is still the same: a new
+  // one to show (the queue's stopped coordinator) wins over it.
+  const [chosenRun, setChosenRun] = useState<{ id: string; focus: string | null } | null>(null);
+  const runId = chosenRun?.focus === focus ? chosenRun.id : null;
   const run =
     runs.find((candidate) => candidate.id === (runId ?? focus)) ??
     runs.find((candidate) => candidate.id === focus) ??
@@ -214,7 +221,7 @@ export function CoordinatorDock({
     const bound = conversationOf(target);
     // A permission it waits on holds the whole batch: its turn still reads
     // as working, so it is said before that.
-    return stalled.includes(target.id) || (bound && !isLive(bound))
+    return stalls.some((stall) => stall.run.id === target.id) || (bound && !isLive(bound))
       ? "stalled"
       : live && pendingRequests(live).length > 0
         ? "asks"
@@ -227,6 +234,7 @@ export function CoordinatorDock({
               : "none";
   };
   const state = stateOf(run);
+  const stall = stalls.find((candidate) => candidate.run.id === run.id);
   const isDetached = session !== undefined && detached === session.id;
   // What the start form shows: what the user picked, else the last start in
   // this repo. Read against the models offered now, which may have loaded
@@ -306,10 +314,7 @@ export function CoordinatorDock({
     <>
       <button
         type="button"
-        className={`delivery-button--quiet delivery-coordinator-button delivery-coordinator-button--${state}${
-          // A stop its chip in the bar already shows: said in words, not in warn twice.
-          stalled.includes(run.id) ? " delivery-coordinator-button--told" : ""
-        }`}
+        className={`delivery-button--quiet delivery-coordinator-button delivery-coordinator-button--${state}`}
         aria-expanded={open}
         aria-label={`Coordinador de ${batchName(run.title || run.id)}: ${STATE_LABEL[state]}`}
         onClick={toggle}
@@ -330,7 +335,7 @@ export function CoordinatorDock({
                   aria-label="Lote"
                   value={run.id}
                   onChange={(event) => {
-                    setRunId(event.target.value);
+                    setChosenRun({ id: event.target.value, focus });
                     setPicked(null);
                   }}
                 >
@@ -394,6 +399,7 @@ export function CoordinatorDock({
               </p>
             )}
           </header>
+          {stall && <StallNotice stall={stall} onHide={() => onHideStall(stall)} />}
           {error && (
             <p className="delivery-coordinator__error" role="alert">
               {error}
@@ -520,6 +526,35 @@ export function CoordinatorDock({
         </aside>
       )}
     </>
+  );
+}
+
+/** Why a stopped coordinator holds its batch and what to tell it: the stop's
+ *  one home, where the queue's "Ver" opens. Hidden, it comes back if it stops again. */
+function StallNotice({ stall, onHide }: { stall: CoordinatorStall; onHide: () => void }) {
+  const { run, unread, since } = stall;
+  const changes = unread === 1 ? "1 cambio" : `${unread} cambios`;
+  const at = new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const message = `Sigue con wait_run de Tinto Delivery: tienes ${changes} sin leer desde las ${at}. Si las herramientas de Delivery fallan, reconéctalas.`;
+  return (
+    <div className="delivery-coordinator__stall" role="group" aria-label="Coordinador parado">
+      <p>
+        {run.owner && run.owner !== "user" ? run.owner : "Su coordinador"} no está esperando: tiene{" "}
+        {changes} sin leer desde las {at}. Pídele que siga con wait_run; si sus herramientas de
+        Delivery fallan, que las reconecte.
+      </p>
+      <div className="delivery-actions">
+        <button
+          type="button"
+          onClick={() => void navigator.clipboard?.writeText(message).catch(() => {})}
+        >
+          Copiar mensaje
+        </button>
+        <button type="button" title="Vuelve a avisar si se para otra vez" onClick={onHide}>
+          Ocultar aviso
+        </button>
+      </div>
+    </div>
   );
 }
 

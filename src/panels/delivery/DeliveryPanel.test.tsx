@@ -260,6 +260,12 @@ async function openBarItem(user: ReturnType<typeof userEvent.setup>, item: strin
   return within(screen.getByRole("menu")).getByRole("menuitem", { name: item });
 }
 
+/** A task's row in the list, not its row in the queue above it. */
+async function listRow(name: RegExp) {
+  const rows = await screen.findAllByRole("button", { name });
+  return rows.find((row) => row.hasAttribute("data-task-id"))!;
+}
+
 function renderPanel() {
   return render(
     <WorkspaceActionsContext.Provider value={actions}>
@@ -1397,9 +1403,8 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const list = await screen.findByRole("navigation", { name: "Tareas de Delivery" });
-    const row = await within(list).findByRole("button", { name: /^AGOS-501/ });
-    await userEvent.click(within(list).getByRole("button", { name: /^AGOS-580/ }));
+    const row = await listRow(/^AGOS-501/);
+    await userEvent.click(await listRow(/^AGOS-580/));
     // Not selected: one line with the wait folded in, and no why.
     expect(within(row).getByText("Bloqueada · espera a otra tarea")).toBeInTheDocument();
     expect(within(row).queryByText(/Espera a AGOS-580/)).toBeNull();
@@ -1489,7 +1494,7 @@ describe("DeliveryPanel", () => {
     // The blocked task's menu offers to clear what it waits for.
     await userEvent.pointer({
       keys: "[MouseRight]",
-      target: screen.getByRole("button", { name: /^AGOS-501/ }),
+      target: await listRow(/^AGOS-501/),
     });
     const blockedMenu = await screen.findByRole("menu", { name: /^Acciones de AGOS-501/ });
     await userEvent.click(within(blockedMenu).getByRole("menuitem", { name: "Quitar bloqueo" }));
@@ -1677,7 +1682,7 @@ describe("DeliveryPanel", () => {
     );
     expect(within(group).getByText(/preparado por/)).toHaveTextContent("el coordinador coord");
     expect(within(group).getByText(/No publica nada/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "1 tarea te necesita" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1 cosa te necesita" })).toBeInTheDocument();
     const queue = screen.getByRole("region", { name: "Te necesita" });
     // Its messages are read in the task before they go out: the queue only goes there.
     expect(
@@ -2051,7 +2056,7 @@ describe("DeliveryPanel", () => {
     client.retryDeliveryJob.mockResolvedValue(job({ id: "j3" }));
     renderPanel();
     const banner = await screen.findByRole("group", { name: "Etapa fallida" });
-    expect(banner).toHaveTextContent("Implementación falló");
+    expect(banner).toHaveTextContent("Falló implementación · intento 2");
     expect(banner).toHaveTextContent("código 1");
     expect(screen.queryByRole("button", { name: "Lanzar implementación" })).toBeNull();
     // Alone, retrying is the task's primary action.
@@ -2313,7 +2318,8 @@ describe("DeliveryPanel", () => {
     });
     renderPanel();
     const banner = await screen.findByRole("group", { name: "Etapa fallida" });
-    expect(banner).toHaveTextContent("Implementación está bloqueada");
+    // Worded as the task's row and the queue word it.
+    expect(banner).toHaveTextContent("Bloqueada en implementación · intento 22");
     expect(banner).toHaveTextContent("dejó 2 archivos cambiados");
     // The long reason shows its first lines until asked for all of it.
     const why = banner.querySelector(".delivery-broken__why")!;
@@ -2427,7 +2433,7 @@ describe("DeliveryPanel", () => {
     );
   });
 
-  it("shows a stopped coordinator as a chip that copies the nudge and hides this stop", async () => {
+  it("shows a stopped coordinator once, in the queue; its sheet copies the nudge and hides this stop", async () => {
     const since = Date.now() - 10 * 60_000;
     client.getDeliveryOverview.mockResolvedValue(
       overview({
@@ -2451,25 +2457,25 @@ describe("DeliveryPanel", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     localStorage.removeItem("tinto:delivery-hidden-stalls");
     renderPanel();
-    expect(
-      await screen.findByRole("button", { name: /1 coordinador te necesita/ }),
-    ).toBeInTheDocument();
-    // A chip in the batch bar, not a line across the panel.
-    expect(screen.queryByText(/no está esperando y tiene/)).not.toBeInTheDocument();
-    const chip = "Coordinador parado, 2 cambios sin leer";
-    await user.click(await screen.findByRole("button", { name: chip }));
-    const card = screen.getByRole("menu");
-    expect(within(card).getByText(/claude-coord-1 tiene 2 cambios sin leer/)).toBeInTheDocument();
-    await user.click(within(card).getByRole("menuitem", { name: "Copiar mensaje" }));
+    expect(await screen.findByRole("button", { name: "1 cosa te necesita" })).toBeInTheDocument();
+    // Said once, in the queue: the bar keeps only the coordinator's own control.
+    expect(await screen.findAllByText(/Coordinador parado/)).toHaveLength(1);
+    const queue = screen.getByRole("region", { name: "Te necesita" });
+    await user.click(
+      within(queue).getByRole("button", {
+        name: "Ver Lote A: Coordinador parado · 2 cambios sin leer",
+      }),
+    );
+    // Its sheet opens on the batch, with what to tell it.
+    const notice = await screen.findByRole("group", { name: "Coordinador parado" });
+    expect(notice).toHaveTextContent(/claude-coord-1 no está esperando: tiene 2 cambios sin leer/);
+    await user.click(within(notice).getByRole("button", { name: "Copiar mensaje" }));
     expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^Sigue con wait_run/));
 
     // Hidden, it stays hidden for this stop.
-    await user.click(screen.getByRole("button", { name: chip }));
-    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Ocultar" }));
-    expect(screen.queryByRole("button", { name: chip })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /coordinador te necesita/ }),
-    ).not.toBeInTheDocument();
+    await user.click(within(notice).getByRole("button", { name: "Ocultar aviso" }));
+    expect(queue).toHaveTextContent("Nada te necesita.");
+    expect(screen.queryByRole("button", { name: /te necesita/ })).not.toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("tinto:delivery-hidden-stalls") ?? "[]")).toEqual([
       `r1:${since}`,
     ]);
@@ -2536,17 +2542,16 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const needs = await screen.findByRole("button", {
-      name: "2 tareas y 1 coordinador te necesitan",
-    });
+    const needs = await screen.findByRole("button", { name: "3 cosas te necesitan" });
 
-    // A list of them, by keyboard: the first row has the focus, arrows move, Escape closes.
+    // The queue's rows, in its order: by keyboard, the first has the focus,
+    // arrows move, Escape closes.
     await user.click(needs);
     const rows = within(screen.getByRole("menu")).getAllByRole("menuitem");
     expect(rows.map((row) => row.textContent)).toEqual([
-      "AGOS-5011 decisión pendiente",
-      "AGOS-502Aprobar commit",
       "Lote ACoordinador parado · 2 cambios sin leer",
+      "AGOS-5011 decisión",
+      "AGOS-502Aprobar commit",
     ]);
     expect(rows[0]).toHaveFocus();
     await user.keyboard("{ArrowDown}");
@@ -2556,7 +2561,7 @@ describe("DeliveryPanel", () => {
 
     // An approval: its task, the step opened and its card focused.
     await user.click(needs);
-    await user.keyboard("{ArrowDown}{Enter}");
+    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     const step = await screen.findByRole("group", { name: "Aprobación commit" });
     expect(screen.getByRole("article", { name: "Tarea AGOS-502" })).toBeInTheDocument();
     await waitFor(() => expect(document.activeElement).toContainElement(step));
@@ -2568,14 +2573,62 @@ describe("DeliveryPanel", () => {
     expect(screen.getByRole("article", { name: "Tarea AGOS-501" })).toBeInTheDocument();
     await waitFor(() => expect(decisions).toContainElement(document.activeElement as HTMLElement));
 
-    // A stopped coordinator: its chip.
+    // A stopped coordinator: its sheet, on what to tell it.
     await user.click(needs);
     await user.click(screen.getByRole("menuitem", { name: /Coordinador parado/ }));
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Coordinador parado, 2 cambios sin leer" }),
-      ).toHaveFocus(),
+    expect(await screen.findByRole("group", { name: "Coordinador parado" })).toBeInTheDocument();
+  });
+
+  it("counts in the header exactly the rows of every repo's queue", async () => {
+    const user = userEvent.setup();
+    const WEB = "C:\\work\\web";
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [
+          task(),
+          task({ id: "t2", key: "WEB-7", repo: WEB, branch: "delivery/web-7" }),
+          // Held by a blocker nobody works on: the user's to lift.
+          task({
+            id: "t3",
+            key: "WEB-8",
+            repo: WEB,
+            branch: "delivery/web-8",
+            blockers: [
+              { id: "b1", type: "note", text: "Espera a infra", status: "", cleared_at_ms: null },
+            ],
+          }),
+        ],
+        jobs: [],
+        approvals: [
+          {
+            id: "a2",
+            task_id: "t2",
+            rung: "commit",
+            title: "WEB-7: Fix",
+            body: "",
+            status: "pending",
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_at_ms: null,
+            executed_at_ms: null,
+            outcome: null,
+          },
+        ],
+        phases: {
+          t1: phase({ kind: "setup_failed", job_id: "j1", command: "npm ci" }, "coordinator"),
+          t2: phase({ kind: "approval", rung: "commit", stage: null }),
+          t3: phase({ kind: "blocked", open: 1 }, "external"),
+        },
+      }),
     );
+    renderPanel();
+    await screen.findByRole("button", { name: "3 cosas te necesitan" });
+    const rowsOf = async (repo: string) => {
+      await user.click(await screen.findByTitle(repo));
+      const queue = await screen.findByRole("region", { name: "Te necesita" });
+      return within(queue).getAllByRole("listitem").length;
+    };
+    expect((await rowsOf(REPO)) + (await rowsOf(WEB))).toBe(3);
   });
 
   it("counts guide rules proposed, marks the guides and opens them on the proposal", async () => {
@@ -2622,9 +2675,7 @@ describe("DeliveryPanel", () => {
     try {
       renderPanel();
       // Alone, the button goes straight there.
-      const needs = await screen.findByRole("button", {
-        name: "1 propuesta de reglas te necesita",
-      });
+      const needs = await screen.findByRole("button", { name: "1 cosa te necesita" });
       expect(
         within(await openBarItem(user, /^Guías/)).getByLabelText("reglas propuestas"),
       ).toBeInTheDocument();
@@ -2814,15 +2865,17 @@ describe("DeliveryPanel", () => {
     const card = await screen.findByRole("region", { name: "Cambios de ajustes por aprobar" });
     expect(card).toHaveTextContent("AGOS-474 necesita correr los tests de memories y del frontend");
     expect(card).toHaveTextContent("Lo pide coord");
-    // A settings change is the batch's: its task's row says it, the queue leaves it out.
+    // A settings change is the batch's: its task's row and the queue say it alike.
     expect(
       within(screen.getByRole("region", { name: "En curso" })).getByText(
         "Aprobar cambio de ajustes",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Te necesita" })).toHaveTextContent(
-      "Nada te necesita.",
-    );
+    expect(
+      within(screen.getByRole("region", { name: "Te necesita" })).getByText(
+        "Aprobar cambio de ajustes",
+      ),
+    ).toBeInTheDocument();
     await waitFor(() => expect(card).toHaveTextContent("antes 2 · después 4"));
     expect(within(card).getByText("npm --prefix cli test")).toBeInTheDocument();
 

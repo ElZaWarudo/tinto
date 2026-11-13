@@ -139,6 +139,7 @@ import {
   coordinatorStalls,
   guideProposals,
   repoKey,
+  stallKey,
   type CoordinatorStall,
   type GuideProposalWait,
 } from "./DeliveryNotifications";
@@ -192,6 +193,7 @@ import {
   approvesInOneClick,
   files,
   type DeliveryStep,
+  jobBrokePhrase,
   nowLine,
   roundOf,
   reviewerBlock,
@@ -217,7 +219,7 @@ import { ScopeSection } from "./DeliveryScope";
 import { ExternalLink } from "./ExternalLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import { DeliveryQueue } from "./DeliveryQueue";
-import { deliveryQueue, type QueueItem } from "./queueItems";
+import { deliveryQueue, type BatchWaits, type QueueItem } from "./queueItems";
 import { retryJobOnce } from "./retryJobOnce";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
 import { GrowingTextarea } from "./GrowingTextarea";
@@ -631,8 +633,9 @@ interface DeliveryShared {
   takeover: (run: DeliveryRun) => Promise<false | undefined>;
   /** Opens a repo's tab in the dock (from "+"). */
   openRepo: (repo: string) => void;
-  /** Coordinators that stopped with changes unread, minus the ones the user hid. */
+  /** Coordinators that stopped with changes unread, and the stops the user hid. */
   stalls: CoordinatorStall[];
+  hiddenStalls: string[];
   hideStall: (stall: CoordinatorStall) => void;
   /** The repos with guide rules proposed and not decided. */
   guides: GuideProposalWait[];
@@ -651,8 +654,44 @@ type Asked =
   | { kind: "task"; taskId: string; ask?: string }
   | { kind: "stall"; runId: string }
   | { kind: "guides"; repo: string }
+  /** A queue row answered in place (a paused batch): its control. */
+  | { kind: "queue"; repo: string; key: string }
   /** The header's gear: the settings page, on its Delivery tab. */
   | { kind: "delivery-settings"; repo: string };
+
+/** A repo's queue, its tasks in the list's order: the one list of what
+ *  waits on the user there, which its tab and the header count. */
+function repoQueue(
+  overview: DeliveryOverview,
+  repo: string,
+  now: number,
+  reviews: DeliveryReviewRequest[],
+  waits: Omit<BatchWaits, "repo">,
+  edited: (approvalId: string) => boolean,
+): QueueItem[] {
+  const key = repoKey(repo);
+  const tasks = overview.tasks.filter((task) => repoKey(task.repo) === key);
+  const groups = new Map(tasks.map((task) => [task.id, taskStatus(task, overview, now).group]));
+  const ordered = entryTasks(
+    taskListGroups(tasks, (task) => groups.get(task.id) ?? "idle").flatMap(
+      (group) => group.entries,
+    ),
+  );
+  return deliveryQueue(overview, ordered, reviews, now, edited, { repo, ...waits });
+}
+
+/** Where a queue item is answered, as «te necesita» goes to it. */
+function queueAsk(repo: string, item: QueueItem): Asked {
+  switch (item.batch?.kind) {
+    case "stall":
+      return { kind: "stall", runId: item.batch.runId };
+    case "guides":
+      return { kind: "guides", repo: item.batch.repo };
+    case "paused":
+      return { kind: "queue", repo, key: item.key };
+  }
+  return { kind: "task", taskId: item.task!.id, ask: item.ask ?? undefined };
+}
 
 const DeliveryContext = createContext<DeliveryShared | null>(null);
 
@@ -665,11 +704,6 @@ function useDelivery(): DeliveryShared {
 const DOCK_KEY = "tinto:delivery-dock";
 const DETACHED_KEY = "tinto:delivery-detached";
 const HIDDEN_STALLS_KEY = "tinto:delivery-hidden-stalls";
-
-/** A stall is one stop: the same coordinator stopping again is a new one. */
-function stallKey(stall: CoordinatorStall): string {
-  return `${stall.run.id}:${stall.since}`;
-}
 
 function savedHiddenStalls(): string[] {
   try {
@@ -854,11 +888,6 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   }, [bus.config]);
 
   const tasks = useMemo(() => overview?.tasks ?? [], [overview]);
-  const statuses = new Map(
-    overview ? tasks.map((task) => [task.id, taskStatus(task, overview, now)] as const) : [],
-  );
-  // Across every repo, whichever tab is in front.
-  const needYou = tasks.filter((task) => statuses.get(task.id)?.group === "attention");
   // One path per repo with tasks, as its tasks name it.
   const taskRepos = [
     ...new Map(tasks.map((task) => [repoKey(task.repo), task.repo] as const)).values(),
@@ -1011,12 +1040,11 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   const qaWaitsOnUser = qaBlocked.some(
     (job) => overview?.phases?.[job.task_id]?.waits_on === "user",
   );
-  const allStalls = overview ? coordinatorStalls(overview, now) : [];
+  const stalls = overview ? coordinatorStalls(overview, now) : [];
   const [hiddenStalls, setHiddenStalls] = useState(savedHiddenStalls);
-  const stalls = allStalls.filter((stall) => !hiddenStalls.includes(stallKey(stall)));
   // Hidden until the coordinator stops again; keys of stalls gone are dropped.
   const hideStall = (stall: CoordinatorStall) => {
-    const live = allStalls.map(stallKey);
+    const live = stalls.map(stallKey);
     const next = [...hiddenStalls.filter((key) => live.includes(key)), stallKey(stall)];
     setHiddenStalls(next);
     try {
@@ -1030,53 +1058,6 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   const goTo = (repo: string, what: Asked) => {
     if (!(repoKey(repo) in detached)) setAsked(what);
   };
-  // Everything that waits on the user, each with where it is and what it needs.
-  const asks = [
-    ...needYou.map((task) => ({
-      key: task.id,
-      title: taskLabel(task),
-      need: statuses.get(task.id)!.label,
-      go: () => {
-        reveal(task);
-        goTo(task.repo, { kind: "task", taskId: task.id });
-      },
-    })),
-    ...stalls.map((stall) => ({
-      key: `stall:${stall.run.id}`,
-      title: batchName(stall.run.title || stall.run.id),
-      need: `Coordinador parado · ${stall.unread === 1 ? "1 cambio" : `${stall.unread} cambios`} sin leer`,
-      go: () => {
-        showRepo(stall.run.repo);
-        goTo(stall.run.repo, { kind: "stall", runId: stall.run.id });
-      },
-    })),
-    ...guides.map((guide) => ({
-      key: `guides:${guide.repo}`,
-      title: busStore.displayName(guide.repo),
-      need: "Reglas propuestas de las guías",
-      go: () => {
-        showRepo(guide.repo);
-        goTo(guide.repo, { kind: "guides", repo: guide.repo });
-      },
-    })),
-  ];
-  const needsParts = [
-    needYou.length === 1 ? "1 tarea" : needYou.length > 1 ? `${needYou.length} tareas` : "",
-    stalls.length === 1
-      ? "1 coordinador"
-      : stalls.length > 1
-        ? `${stalls.length} coordinadores`
-        : "",
-    guides.length === 1
-      ? "1 propuesta de reglas"
-      : guides.length > 1
-        ? `${guides.length} propuestas de reglas`
-        : "",
-  ].filter(Boolean);
-  const needsLabel =
-    needsParts.length > 1
-      ? `${needsParts.slice(0, -1).join(", ")} y ${needsParts.at(-1)}`
-      : needsParts.join("");
   // The PRs that wait for the user's review, wherever they are: read on
   // opening and every so often, and left out while GitHub cannot be read.
   const [reviewRequests, setReviewRequests] = useState<DeliveryReviewRequest[]>([]);
@@ -1094,10 +1075,39 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
       clearInterval(clock);
     };
   }, []);
+  // Everything that waits on the user: every repo's queue, one after another,
+  // each item going where its queue's "Ver" goes.
+  const drafted = useSyncExternalStore(subscribeDrafts, draftedIds);
+  const queueRepos = [
+    ...new Map(
+      [
+        ...tasks.map((task) => task.repo),
+        ...stalls.map((stall) => stall.run.repo),
+        ...guides.map((guide) => guide.repo),
+      ].map((repo) => [repoKey(repo), repo] as const),
+    ).values(),
+  ];
+  const asks = overview
+    ? queueRepos.flatMap((repo) =>
+        repoQueue(overview, repo, now, reviewRequests, { stalls, hiddenStalls, guides }, (id) =>
+          drafted.split("\n").includes(id),
+        ).map((item) => ({ repo, item })),
+      )
+    : [];
+  const manyRepos = new Set(asks.map((ask) => repoKey(ask.repo))).size > 1;
+  const goToItem = (repo: string, item: QueueItem) => {
+    if (item.review) {
+      void openDeliveryUrl(item.review.url).catch(() => {});
+      return;
+    }
+    if (item.task) reveal(item.task);
+    else showRepo(repo);
+    goTo(repo, queueAsk(repo, item));
+  };
   const needsTrigger = (
     <>
       <Icon name="flag" />
-      {needsLabel} {asks.length === 1 ? "te necesita" : "te necesitan"}
+      {asks.length === 1 ? "1 cosa te necesita" : `${asks.length} cosas te necesitan`}
     </>
   );
 
@@ -1162,6 +1172,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     takeover,
     openRepo,
     stalls,
+    hiddenStalls,
     hideStall,
     guides,
     asked,
@@ -1212,7 +1223,11 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             )}
             {/* One thing waiting: straight to it; several: the list of them. */}
             {asks.length === 1 && (
-              <button type="button" className="delivery-attention" onClick={asks[0].go}>
+              <button
+                type="button"
+                className="delivery-attention"
+                onClick={() => goToItem(asks[0].repo, asks[0].item)}
+              >
                 {needsTrigger}
               </button>
             )}
@@ -1223,18 +1238,21 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
                 trigger={needsTrigger}
               >
                 {(close) =>
-                  asks.map((ask) => (
+                  asks.map(({ repo, item }) => (
                     <button
-                      key={ask.key}
+                      key={`${repoKey(repo)}:${item.key}`}
                       type="button"
                       role="menuitem"
                       onClick={() => {
                         close();
-                        ask.go();
+                        goToItem(repo, item);
                       }}
                     >
-                      <span className="delivery-needs__title">{ask.title}</span>
-                      <small>{ask.need}</small>
+                      <span className="delivery-needs__title">{item.title}</span>
+                      <small>
+                        {item.need}
+                        {manyRepos && ` · ${busStore.displayName(repo)}`}
+                      </small>
                     </button>
                   ))
                 }
@@ -1507,15 +1525,21 @@ const deliveryDockComponents = {
 /** A repo's tab: its name, how many tasks it has and whether one needs you.
  *  A repo with no tasks left can be closed. */
 function DeliveryRepoTab({ params, api }: IDockviewPanelHeaderProps<{ repo: string }>) {
-  const { overview, now, stalls, guides } = useDelivery();
+  const { overview, now, stalls, hiddenStalls, guides, reviewRequests } = useDelivery();
   const tasks = (overview?.tasks ?? []).filter(
     (task) => repoKey(task.repo) === repoKey(params.repo),
   );
+  // Its queue holds something: what the header counts for it.
   const needs =
-    (overview !== null &&
-      tasks.some((task) => taskStatus(task, overview, now).group === "attention")) ||
-    stalls.some((stall) => repoKey(stall.run.repo) === repoKey(params.repo)) ||
-    guides.some((guide) => repoKey(guide.repo) === repoKey(params.repo));
+    overview !== null &&
+    repoQueue(
+      overview,
+      params.repo,
+      now,
+      reviewRequests,
+      { stalls, hiddenStalls, guides },
+      () => false,
+    ).length > 0;
   return (
     <span className="delivery-repo-tab" title={params.repo}>
       {busStore.displayName(params.repo)}
@@ -1539,95 +1563,6 @@ function DeliveryRepoTab({ params, api }: IDockviewPanelHeaderProps<{ repo: stri
 }
 
 const deliveryDockTabs = { deliveryRepoTab: DeliveryRepoTab };
-
-/** A batch whose coordinator stopped with changes unread: a chip that opens
- *  what to tell it, its conversation when it runs in Tinto, and a way to hide
- *  this stop. */
-function CoordinatorStallChip({
-  stall,
-  named,
-  onOpenCoordinator,
-}: {
-  stall: CoordinatorStall;
-  named?: boolean;
-  onOpenCoordinator: () => void;
-}) {
-  const { hideStall } = useDelivery();
-  const { run, unread, since } = stall;
-  const batch = batchName(run.title || run.id);
-  const changes = unread === 1 ? "1 cambio" : `${unread} cambios`;
-  const at = new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const message = `Sigue con wait_run de Tinto Delivery: tienes ${changes} sin leer desde las ${at}. Si las herramientas de Delivery fallan, reconéctalas.`;
-  return (
-    <span
-      id={`delivery-ask-stall-${run.id}`}
-      className="delivery-stall"
-      title={`${named ? `${batch}: c` : "C"}oordinador parado, ${changes} sin leer desde las ${at}`}
-    >
-      <Menu
-        label={`Coordinador parado${named ? ` en ${batch}` : ""}, ${changes} sin leer`}
-        trigger={
-          <>
-            <span className="delivery-dot delivery-dot--warn" />
-            {/* The batch's own name: "Lote" is already said by the bar. */}
-            {named && (
-              <span className="delivery-stall__batch">{batch.replace(/^lote\s+/i, "")}</span>
-            )}
-            <span className="delivery-muted">
-              {named ? "coordinador parado" : "Coordinador parado"} · {changes} sin leer
-            </span>
-          </>
-        }
-      >
-        {(close) => (
-          <div className="delivery-stall__card">
-            <p>
-              <strong>El coordinador no está esperando</strong>
-            </p>
-            <p className="delivery-muted">
-              {run.owner && run.owner !== "user" ? run.owner : "Su coordinador"} tiene {changes} sin
-              leer desde las {at}. Pídele que siga con wait_run; si sus herramientas de Delivery
-              fallan, que las reconecte.
-            </p>
-            <div className="delivery-actions">
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  close();
-                  void navigator.clipboard?.writeText(message).catch(() => {});
-                }}
-              >
-                Copiar mensaje
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  close();
-                  onOpenCoordinator();
-                }}
-              >
-                Abrir coordinador
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                title="Vuelve a avisar si se para otra vez"
-                onClick={() => {
-                  close();
-                  hideStall(stall);
-                }}
-              >
-                Ocultar
-              </button>
-            </div>
-          </div>
-        )}
-      </Menu>
-    </span>
-  );
-}
 
 /** "+" beside the tabs: a repo of the workbench without its tab. */
 function DeliveryAddRepo({ containerApi }: IDockviewHeaderActionsProps) {
@@ -1751,20 +1686,30 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     setSeenAsk(askedGuides);
     setSettingsAt(askedGuides.kind === "guides" ? "proposal" : "delivery");
   }
-  // Or one of its stopped coordinators: its chip gets the focus.
+  // Or one of its stopped coordinators: its sheet opens on that batch, with
+  // what to tell it.
   const askedStall =
     asked?.kind === "stall" &&
     shared.stalls.some((stall) => stall.run.id === asked.runId && repoKey(stall.run.repo) === key)
       ? asked
       : null;
+  const [coordinatorOpen, setCoordinatorOpen] = useState(false);
+  const [coordinatorRun, setCoordinatorRun] = useState<string | null>(null);
+  if (askedStall && askedStall !== seenAsk) {
+    setSeenAsk(askedStall);
+    setCoordinatorRun(askedStall.runId);
+    setCoordinatorOpen(true);
+  }
+  // Or a row of its queue answered in place: its control gets the focus.
+  const askedRow = asked?.kind === "queue" && repoKey(asked.repo) === key ? asked : null;
   useEffect(() => {
-    if (askedGuides) settleAsked();
-    if (!askedStall) return;
+    if (askedGuides || askedStall) settleAsked();
+    if (!askedRow) return;
     settleAsked();
-    const chip = document.getElementById(`delivery-ask-stall-${askedStall.runId}`);
-    chip?.scrollIntoView?.({ block: "nearest" });
-    chip?.querySelector("button")?.focus();
-  }, [askedGuides, askedStall, settleAsked]);
+    const row = document.querySelector(`[data-queue-key="${CSS.escape(askedRow.key)}"]`);
+    row?.scrollIntoView?.({ block: "nearest" });
+    row?.querySelector<HTMLElement>(".delivery-queue__control")?.focus();
+  }, [askedGuides, askedStall, askedRow, settleAsked]);
   const choice = repos.find((candidate) => repoKey(candidate.path) === key) ?? {
     path: repo,
     distro: null,
@@ -1802,8 +1747,10 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const activeRuns = (overview?.runs ?? []).filter(
     (candidate) => candidate.status === "active" && repoKey(candidate.repo) === key,
   );
-  const repoStalls = shared.stalls.filter((stall) => repoKey(stall.run.repo) === key);
-  const [coordinatorOpen, setCoordinatorOpen] = useState(false);
+  // The repo's stopped coordinators the user has not hidden.
+  const repoStalls = shared.stalls.filter(
+    (stall) => repoKey(stall.run.repo) === key && !shared.hiddenStalls.includes(stallKey(stall)),
+  );
   // A task row's right-click menu, drawn by the task it selects.
   const [contextAt, setContextAt] = useState<(ContextPoint & { taskId: string }) | null>(null);
   const closeContext = useCallback(() => setContextAt(null), []);
@@ -1835,23 +1782,19 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   // in the order its tasks have in the list.
   const drafted = useSyncExternalStore(subscribeDrafts, draftedIds);
   const queue = overview
-    ? deliveryQueue(
+    ? repoQueue(
         overview,
-        entryTasks(
-          taskListGroups(tasks, (task) => statuses.get(task.id)?.group ?? "idle").flatMap(
-            (group) => group.entries,
-          ),
-        ),
-        shared.reviewRequests,
+        repo,
         now,
+        shared.reviewRequests,
+        { stalls: shared.stalls, hiddenStalls: shared.hiddenStalls, guides: shared.guides },
         (id) => drafted.split("\n").includes(id),
       )
     : [];
-  // "Ver": the task, on what it asks.
+  // "Ver": the task, on what it asks; a batch's item, where it is answered.
   const showAsk = (item: QueueItem) => {
-    if (!item.task) return;
-    reveal(item.task);
-    shared.goToAsk({ kind: "task", taskId: item.task.id, ask: item.ask ?? undefined });
+    if (item.task) reveal(item.task);
+    shared.goToAsk(queueAsk(repo, item));
   };
   const ordered = groups.flatMap((group) => (isFolded(group.group) ? [] : group.tasks));
   // The search finds a task by its issue or its PR among all the repo's
@@ -2226,13 +2169,6 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                     · costo {activeCost.label}
                   </span>
                 )}
-                {repoStalls.map((stall) => (
-                  <CoordinatorStallChip
-                    key={stall.run.id}
-                    stall={stall}
-                    onOpenCoordinator={() => setCoordinatorOpen(true)}
-                  />
-                ))}
               </span>
             </>
           ) : (
@@ -2243,14 +2179,6 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                   <Icon name="down" />
                 </>,
               )}
-              {repoStalls.map((stall) => (
-                <CoordinatorStallChip
-                  key={stall.run.id}
-                  stall={stall}
-                  named
-                  onOpenCoordinator={() => setCoordinatorOpen(true)}
-                />
-              ))}
             </span>
           )}
         </div>
@@ -2344,11 +2272,16 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         {overview && activeRuns.length > 0 && (
           <CoordinatorDock
             runs={activeRuns}
-            focus={lot}
+            focus={coordinatorRun ?? lot}
             overview={overview}
-            stalled={repoStalls.map((stall) => stall.run.id)}
+            stalls={repoStalls}
+            onHideStall={shared.hideStall}
             open={coordinatorOpen}
-            onOpenChange={setCoordinatorOpen}
+            onOpenChange={(open) => {
+              setCoordinatorOpen(open);
+              // Closed, it shows the batch the list does again.
+              if (!open) setCoordinatorRun(null);
+            }}
           />
         )}
       </div>
@@ -2819,8 +2752,12 @@ function TaskDetail({
   // The queue's answer for this task, so the two never disagree: in it, the
   // task does not "need nothing"; held there for something with no card of
   // its own here (failing checks…), the "Ahora" line opens with it.
-  const queued = deliveryQueue(overview, [task], [], now, () => false);
-  const queueNeed = queued.find((item) => item.kind === "broke" && item.ask === null)?.need;
+  const queued = deliveryQueue(overview, [task], [], now, () => false, null);
+  // Not when it is the task's own phrase: "Ahora" already says that one.
+  const said = taskStatus(task, overview, now).label;
+  const queueNeed = queued.find(
+    (item) => item.kind === "broke" && item.ask === null && item.need !== said,
+  )?.need;
   const nothingYours = queued.length === 0 && asks.length === 0 && !yours;
   // It goes on alone only while someone is working on it: a task that waits
   // on another one or on something outside does not.
@@ -2879,9 +2816,11 @@ function TaskDetail({
       return;
     }
     // The ask chosen in the queue, while the task still asks it (the PR: while
-    // it waits on the user).
+    // it waits on the user; the blockers' block: while it has any).
     const target =
-      asks.some((ask) => ask.id === askedHere.ask) || (askedHere.ask === "pr" && prYours)
+      asks.some((ask) => ask.id === askedHere.ask) ||
+      (askedHere.ask === "pr" && prYours) ||
+      (askedHere.ask === "broken" && openBlockers(task).length > 0)
         ? askedHere.ask!
         : askTarget;
     const opener = document.getElementById(`${askId(target)}-open`);
@@ -3475,7 +3414,7 @@ function TaskDetail({
         )}
       </div>
 
-      {!broken && <BlockedBar {...blockerProps} />}
+      {!broken && <BlockedBar id={askId("broken")} {...blockerProps} />}
 
       <StageTrack
         track={track}
@@ -3739,10 +3678,9 @@ function BrokenStage({
     >
       <p className="delivery-banner__title">
         <Icon name="x" />
-        <strong>
-          {stageLabel(job.role)} {brokenVerb(job)}
-        </strong>
-        <span className="delivery-muted">intento {job.attempt}</span>
+        {/* The task's phrase for it, word for word as its row and the queue say it. */}
+        <strong>{jobBrokePhrase(job)}</strong>
+        {brokenHow(job) && <span className="delivery-muted">· {brokenHow(job)}</span>}
         {job.changes.length > 0 && !job.undone_at_ms && (
           <span className="delivery-muted">· dejó {files(job.changes.length)} cambiados</span>
         )}
@@ -3823,11 +3761,13 @@ function BrokenStage({
   );
 }
 
-function brokenVerb(job: DeliveryJob): string {
+/** How a stage broke, after its phrase, when the phrase does not say it. */
+function brokenHow(job: DeliveryJob): string | null {
   if (job.status === "interrupted") return "se interrumpió";
-  if (job.status === "failed") return "falló";
-  if (job.result_state === "invalid") return "terminó sin un resultado válido";
-  return "está bloqueada";
+  if (job.status !== "failed" && job.result_state === "invalid") {
+    return "terminó sin un resultado válido";
+  }
+  return null;
 }
 
 /** Who runs a stage from now on in the task's repo: the same setting as

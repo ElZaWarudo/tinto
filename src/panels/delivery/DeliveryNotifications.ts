@@ -34,6 +34,11 @@ export interface CoordinatorStall {
   since: number;
 }
 
+/** A stall is one stop: the same coordinator stopping again is a new one. */
+export function stallKey(stall: CoordinatorStall): string {
+  return `${stall.run.id}:${stall.since}`;
+}
+
 /** Batches whose coordinator stopped waiting with changes it has not read:
  *  nothing moves until someone tells it to go on. */
 export function coordinatorStalls(overview: DeliveryOverview, now: number): CoordinatorStall[] {

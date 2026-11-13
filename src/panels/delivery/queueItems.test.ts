@@ -7,11 +7,13 @@ import type {
   DeliveryPhase,
   DeliveryPr,
   DeliveryReviewRequest,
+  DeliveryRun,
   DeliveryTask,
   DeliveryTaskPhase,
   DeliveryWaiter,
 } from "../../delivery/types";
-import { deliveryQueue } from "./queueItems";
+import { deliveryQueue, type BatchWaits } from "./queueItems";
+import { taskStatus } from "./taskStatus";
 
 const REPO = "C:\\work\\agentos";
 
@@ -150,7 +152,26 @@ const queue = (
   of: DeliveryOverview,
   reviews: DeliveryReviewRequest[] = [],
   edited: string[] = [],
-) => deliveryQueue(of, of.tasks, reviews, 0, (id) => edited.includes(id));
+  batch: Partial<Omit<BatchWaits, "repo">> = {},
+) =>
+  deliveryQueue(of, of.tasks, reviews, 0, (id) => edited.includes(id), {
+    repo: REPO,
+    stalls: [],
+    hiddenStalls: [],
+    guides: [],
+    ...batch,
+  });
+
+const RUN: DeliveryRun = {
+  id: "r1",
+  repo: REPO,
+  title: "Lote A",
+  status: "active",
+  generation: 1,
+  owner: "coord",
+  created_at_ms: 1,
+  updated_at_ms: 1,
+};
 
 const brief = (items: ReturnType<typeof queue>) =>
   items.map((item) => ({
@@ -347,28 +368,68 @@ describe("deliveryQueue", () => {
     expect(queue(overview(), reviews)).toEqual([]);
   });
 
-  it("leaves batch-level waits out: a settings proposal, a stopped coordinator, a paused batch", () => {
-    const of = (kind: "settings_proposal" | "batch_paused") =>
-      overview({
-        phases: {
-          t1:
-            kind === "settings_proposal"
-              ? phase({ kind })
-              : phase({ kind, job_id: "j1", role: "tests" }),
+  const stall = { run: RUN, unread: 2, since: 5 };
+  it.each<[string, Partial<DeliveryOverview>, Partial<Omit<BatchWaits, "repo">>, object[]]>([
+    [
+      "a stopped coordinator, opened on its batch",
+      {},
+      { stalls: [stall] },
+      [
+        {
+          key: "stall:r1",
+          title: "Lote A",
+          need: "Coordinador parado · 2 cambios sin leer",
+          batch: { kind: "stall", runId: "r1" },
         },
-        runs: [
-          {
-            id: "r1",
-            repo: REPO,
-            title: "Lote",
-            status: "active",
-            generation: 1,
-            owner: "coord",
-            created_at_ms: 1,
-            updated_at_ms: 1,
-          },
+      ],
+    ],
+    [
+      "a stopped coordinator the user hid: nothing",
+      {},
+      { stalls: [stall], hiddenStalls: ["r1:5"] },
+      [],
+    ],
+    [
+      "the repo's proposed guide rules",
+      {},
+      {
+        guides: [
+          { repo: REPO, at: 1 },
+          { repo: "C:\\work\\other", at: 1 },
         ],
-        coordinators: [{ run_id: "r1", waiting: false, unread: 3, unread_since_ms: 1 }],
+      },
+      [
+        {
+          key: `guides:${REPO.replace(/\\/g, "/").toLowerCase()}`,
+          need: "Reglas propuestas de las guías",
+          batch: { kind: "guides", repo: REPO },
+        },
+      ],
+    ],
+    [
+      "a paused batch, once for the two tasks it holds, resumed from the queue",
+      {
+        runs: [RUN],
+        tasks: [task("t1"), task("t2")],
+        phases: {
+          t1: phase({ kind: "batch_paused", job_id: "j1", role: "tests" }),
+          t2: phase({ kind: "batch_paused", job_id: "j2", role: "qa" }),
+        },
+      },
+      {},
+      [
+        {
+          key: "paused:r1",
+          title: "Lote A",
+          need: "Lote en pausa",
+          inPlace: { kind: "resume", runId: "r1" },
+        },
+      ],
+    ],
+    [
+      "a settings proposal, once, in the task that holds it",
+      {
+        phases: { t1: phase({ kind: "settings_proposal" }) },
         settings_proposals: [
           {
             id: "p1",
@@ -385,9 +446,82 @@ describe("deliveryQueue", () => {
             decided_at_ms: null,
           },
         ],
-      });
-    expect(queue(of("settings_proposal"))).toEqual([]);
-    expect(queue(of("batch_paused"))).toEqual([]);
+      },
+      {},
+      [{ key: "proposal:p1", need: "Aprobar cambio de ajustes", ask: "settings" }],
+    ],
+    [
+      "a task held by a blocker nobody works on, in the block that lists it",
+      {
+        tasks: [
+          {
+            ...task("t1"),
+            blockers: [
+              { id: "b1", type: "note", text: "Espera a infra", status: "", cleared_at_ms: null },
+            ],
+          },
+        ],
+        phases: { t1: phase({ kind: "blocked", open: 1 }, "external") },
+      },
+      {},
+      [{ key: "t1:blocked", kind: "holds", need: "Bloqueada: Espera a infra", ask: "broken" }],
+    ],
+    [
+      "a blocked task with a job running for it: nothing",
+      {
+        tasks: [
+          {
+            ...task("t1"),
+            blockers: [
+              { id: "b1", type: "note", text: "Espera a infra", status: "", cleared_at_ms: null },
+            ],
+          },
+        ],
+        jobs: [job({ status: "started", ended_at_ms: null })],
+        phases: { t1: phase({ kind: "blocked", open: 1 }, "external") },
+      },
+      {},
+      [],
+    ],
+  ])("lists what holds the user: %s", (_, over, batch, expected) => {
+    const items = queue(overview(over), [], [], batch);
+    expect(items).toEqual(
+      expected.map((one) => expect.objectContaining({ kind: "holds", ...one })),
+    );
+  });
+
+  it.each<[string, DeliveryJob, DeliveryTaskPhase, DeliveryTask, string]>([
+    [
+      "a stage that broke",
+      job({ role: "qa" }),
+      phase(
+        { kind: "broken", job_id: "j1", role: "qa", attempt: 2, blocked: false },
+        "coordinator",
+      ),
+      task("t1"),
+      "Falló QA · intento 2",
+    ],
+    [
+      "a stage that blocked the task, its blockers listed",
+      job({ role: "qa", status: "finished", exit_code: 0, error: null }),
+      phase({ kind: "blocked", open: 1 }, "external"),
+      {
+        ...task("t1"),
+        blockers: [
+          { id: "b1", type: "note", text: "Falta un secreto", status: "", cleared_at_ms: null },
+        ],
+      },
+      "Bloqueada en QA · intento 2",
+    ],
+  ])("says what broke as the task's row does: %s", (_, broken, at, held, said) => {
+    const of = overview({
+      tasks: [held],
+      jobs: [broken],
+      phases: { t1: { ...at, verdicts: { j1: { broken: true } } } },
+    });
+    const [item] = queue(of);
+    expect(item).toMatchObject({ kind: "broke", need: said });
+    expect(item.need).toBe(taskStatus(held, of, 0).label);
   });
 
   it("orders what holds a task, then what broke, then PRs to review, each by the list's order", () => {

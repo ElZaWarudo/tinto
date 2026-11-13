@@ -105,12 +105,14 @@ export function BlockerActions({
   );
 }
 
-/** A blocked task's blockers on their own (no stage broke): what it waits
- *  for is never the user's, so it reads neutral. */
-export function BlockedBar(props: BlockersProps) {
+/** A blocked task's blockers on their own (no stage broke). `id`: where the
+ *  queue's "Ver" goes, as it goes to a broken stage's block. */
+export function BlockedBar({ id, ...props }: BlockersProps & { id: string }) {
   if (openBlockers(props.task).length === 0) return null;
   return (
     <div
+      id={id}
+      tabIndex={-1}
       className="delivery-pending-bar delivery-blocked"
       role="group"
       aria-label="Bloqueos de la tarea"
