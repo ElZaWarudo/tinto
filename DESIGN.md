@@ -158,7 +158,7 @@ Each task is a line and its stages are stations, so where it is and where it sto
 
 It is a working tool beside an editor, in daylight, read by someone coming back to see what moved. Rows are dense, rules are thin, secondary controls have no box, and state is said by the form of a mark before it is said by its colour. The coffee idea of the name lives in the ink and the warm neutrals only; there is no coffee-shop decoration.
 
-This file records the Tinto theme, the system this build created, as it ships in the Delivery panel. Four older themes (dark, purple, plum, light) remain in the app and keep their own look; they read the same token names (`--bg`, `--fg`, `--accent`, `--warn`, `--danger` and the rest) with their own values, so a rule written against tokens holds in all five. Only Tinto defines the line colours, the ink window bar and the bundled typefaces.
+This file records the Tinto theme, the system this build created, as it ships in the Delivery panel. Four older themes (dark, purple, plum, light) remain in the app and keep their own colours and platform typefaces; they read the same token names (`--bg`, `--fg`, `--accent`, `--warn`, `--danger`, `--line-agents`, `--line-delivery`, `--link` and the rest) with their own values, so a rule written against tokens holds in all five. Square corners, the stage line with its stations and the mini line hold in every theme. Only Tinto defines the ink window bar and the bundled typefaces.
 
 **Key Characteristics:**
 - A transit line diagram as the signature: stages are stations on a solid rail.
@@ -248,7 +248,7 @@ Flat. Depth is tonal: paper ground, white for what can be typed in or pressed, a
 
 ## Shapes
 
-Square. Every control and container has a corner radius of 0: buttons, inputs, selects, checkboxes, tabs, menus, modals, banners, badges, tooltips, scrollbar thumbs. The theme enforces it with one rule that zeroes the radius of everything except a short list of genuinely round marks.
+Square. Every control and container has a corner radius of 0: buttons, inputs, selects, checkboxes, tabs, menus, modals, banners, badges, tooltips, scrollbar thumbs. The app enforces it in every theme with one rule that zeroes the radius of everything except a short list of genuinely round marks.
 
 Round is reserved for marks that are dots by nature: the stations of the stage line and of the small line in a task row, and small status dots (live, coordinator, repo tab). Within the diagram, a square is itself a signal: the red stop and the skipped tick are square precisely because the stations around them are round.
 
