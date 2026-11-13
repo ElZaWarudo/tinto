@@ -2689,6 +2689,38 @@ describe("DeliveryPanel", () => {
     }
   });
 
+  it("leaves the repo's settings for a task asked from the header", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [],
+        approvals: [
+          {
+            id: "a1",
+            task_id: "t1",
+            rung: "commit",
+            title: "AGOS-501: Fix",
+            body: "",
+            status: "pending",
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_at_ms: null,
+            executed_at_ms: null,
+            outcome: null,
+          },
+        ],
+        phases: { t1: phase({ kind: "approval", rung: "commit", stage: null }) },
+      }),
+    );
+    renderPanel();
+    const needs = await screen.findByRole("button", { name: "1 cosa te necesita" });
+    await user.click(await openBarItem(user, /^Ajustes de/));
+    expect(screen.queryByRole("navigation", { name: "Tareas de Delivery" })).toBeNull();
+    await user.click(needs);
+    expect(await screen.findByRole("group", { name: "Aprobación commit" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Tareas de Delivery" })).toBeInTheDocument();
+  });
+
   it("shows one batch inline and several behind a single button", async () => {
     const user = userEvent.setup();
     const batch = (id: string, title: string) => ({

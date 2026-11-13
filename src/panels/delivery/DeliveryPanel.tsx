@@ -138,7 +138,6 @@ import { useOneOverlay } from "./useOneOverlay";
 import {
   coordinatorStalls,
   guideProposals,
-  repoKey,
   stallKey,
   type CoordinatorStall,
   type GuideProposalWait,
@@ -170,6 +169,7 @@ import {
   parseStatuses,
   pausedJob,
   pendingSettingsProposals,
+  repoKey,
   prMood,
   prSummary,
   ciLine,
@@ -656,6 +656,8 @@ type Asked =
   | { kind: "guides"; repo: string }
   /** A queue row answered in place (a paused batch): its control. */
   | { kind: "queue"; repo: string; key: string }
+  /** The settings proposals of a repo with no task left, in its view. */
+  | { kind: "proposals"; repo: string }
   /** The header's gear: the settings page, on its Delivery tab. */
   | { kind: "delivery-settings"; repo: string };
 
@@ -689,6 +691,8 @@ function queueAsk(repo: string, item: QueueItem): Asked {
       return { kind: "guides", repo: item.batch.repo };
     case "paused":
       return { kind: "queue", repo, key: item.key };
+    case "proposals":
+      return { kind: "proposals", repo };
   }
   return { kind: "task", taskId: item.task!.id, ask: item.ask ?? undefined };
 }
@@ -1085,6 +1089,9 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
         ...tasks.map((task) => task.repo),
         ...stalls.map((stall) => stall.run.repo),
         ...guides.map((guide) => guide.repo),
+        ...(overview?.settings_proposals ?? [])
+          .filter((proposal) => proposal.status === "pending")
+          .map((proposal) => proposal.repo),
       ].map((repo) => [repoKey(repo), repo] as const),
     ).values(),
   ];
@@ -1705,11 +1712,28 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     setCoordinatorAsk(askedStall);
     setCoordinatorOpen(true);
   }
-  // Or a row of its queue answered in place: the queue shows again (settings
-  // closed), and its control gets the focus once drawn.
-  const askedRow = asked?.kind === "queue" && repoKey(asked.repo) === key ? asked : null;
-  if (askedRow && askedRow !== seenAsk) {
-    setSeenAsk(askedRow);
+  // Or a row of its queue answered in place, or the proposals of a repo with
+  // no task left: its control or card gets the focus once drawn.
+  const askedHere =
+    (asked?.kind === "queue" || asked?.kind === "proposals") && repoKey(asked.repo) === key
+      ? asked
+      : null;
+  // Whatever is asked of this repo outside its settings (a task, a row, a
+  // stop, its proposals) shows its main view: the settings close.
+  const askedMain =
+    asked &&
+    asked.kind !== "guides" &&
+    asked.kind !== "delivery-settings" &&
+    (asked.kind === "task"
+      ? (overview?.tasks ?? []).some(
+          (task) => task.id === asked.taskId && repoKey(task.repo) === key,
+        )
+      : (askedStall ?? askedHere) !== null)
+      ? asked
+      : null;
+  const [mainAsk, setMainAsk] = useState<Asked | null>(null);
+  if (askedMain && askedMain !== mainAsk) {
+    setMainAsk(askedMain);
     setSettingsAt(null);
   }
   useEffect(() => {
@@ -1796,22 +1820,34 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         (id) => drafted.split("\n").includes(id),
       )
     : [];
-  // The asked row's control, focused once drawn; a row gone meanwhile (the
-  // batch resumed elsewhere) settles the request too.
+  // With no task left, the repo's settings proposals show in its view: no
+  // task detail would show them.
+  const proposals = overview && tasks.length === 0 ? pendingSettingsProposals(overview, repo) : [];
+  const proposalsId = `delivery-proposals-${key}`;
+  // The asked row's control or proposals, focused once drawn; gone meanwhile
+  // (the batch resumed, the proposal decided), the request is settled too.
   const queueKeys = queue.map((item) => item.key).join("\n");
   useEffect(() => {
-    if (!askedRow) return;
-    if (!queueKeys.split("\n").includes(askedRow.key)) {
+    if (!askedHere) return;
+    const there =
+      askedHere.kind === "queue"
+        ? queueKeys.split("\n").includes(askedHere.key)
+        : proposals.length > 0;
+    if (!there) {
       settleAsked();
       return;
     }
-    const row = document.querySelector(`[data-queue-key="${CSS.escape(askedRow.key)}"]`);
-    const control = row?.querySelector<HTMLElement>(".delivery-queue__control");
-    if (!control) return;
-    row?.scrollIntoView?.({ block: "nearest" });
-    control.focus();
+    const target =
+      askedHere.kind === "queue"
+        ? document
+            .querySelector(`[data-queue-key="${CSS.escape(askedHere.key)}"]`)
+            ?.querySelector<HTMLElement>(".delivery-queue__control")
+        : document.getElementById(proposalsId);
+    if (!target) return;
+    target.scrollIntoView?.({ block: "nearest" });
+    target.focus();
     settleAsked();
-  }, [askedRow, queueKeys, settingsAt, settleAsked]);
+  }, [askedHere, queueKeys, proposals.length, proposalsId, settingsAt, settleAsked]);
   // "Ver": the task, on what it asks; a batch's item, where it is answered.
   const showAsk = (item: QueueItem) => {
     if (item.task) reveal(item.task);
@@ -2516,6 +2552,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                 contextAt={contextAt?.taskId === selectedTask.id ? contextAt : null}
                 onCloseContext={closeContext}
               />
+            ) : proposals.length > 0 ? (
+              <PendingSettingsProposals id={proposalsId} proposals={proposals} />
             ) : (
               overview && <p className="delivery-panel__empty">Sin tareas.</p>
             )}
@@ -2758,7 +2796,7 @@ function TaskDetail({
   const needsYou =
     blocked || openApprovals.some((approval) => approval.status === "pending") || broken !== null;
   const rejected = rejectedStep(approvals);
-  const settingsProposals = pendingSettingsProposals(overview, task);
+  const settingsProposals = pendingSettingsProposals(overview, task.repo);
 
   // What «te necesita» goes to here, in the order the task's status names it:
   // the card that holds it, opened with its own control (`-open`) and focused.

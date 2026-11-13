@@ -15,7 +15,7 @@ import {
 import type { DeliveryOverview, DeliveryRun } from "../../delivery/types";
 import { tauriNotificationAdapter, type NotificationAdapter } from "../../qol/notifications";
 import { useQualityState } from "../../qol/state";
-import { taskLabel, taskStatus } from "./taskStatus";
+import { repoKey, taskLabel, taskStatus } from "./taskStatus";
 
 export interface DeliveryNeed {
   /** What the task is waiting for. It is announced again only when one is new. */
@@ -55,15 +55,6 @@ export interface GuideProposalWait {
   repo: string;
   /** When it was proposed: a new proposal replaces the one waiting. */
   at: number;
-}
-
-/** The same repo whatever Windows prefix (`\\?\`), slashes or case its path carries. */
-export function repoKey(path: string): string {
-  return path
-    .replace(/^\\\\\?\\/, "")
-    .replace(/\\/g, "/")
-    .replace(/\/+$/, "")
-    .toLowerCase();
 }
 
 /** The repos of the batches with guide rules waiting for the user: only a

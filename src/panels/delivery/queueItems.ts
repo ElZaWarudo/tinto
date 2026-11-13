@@ -10,14 +10,11 @@ import type {
   DeliveryReviewRequest,
   DeliveryTask,
 } from "../../delivery/types";
-import {
-  repoKey,
-  stallKey,
-  type CoordinatorStall,
-  type GuideProposalWait,
-} from "./DeliveryNotifications";
+import { stallKey, type CoordinatorStall, type GuideProposalWait } from "./DeliveryNotifications";
 import {
   approvalSummary,
+  pendingSettingsProposals,
+  repoKey,
   approveLabel,
   approvesInOneClick,
   batchName,
@@ -46,7 +43,9 @@ export type QueueAnswer =
 export type QueueBatch =
   | { kind: "stall"; runId: string }
   | { kind: "guides"; repo: string }
-  | { kind: "paused"; runId: string };
+  | { kind: "paused"; runId: string }
+  /** The settings proposals of a repo with no task left, shown in its view. */
+  | { kind: "proposals"; repo: string };
 
 export interface QueueItem {
   key: string;
@@ -179,10 +178,7 @@ function batchHolds(
   // Every pending proposal of the repo, whatever its task's phase: the batch
   // still waits on one whose task is gone.
   const repo = batch?.repo ?? tasks[0]?.repo;
-  const proposals = (overview.settings_proposals ?? []).filter(
-    (proposal) =>
-      proposal.status === "pending" && !!repo && repoKey(proposal.repo) === repoKey(repo),
-  );
+  const proposals = repo ? pendingSettingsProposals(overview, repo) : [];
   return [
     ...stalls.map((stall) =>
       item({
@@ -212,19 +208,20 @@ function batchHolds(
         inPlace: { kind: "resume", runId: run.id },
       }),
     ),
-    ...proposals.flatMap((proposal) => {
+    ...proposals.map((proposal) => {
       // In the task that made it; once that one is gone, in the repo's first:
-      // every task of the repo shows the repo's proposals.
+      // every task of the repo shows the repo's proposals. With no task left,
+      // the repo's view shows them in their place.
       const task = tasks.find((candidate) => candidate.id === proposal.task_id) ?? tasks[0];
-      if (!task) return [];
-      return item({
-        key: `proposal:${proposal.id}`,
-        kind: "holds",
-        title: taskLabel(task),
-        need: "Aprobar cambio de ajustes",
-        task,
-        ask: "settings",
-      });
+      const of = { key: `proposal:${proposal.id}`, need: "Aprobar cambio de ajustes" } as const;
+      return task
+        ? item({ ...of, kind: "holds", title: taskLabel(task), task, ask: "settings" })
+        : item({
+            ...of,
+            kind: "holds",
+            title: "Ajustes",
+            batch: { kind: "proposals", repo: proposal.repo },
+          });
     }),
   ];
 }

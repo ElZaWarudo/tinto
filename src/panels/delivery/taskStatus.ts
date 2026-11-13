@@ -157,7 +157,7 @@ export function taskAsksOf(overview: DeliveryOverview, task: DeliveryTask): Task
     approvals: pending.filter((approval) => approval.rung !== "pr_reply"),
     replies: pending.filter((approval) => approval.rung === "pr_reply").length,
     qaProblems: qaProblemsToDecide(overview, task.id),
-    settingsProposals: pendingSettingsProposals(overview, task).length,
+    settingsProposals: pendingSettingsProposals(overview, task.repo).length,
     broken: brokenJobOf(overview, task.id) !== null,
     pr: (overview.prs ?? []).find((pr) => pr.task_id === task.id),
   });
@@ -707,13 +707,23 @@ export function qaProblemsToDecide(overview: DeliveryOverview, taskId: string): 
   ).length;
 }
 
-/** The settings changes waiting for the user on the task's repo. */
+/** The same repo whatever Windows prefix (`\\?\`), slashes or case its path carries. */
+export function repoKey(path: string): string {
+  return path
+    .replace(/^\\\\\?\\/, "")
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+/** The settings changes waiting for the user on a repo (a task's, or one
+ *  with no task left), however its path is spelled. */
 export function pendingSettingsProposals(
   overview: DeliveryOverview,
-  task: DeliveryTask,
+  repo: string,
 ): DeliverySettingsProposal[] {
   return (overview.settings_proposals ?? []).filter(
-    (proposal) => proposal.repo === task.repo && proposal.status === "pending",
+    (proposal) => repoKey(proposal.repo) === repoKey(repo) && proposal.status === "pending",
   );
 }
 

@@ -482,6 +482,12 @@ describe("deliveryQueue", () => {
       [{ key: "proposal:p1", ask: "settings", task: expect.objectContaining({ id: "t2" }) }],
     ],
     [
+      "a settings proposal of a repo with no task left, in the repo's view",
+      { tasks: [], settings_proposals: [proposal] },
+      {},
+      [{ key: "proposal:p1", task: null, batch: { kind: "proposals", repo: REPO } }],
+    ],
+    [
       "a task held by a blocker nobody works on, in the block that lists it",
       {
         tasks: [

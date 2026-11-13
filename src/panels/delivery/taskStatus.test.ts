@@ -8,6 +8,7 @@ import type {
   DeliveryPr,
   DeliveryPrWait,
   DeliveryRound,
+  DeliverySettingsProposal,
   DeliveryTask,
   DeliveryTaskPhase,
 } from "../../delivery/types";
@@ -21,6 +22,7 @@ import {
   entryTasks,
   issueRowId,
   packageState,
+  pendingSettingsProposals,
   taskListGroups,
   lastHandoff,
   mergeChecks,
@@ -1342,5 +1344,26 @@ describe("reviewerBlock", () => {
     ],
   ])("when %s", (_, over, expected) => {
     expect(reviewerBlock({ ...read, ...over })).toBe(expected);
+  });
+});
+
+describe("pendingSettingsProposals", () => {
+  it("finds a repo's proposal however its path is spelled", () => {
+    const proposal: DeliverySettingsProposal = {
+      id: "p1",
+      repo: "c:\\Work\\AgentOS\\",
+      task_id: "t1",
+      run_id: "r1",
+      reason: "",
+      changes: {},
+      status: "pending",
+      approved: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    };
+    const of = overview({ settings_proposals: [proposal] });
+    expect(pendingSettingsProposals(of, task.repo)).toEqual([proposal]);
   });
 });
