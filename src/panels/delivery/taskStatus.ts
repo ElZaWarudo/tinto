@@ -171,6 +171,20 @@ export function listGroup(group: StatusGroup): ListGroup {
   return group === "attention" || group === "delivered" ? group : "ongoing";
 }
 
+/** The tasks that came to need the user since the previous groups: only a
+ *  task that was there in another group, never one seen for the first time. */
+export function arrivedInAttention(
+  before: ReadonlyMap<string, StatusGroup>,
+  after: ReadonlyMap<string, StatusGroup>,
+): string[] {
+  return [...after]
+    .filter(([id, group]) => {
+      const was = before.get(id);
+      return group === "attention" && was !== undefined && was !== "attention";
+    })
+    .map(([id]) => id);
+}
+
 export function stageLabel(role: string): string {
   if (role === "bootstrap" || role === "setup") return "Preparación";
   if (role === "checks") return "Comprobaciones";

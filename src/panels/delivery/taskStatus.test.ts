@@ -12,6 +12,7 @@ import type {
   DeliveryTaskPhase,
 } from "../../delivery/types";
 import {
+  arrivedInAttention,
   attemptOutcome,
   reviewerBlock,
   batchName,
@@ -41,6 +42,7 @@ import {
   taskAsks,
   taskLabel,
   taskStatus,
+  type StatusGroup,
   type TaskStatus,
 } from "./taskStatus";
 
@@ -467,6 +469,25 @@ describe("searchTasks", () => {
     expect(ids("#41")).toEqual(["t1"]);
     expect(ids("  ")).toEqual([]);
     expect(searchTasks(tasks, prs, "agos", 1)).toHaveLength(1);
+  });
+});
+
+describe("arrivedInAttention", () => {
+  it("names only the tasks that moved to needing the user from another group", () => {
+    const before = new Map<string, StatusGroup>([
+      ["moved", "running"],
+      ["stayed", "attention"],
+      ["still", "waiting"],
+    ]);
+    const after = new Map<string, StatusGroup>([
+      ["moved", "attention"],
+      ["stayed", "attention"],
+      ["still", "waiting"],
+      ["new", "attention"],
+    ]);
+    expect(arrivedInAttention(before, after)).toEqual(["moved"]);
+    // The first overview: nothing was there before.
+    expect(arrivedInAttention(new Map(), after)).toEqual([]);
   });
 });
 
