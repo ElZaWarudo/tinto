@@ -1607,7 +1607,11 @@ function DeliveryAddRepo({ containerApi }: IDockviewHeaderActionsProps) {
   const missing = repos.filter((repo) => !containerApi.getPanel(repoPanelId(repo.path)));
   if (missing.length === 0) return null;
   return (
-    <Menu label="Abrir un repositorio" trigger="+">
+    <Menu
+      label="Abrir un repositorio"
+      className="delivery-button--quiet delivery-add-repo"
+      trigger={<Icon name="plus" />}
+    >
       {(close) =>
         missing.map((repo) => (
           <button

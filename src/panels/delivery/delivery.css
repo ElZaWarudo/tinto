@@ -62,6 +62,14 @@
   outline: 2px solid var(--accent-fg);
   outline-offset: 1px;
 }
+/* Beside the repo tabs: as tall as a tab, with no box of its own. */
+.delivery-panel .delivery-add-repo {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
 .delivery-icon {
   width: 14px;
   height: 14px;
