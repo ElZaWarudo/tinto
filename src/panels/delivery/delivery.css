@@ -65,7 +65,8 @@
 /* Every link in the panel: the link buttons' colour, underlined when pointed
    at. `:where` leaves links with a look of their own (the task's chips) as they are. */
 .delivery-panel :where(a) {
-  color: var(--accent-fg);
+  /* A theme may give links their own colour; the others use the accent. */
+  color: var(--link, var(--accent-fg));
   text-decoration: none;
 }
 .delivery-panel :where(a):hover {
@@ -1823,16 +1824,17 @@
   min-width: 0;
 }
 .delivery-track__part {
-  /* Five agents of 144px, their dividers and border. */
-  flex: 1 1 726px;
+  /* Side by side only when every station keeps room for its words: five
+     agents of 200px. Narrower, the two groups are two rows. */
+  flex: 1 1 1000px;
   min-width: 0;
   display: grid;
   gap: 4px;
   align-content: start;
 }
 .delivery-track__part--rungs {
-  /* Seven steps of 96px. */
-  flex: 1 1 680px;
+  /* Seven steps of 160px. */
+  flex: 1 1 1120px;
 }
 .delivery-track h3,
 .delivery-section h3 {
@@ -2014,6 +2016,15 @@
    clips the overhang), and nothing runs past a group's last station. */
 [data-theme="tinto"] .delivery-track__part {
   --line: var(--line-agents, #1b5e8c);
+}
+/* A station has no box to keep to: its words take a second line before they
+   are cut. */
+[data-theme="tinto"] .delivery-node small {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 [data-theme="tinto"] .delivery-track__part--rungs {
   --line: var(--line-delivery, #1f7a5a);
@@ -3499,11 +3510,13 @@
 /* A blocked task: what it waits for, each linked, with the user's ways out.
    It waits on another task or on something outside Tinto: neutral. */
 .delivery-pending-bar.delivery-blocked {
+  flex-wrap: wrap;
   border-color: var(--border);
   background: transparent;
 }
+/* In a narrow window its text keeps the whole width and its buttons go under. */
 .delivery-blocked__list {
-  flex: 1 1 0;
+  flex: 1 1 320px;
   min-width: 0;
 }
 .delivery-blocked__list ul {

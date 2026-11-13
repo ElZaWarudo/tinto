@@ -395,6 +395,7 @@
 
   /* The two lines of the Delivery diagram. */
   --line-agents: #1b5e8c;
+  --link: #1b5e8c;
   --line-delivery: #1f7a5a;
   --shell: #241a17;
 

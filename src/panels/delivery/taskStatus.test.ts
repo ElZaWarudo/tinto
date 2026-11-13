@@ -1121,6 +1121,21 @@ describe("taskTrack", () => {
     expect(stations(over)[at]).toBe(station);
   });
 
+  it("stops naming a problem the task left behind, and keeps it in the title", () => {
+    const track = taskTrack(
+      overview({
+        approvals: [
+          approval({ status: "executed", conflicts: ["a.ts"], requested_at_ms: 1 }),
+          approval({ id: "a2", rung: "push", status: "executed", requested_at_ms: 2 }),
+        ],
+      }),
+      task,
+    );
+    const commit = track.steps.find((stop) => stepKey(stop.step) === "commit")!;
+    expect(commit).toMatchObject({ station: "passed", label: "Resuelto" });
+    expect(commit.title).toMatch(/Conflictos/);
+  });
+
   it("joins two passed stations with only skipped ones between them", () => {
     const track = taskTrack(
       overview({

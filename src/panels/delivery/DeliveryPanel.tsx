@@ -3494,7 +3494,8 @@ function TaskDetail({
             Contesta las decisiones pendientes para lanzar etapas.
           </span>
         )}
-        {!next && !hasOpenJob && !needsYou && (
+        {/* Not in a round with stages to do again, nor while something blocks it. */}
+        {!next && !hasOpenJob && !needsYou && !round && open.length === 0 && (
           <span className="delivery-muted">
             {step
               ? `Todas las etapas pasaron. Lo siguiente es ${nextStepName(step)}.`
