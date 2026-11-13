@@ -253,6 +253,8 @@ describe("deliveryQueue", () => {
     expect(brief(queue(paused))).toEqual([
       { key: "t1:status", kind: "holds", need: "Tests en pausa", inPlace: null },
     ]);
+    // Resumed on its job's row.
+    expect(queue(paused)[0].ask).toBe("job:j1");
   });
 
   it.each<[string, Partial<DeliveryOverview>]>([

@@ -40,7 +40,8 @@ export interface QueueItem {
   need: string;
   task: DeliveryTask | null;
   review: DeliveryReviewRequest | null;
-  /** The ask of the task's detail it goes to; null: the task's first. */
+  /** The ask of the task's detail it goes to, or `job:<id>` for a job's row
+   *  in its history (a paused stage, resumed there); null: the task's first. */
   ask: string | null;
   /** null: it is answered in the task (or, for a PR, on GitHub). */
   inPlace: QueueAnswer | null;
@@ -161,7 +162,8 @@ export function deliveryQueue(
         key: `${task.id}:status`,
         kind: "holds",
         need: status.label,
-        ask: null,
+        // A paused stage is resumed on its job's row.
+        ask: phase?.kind === "paused" ? `job:${phase.job_id}` : null,
         inPlace: null,
       });
     }

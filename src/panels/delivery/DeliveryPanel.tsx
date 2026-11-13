@@ -2826,11 +2826,41 @@ function TaskDetail({
   // It goes on alone only while someone is working on it: a task that waits
   // on another one or on something outside does not.
   const goesOn = waitsOn === "agent" || waitsOn === "queue" || waitsOn === "coordinator";
+  // The history is folded; a stage picked on the track opens it on the
+  // stage's most recent row, and the round that holds it.
+  const historyFold = useRef<HTMLDetailsElement>(null);
+  const focusStage = (job: DeliveryJob) => {
+    const latest = history
+      .flatMap((entry) => entry.rows)
+      .find((row) => row.latest && row.job.role === job.role);
+    setExpandedJobId(latest?.job.id ?? job.id);
+    if (historyFold.current) historyFold.current.open = true;
+    const row = document.getElementById(`delivery-stage-${task.id}-${job.role}`);
+    for (let fold = row?.closest("details"); fold; fold = fold.parentElement?.closest("details")) {
+      fold.open = true;
+    }
+    row?.scrollIntoView?.({ block: "nearest" });
+  };
   const { asked, settleAsked } = useDelivery();
   const askedHere = asked?.kind === "task" && asked.taskId === task.id ? asked : null;
   useEffect(() => {
     if (!askedHere) return;
     settleAsked();
+    // A job's row (a paused stage): opened as a stage picked on the track
+    // opens it, its toggle focused so what it offers ("Reanudar") comes next.
+    const jobAsked = askedHere.ask?.startsWith("job:")
+      ? jobs.find((job) => job.id === askedHere.ask!.slice("job:".length))
+      : undefined;
+    if (jobAsked) {
+      // A one-shot jump the queue asked for (settled above), as a click on the track.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      focusStage(jobAsked);
+      document
+        .getElementById(`delivery-stage-${task.id}-${jobAsked.role}`)
+        ?.querySelector<HTMLElement>("button[aria-expanded]")
+        ?.focus();
+      return;
+    }
     // The ask chosen in the queue, while the task still asks it.
     const target = asks.some((ask) => ask.id === askedHere.ask) ? askedHere.ask! : askTarget;
     const opener = document.getElementById(`${askId(target)}-open`);
@@ -2861,22 +2891,6 @@ function TaskDetail({
         ? `«Para la siguiente etapa» de ${stageLabel(handoff.from.role)} · intento ${handoff.from.attempt}`
         : null,
     );
-  };
-
-  // The history is folded; a stage picked on the track opens it on the
-  // stage's most recent row, and the round that holds it.
-  const historyFold = useRef<HTMLDetailsElement>(null);
-  const focusStage = (job: DeliveryJob) => {
-    const latest = history
-      .flatMap((entry) => entry.rows)
-      .find((row) => row.latest && row.job.role === job.role);
-    setExpandedJobId(latest?.job.id ?? job.id);
-    if (historyFold.current) historyFold.current.open = true;
-    const row = document.getElementById(`delivery-stage-${task.id}-${job.role}`);
-    for (let fold = row?.closest("details"); fold; fold = fold.parentElement?.closest("details")) {
-      fold.open = true;
-    }
-    row?.scrollIntoView?.({ block: "nearest" });
   };
 
   const undo = async (job: DeliveryJob) => {

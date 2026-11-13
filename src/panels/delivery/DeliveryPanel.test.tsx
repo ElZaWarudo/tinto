@@ -2124,6 +2124,39 @@ describe("DeliveryPanel", () => {
     );
   });
 
+  it("goes from the queue to a paused stage's row, where it is resumed", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job(),
+          job({
+            id: "j2",
+            role: "implementation",
+            status: "paused",
+            created_at_ms: 2,
+            ended_at_ms: null,
+            result: null,
+          }),
+        ],
+        phases: {
+          t1: {
+            ...phase({ kind: "paused", job_id: "j2", role: "implementation" }),
+            next_step: { rung: "commit", stage: null },
+          },
+        },
+      }),
+    );
+    renderPanel();
+    const queue = await screen.findByRole("region", { name: "Te necesita" });
+    await user.click(
+      within(queue).getByRole("button", { name: "Ver AGOS-501: Implementación en pausa" }),
+    );
+    expect(screen.getByRole("button", { name: "Reanudar" })).toBeVisible();
+    expect(document.activeElement?.closest("li")?.id).toBe("delivery-stage-t1-implementation");
+    expect(screen.getByRole("group", { name: "Ahora" })).not.toHaveTextContent("Nada que hacer");
+  });
+
   it("gives a task that asks for several things one primary action, the first", async () => {
     const asked = {
       id: "d1",
