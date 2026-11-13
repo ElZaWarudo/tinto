@@ -188,6 +188,7 @@ describe("deliveryQueue", () => {
       [approval({ rung: "push", notice: "La rama cambió" }), []],
       [approval({ commits: [{ message: "fix: a\n\nbody", paths: ["a.ts"] }] }), []],
       [approval({ rung: "jira" }), []],
+      [approval({ rung: "sync", body: "Merge develop: resuelve a.ts" }), []],
       [approval({ rung: "pr" }), []],
       [approval({ rung: "merge" }), []],
     ] as const) {
@@ -242,6 +243,16 @@ describe("deliveryQueue", () => {
   ])("lists what broke on a task that waits on someone else: %s", (_, over, need, inPlace) => {
     const of = overview(over);
     expect(brief(queue(of))).toEqual([{ key: "t1:broke", kind: "broke", need, inPlace }]);
+  });
+
+  it("lists a task that waits on the user without an ask of its own, as its row says it", () => {
+    const paused = overview({
+      jobs: [job({ id: "j1", role: "tests", status: "paused" })],
+      phases: { t1: phase({ kind: "paused", job_id: "j1", role: "tests" }) },
+    });
+    expect(brief(queue(paused))).toEqual([
+      { key: "t1:status", kind: "holds", need: "Tests en pausa", inPlace: null },
+    ]);
   });
 
   it.each<[string, Partial<DeliveryOverview>]>([

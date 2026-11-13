@@ -2,11 +2,12 @@
 // approved in one click and a broken stage are answered here; everything else
 // goes to its task, on what it asks.
 
-import { decideDeliveryApproval, retryDeliveryJob } from "../../delivery/client";
+import { decideDeliveryApproval } from "../../delivery/client";
 import { Icon } from "../../workbench/Icon";
 import { ActionButton } from "./ActionButton";
 import { ExternalLink } from "./ExternalLink";
 import type { QueueItem } from "./queueItems";
+import { retryJobOnce } from "./retryJobOnce";
 
 export function DeliveryQueue({
   items,
@@ -83,7 +84,7 @@ export function DeliveryQueue({
                 <ActionButton
                   className="delivery-queue__control"
                   aria-label={`Reintentar ${item.title}: ${item.need}`}
-                  onAction={() => retryDeliveryJob(answer.jobId)}
+                  onAction={() => retryJobOnce(answer.jobId)}
                 >
                   Reintentar
                 </ActionButton>

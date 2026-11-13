@@ -88,7 +88,6 @@ import {
   removeDeliveryTask,
   requestDeliveryApproval,
   resolveDeliveryJob,
-  retryDeliveryJob,
   setDeliveryRepoSettings,
   setDeliveryRunQaJiraComment,
   takeoverDeliveryRun,
@@ -219,6 +218,7 @@ import { ExternalLink } from "./ExternalLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import { DeliveryQueue } from "./DeliveryQueue";
 import { deliveryQueue, type QueueItem } from "./queueItems";
+import { retryJobOnce } from "./retryJobOnce";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
 import { GrowingTextarea } from "./GrowingTextarea";
 import { rememberOpencodeModels } from "./agentChoice";
@@ -2965,7 +2965,7 @@ function TaskDetail({
     broken
       ? {
           label: `Reintentar ${lower(stageLabel(broken.role))}`,
-          onSelect: () => void run(() => retryDeliveryJob(broken.id)),
+          onSelect: () => void run(() => retryJobOnce(broken.id)),
         }
       : undefined,
     broken && broken.agent !== "shell" && broken.provider_session_id
@@ -3752,7 +3752,7 @@ function BrokenStage({
           <div className="delivery-actions">
             <ActionButton
               className={primary ? "delivery-button--primary" : undefined}
-              onAction={() => retryDeliveryJob(job.id)}
+              onAction={() => retryJobOnce(job.id)}
             >
               Reintentar
             </ActionButton>
@@ -5839,7 +5839,7 @@ function JobRow({
                 <ActionButton onAction={() => cancelDeliveryJob(job.id)}>Cancelar</ActionButton>
               )}
               {!isOpen(job) && job.status !== "paused" && job.agent !== "shell" && (
-                <ActionButton onAction={() => retryDeliveryJob(job.id)}>Nuevo intento</ActionButton>
+                <ActionButton onAction={() => retryJobOnce(job.id)}>Nuevo intento</ActionButton>
               )}
               {undoable && <ActionButton onAction={onUndo}>Deshacer estos cambios</ActionButton>}
               {!isOpen(job) && !held && job.agent !== "shell" && job.provider_session_id && (
