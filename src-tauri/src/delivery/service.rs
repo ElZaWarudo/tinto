@@ -253,6 +253,9 @@ pub(super) struct Inner {
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Jobs being stopped to be paused rather than cancelled.
     pausing: Mutex<HashSet<String>>,
+    /// Held across a retry's check and its dispatch: two retries of one job
+    /// at once (the user's and the coordinator's) queue one attempt.
+    retrying: Mutex<()>,
     /// Jobs interrupted by the last restart that "Reintentar al reiniciar"
     /// queues again (see [`DeliveryService::retry_interrupted`]), with what
     /// is left of each in WSL.
@@ -627,6 +630,7 @@ impl DeliveryService {
                 deciding: Mutex::new(HashMap::new()),
                 cancels: Mutex::new(HashMap::new()),
                 pausing: Mutex::new(HashSet::new()),
+                retrying: Mutex::new(()),
                 restart_retries: Mutex::new(Vec::new()),
                 adopted: Mutex::new(Vec::new()),
                 queue_notes: Mutex::new(HashMap::new()),
@@ -2507,7 +2511,13 @@ impl DeliveryService {
             ));
         }
         // A second retry of the same job before the first one ends would
-        // run the stage twice: the newer attempt still open answers it.
+        // run the stage twice: the newer attempt still open answers it. The
+        // lock covers the check and the dispatch, so two retries at once
+        // cannot both pass it; only `retry` takes it, so dispatch never
+        // waits on it.
+        let _retrying = self.inner.retrying.lock().map_err(|_| {
+            DeliveryError::new("delivery_lock_poisoned", "Delivery state is unavailable")
+        })?;
         let superseded = self.store()?.task_jobs(&job.task_id)?.iter().any(|other| {
             other.status.is_open()
                 && other.role == job.role
