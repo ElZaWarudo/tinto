@@ -129,6 +129,12 @@
   --success-text: #bbf7d0;
   --success-deep: #166534;
 
+  /* The two lines of the Delivery diagram and the colour of links: Agentes is
+     the info blue, Entrega the accent that already means running and done. */
+  --line-agents: #3b82f6;
+  --line-delivery: #4ec9b0;
+  --link: #4ec9b0;
+
   /* Delivery steps (commit, push, PR, merge, Jira) waiting on the user: apart
      from blockers' amber and red, light enough to read as text. */
   --step: #c5a3ff;
@@ -199,6 +205,10 @@
   --accent-text: #ddd6fe;
   --accent-text-strong: #ede9fe;
   --accent-soft: rgba(183, 148, 246, 0.14);
+
+  --line-agents: #3b82f6;
+  --line-delivery: #b794f6;
+  --link: #b794f6;
 
   /* Steps move to pink so they stay apart from the violet accent. */
   --step: #f5a3d7;
@@ -272,6 +282,10 @@
   --success-bright: #86efac;
   --success-soft: #a6f4c2;
   --success-text: #c8f7d6;
+
+  --line-agents: #8fbaff;
+  --line-delivery: #9af0d4;
+  --link: #9af0d4;
 
   /* Steps go pink, apart from the mint accent and the plum surface. */
   --step: #ffb0e3;
@@ -352,6 +366,10 @@
   --success-text: #166534;
   --success-deep: #86efac;
 
+  --line-agents: #2563eb;
+  --line-delivery: #0f766e;
+  --link: #0f766e;
+
   --step: #7c3aed;
   --violet: #7c3aed;
   --added: #0f7b6c;
@@ -383,7 +401,7 @@
    information and links, amber only for what waits on the user, red only for
    what broke. Neutrals are tinted warm from the ink; text tokens keep 4.5:1 on
    the ground and on white. Overpass and Overpass Mono through --font-ui and
-   --mono; corners are square (see "Tinto: square corners" below). */
+   --mono; corners are square, as in every theme (see "Square corners" below). */
 [data-theme="tinto"] {
   color-scheme: light;
 
@@ -533,11 +551,6 @@ body,
   margin: 0;
 }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
-}
-
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -550,7 +563,6 @@ body,
 *::-webkit-scrollbar-thumb {
   min-height: 28px;
   border: 2px solid transparent;
-  border-radius: 999px;
   background-color: var(--scrollbar-thumb);
   background-clip: content-box;
 }
@@ -4993,7 +5005,6 @@ select option:checked {
   background: var(--bg);
   padding: 0;
   overflow: auto;
-  scrollbar-width: thin;
 }
 
 .console-dock-panel__navigator--collapsed {
@@ -5332,7 +5343,6 @@ select option:checked {
   min-height: 0;
   overflow: auto;
   padding: 0;
-  scrollbar-width: thin;
 }
 
 .console-dock-panel__quick-project {
@@ -5668,7 +5678,6 @@ select option:checked {
   gap: 0;
   min-height: 0;
   overflow: auto;
-  scrollbar-width: thin;
 }
 
 .console-dock-panel__journal-group {
@@ -11677,8 +11686,6 @@ select option:checked {
   background: var(--bg-elev);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
   color: var(--fg);
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .tree-menu__title {
   padding: 5px 8px 7px;
@@ -14462,7 +14469,9 @@ a:focus-visible {
 
 /* ---- Tinto: shell and browser surfaces ----
    Rules the Tinto theme needs beyond its tokens. Kept last so they read as one
-   place; each is scoped to [data-theme="tinto"], so no other theme changes. */
+   place; each is scoped to [data-theme="tinto"], so no other theme changes,
+   except the square corners and scrollbars at the end, which hold in every
+   theme. */
 
 /* Form controls take the theme's face instead of the platform's. Zero
    specificity: a control that sets its own font (a mono path field) keeps it. */
@@ -14567,14 +14576,15 @@ a:focus-visible {
   background: rgba(36, 26, 23, 0.32);
 }
 
-/* Tinto: square corners. The user wants no rounded controls or containers,
-   and some 240 component rules set a radius, so one !important rule removes
-   them all in this theme. Genuinely round marks keep theirs: status dots,
-   spinners, avatars, and the Delivery stage strip, which draws its own
-   stations. Pseudo-elements are left alone: the ones with a radius draw the
-   file-tree icons. */
-[data-theme="tinto"]
+/* Square corners, in every theme. The user wants no rounded controls or
+   containers, and some 240 component rules set a radius, so one !important
+   rule removes them all. Genuinely round marks keep theirs: status dots,
+   spinners, avatars, radio buttons, and the Delivery stage line, which draws
+   its own stations. Pseudo-elements are left alone: the ones with a radius
+   draw the file-tree icons. */
+:root
   :not(
+    input[type="radio"],
     .activity-dot,
     .agent-panel__activity-dot,
     .agent-panel__message-activity-signal,
@@ -14595,17 +14605,17 @@ a:focus-visible {
     .delivery-mini-line,
     .delivery-mini-line *
   ),
-[data-theme="tinto"] ::-webkit-scrollbar-thumb {
+:root ::-webkit-scrollbar-thumb {
   border-radius: 0 !important;
 }
-/* Tinto: thin scrollbars with no arrow buttons. Chromium ignores every
+/* Thin square scrollbars with no arrow buttons. Chromium ignores every
    ::-webkit-scrollbar rule where scrollbar-width or scrollbar-color is set (its
-   own thin bar draws arrows), so this theme hands them back to the app's
-   8px bar above. */
-[data-theme="tinto"] * {
+   own thin bar has a round thumb and draws arrows), so they are handed back to
+   the app's 8px bar above; :root outranks the panels that ask for a thin one. */
+:root * {
   scrollbar-width: auto;
   scrollbar-color: auto;
 }
-[data-theme="tinto"] ::-webkit-scrollbar-button {
+:root ::-webkit-scrollbar-button {
   display: none;
 }
