@@ -11,6 +11,11 @@
   color: var(--fg);
   font-size: 13px;
 }
+/* A `small` is the browser's "smaller" (about 0.83em), never under 11px. No
+   specificity, so a rule that sizes a `small` of its own still wins. */
+:where(.delivery-panel, .delivery-overlay) small {
+  font-size: max(11px, 0.833em);
+}
 .delivery-panel button,
 .delivery-panel select,
 .delivery-panel input,
@@ -587,12 +592,52 @@
   margin-left: auto;
   padding-left: 6px;
 }
-/* A row that is not selected: one line, cut to fit. */
-.delivery-status-line--one .delivery-status-line__text {
+/* A row's state is one line, cut to fit (its title holds it whole); the
+   selected row says who it waits on in a line of its own under it. */
+.delivery-task-row .delivery-status-line__text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.delivery-task-row .delivery-status-line:not(.delivery-status-line--one) {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+.delivery-task-row .delivery-status-line__who {
+  order: 1;
+  flex-basis: 100%;
+  min-width: 0;
+  margin-left: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* On the darker ground of a selected or pointed row (and of an opened or
+   pointed job), text steps up the ramp so it keeps 4.5:1 in every theme:
+   muted to soft, each signal to its text tone. */
+.delivery-panel
+  .delivery-task-row:is([aria-current="true"], :hover)
+  :is(
+    .delivery-task-row__pr,
+    .delivery-qa-badge,
+    .delivery-task-row__title,
+    .delivery-task-row__repo,
+    .delivery-task-row__parent,
+    .delivery-task-row__package,
+    .delivery-task-row__blocker,
+    .delivery-status-line
+  ),
+.delivery-panel .delivery-job__summary:is([aria-expanded="true"], :hover) {
+  --fg-muted: var(--fg-soft);
+  --accent-fg: var(--accent-text);
+  --danger: var(--danger-text);
+  --warn: var(--warn-text);
+  --info: var(--info-text);
+}
+.delivery-panel .delivery-task-row:is([aria-current="true"], :hover) .delivery-tone--step,
+.delivery-panel .delivery-job__summary:is([aria-expanded="true"], :hover) .delivery-tone--step {
+  color: color-mix(in srgb, var(--step) 75%, var(--fg));
 }
 .delivery-dot {
   width: 7px;
@@ -696,10 +741,6 @@
 .delivery-panel .delivery-link-chip--pending {
   --chip: var(--warn);
 }
-.delivery-panel .delivery-link-chip--pr {
-  border-left: 3px solid var(--chip);
-  padding-left: 8px;
-}
 .delivery-panel .delivery-link-chip--pr-merged {
   --chip: var(--step);
 }
@@ -715,12 +756,8 @@
 .delivery-panel .delivery-link-chip--pr-neutral {
   --chip: var(--fg-muted);
 }
-/* Tinto: no bar on the PR, and its step colour is amber, kept for what waits
-   on the user; a merged PR and QA's record stay neutral. */
-[data-theme="tinto"] .delivery-panel .delivery-link-chip--pr {
-  border-left: 0;
-  padding-left: 7px;
-}
+/* Tinto: its step colour is amber, kept for what waits on the user; a merged
+   PR and QA's record stay neutral. */
 [data-theme="tinto"] .delivery-panel .delivery-link-chip--pr-merged,
 [data-theme="tinto"] .delivery-panel .delivery-link-chip--qa {
   --chip: var(--fg-muted);
@@ -2006,6 +2043,8 @@
   font-size: 12px;
   color: var(--fg-muted);
   white-space: normal;
+  /* A branch name breaks anywhere: the clamp's ellipsis is the only cut. */
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   /* A stage that changes tone on its own is seen changing. */
@@ -2295,6 +2334,18 @@
   border: 0;
   border-radius: 0;
   background: var(--fg-muted);
+}
+/* On a selected or pointed row the blue and the red lean a quarter toward the
+   text colour, so every mark keeps 3:1 on the darker ground. */
+.delivery-task-row:is([aria-current="true"], :hover) .delivery-mini-line i {
+  --line: color-mix(in srgb, var(--line-agents) 75%, var(--fg));
+}
+.delivery-task-row:is([aria-current="true"], :hover) .delivery-mini-line .delivery-mini-line__step {
+  --line: var(--line-delivery);
+}
+.delivery-task-row:is([aria-current="true"], :hover) .delivery-mini-line [data-station="broke"] {
+  border-color: color-mix(in srgb, var(--danger) 75%, var(--fg));
+  background: color-mix(in srgb, var(--danger) 75%, var(--fg));
 }
 
 .delivery-request {
@@ -3076,7 +3127,7 @@
     .delivery-banner,
     .delivery-task__now
   )[tabindex="-1"]:focus {
-  outline: 1px solid var(--accent-fg);
+  outline: 2px solid var(--fg);
   outline-offset: 2px;
 }
 .delivery-repo-tab__needs {

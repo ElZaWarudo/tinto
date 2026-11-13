@@ -199,6 +199,7 @@ import {
   taskStatus,
   taskTrack,
   type TaskTrack,
+  type Station,
   qaProblemsToDecide as problemsToDecide,
   verdictsOf,
   type ListGroup,
@@ -309,14 +310,14 @@ function StatusLine({
   const parts = status.label.split(" · ");
   const at = parts.findIndex((part) => /^\d+:\d{2}$/.test(part));
   const label = at < 0 ? status.label : parts.filter((_, index) => index !== at).join(" · ");
-  const text = oneLine && shown ? `${label} · ${shown}` : label;
+  const whole = shown ? `${label} · ${shown}` : label;
   return (
     <span
       className={`delivery-status-line delivery-tone--${tone}${oneLine ? " delivery-status-line--one" : ""}`}
-      title={oneLine ? text : undefined}
+      title={whole}
     >
       <StatusMark icon={status.icon} />
-      <span className="delivery-status-line__text">{text}</span>
+      <span className="delivery-status-line__text">{oneLine ? whole : label}</span>
       {!oneLine && shown && <small className="delivery-status-line__who">{shown}</small>}
       {at >= 0 && <span className="delivery-status-line__time">{parts[at]}</span>}
     </span>
@@ -3440,7 +3441,7 @@ function TaskDetail({
       )}
 
       {/* What happens now, and in which round: one line. With nothing for the
-          user, it opens by saying so. */}
+          user, it opens by saying so, unless a blocker may be the user's to lift. */}
       <div
         className="delivery-task__now"
         role="group"
@@ -3455,7 +3456,9 @@ function TaskDetail({
               ? `${queueNeed} · `
               : nothingYours &&
                 !delivered &&
-                (goesOn ? "Nada que hacer: sigue solo · " : "Nada que hacer por tu parte · ")}
+                (goesOn
+                  ? "Nada que hacer: sigue solo · "
+                  : open.length === 0 && "Nada que hacer por tu parte · ")}
             {round && "↺ "}
             {nowLine(task, overview, now)}
           </span>
@@ -3877,11 +3880,28 @@ function StageAgentEditor({ repo, role }: { repo: string; role: string }) {
   );
 }
 
+/** How a stop that holds the line reads in the mini line's name, worst first. */
+const MINI_LINE_STOP: [Station, string][] = [
+  ["broke", "falló"],
+  ["yours", "te necesita"],
+  ["attention", "requiere atención"],
+];
+
 /** A task's stages and steps as small stations on its list row: where it
- *  is, at a glance. The row's text already says it. */
+ *  is, at a glance. Its name says how far it got and the stop that holds it. */
 function MiniLine({ track }: { track: TaskTrack }) {
+  const stops = [
+    ...track.agents.map((stop) => ({ name: stageLabel(stop.role), station: stop.station })),
+    ...track.steps.map((stop) => ({ name: stop.step.label, station: stop.station })),
+  ].filter((stop) => stop.station !== "skipped");
+  const passed = stops.filter((stop) => stop.station === "passed").length;
+  const held = MINI_LINE_STOP.map(([station, words]) => {
+    const stop = stops.find((candidate) => candidate.station === station);
+    return stop && `${stop.name}: ${words}`;
+  }).find(Boolean);
+  const name = `${passed} de ${stops.length} pasos${held ? ` · ${held}` : ""}`;
   return (
-    <span className="delivery-mini-line" aria-hidden>
+    <span className="delivery-mini-line" role="img" aria-label={name} title={name}>
       {track.agents.map((stop) => (
         <i key={`agent-${stop.role}`} data-station={stop.station} />
       ))}

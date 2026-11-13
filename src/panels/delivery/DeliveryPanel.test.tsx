@@ -668,6 +668,7 @@ describe("DeliveryPanel", () => {
     // Alcance (skipped: the tests ran past it), tests (passed), implementation,
     // review, QA, then the six steps.
     expect(marks).toEqual(["skipped", "passed", ...Array<string>(9).fill("pending")]);
+    expect(within(row).getByRole("img", { name: "1 de 10 pasos" })).toBeInTheDocument();
   });
 
   it("counts the running agents without a meter when the capacity has no limit", async () => {
@@ -1328,11 +1329,21 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
         tasks: [blocked, blocker],
-        phases: { t1: phase({ kind: "blocked", open: 2 }, "dependency"), t2: NEXT_IMPLEMENTATION },
+        phases: {
+          t1: {
+            ...phase({ kind: "blocked", open: 2 }, "dependency"),
+            next_step: { rung: "commit", stage: null },
+          },
+          t2: NEXT_IMPLEMENTATION,
+        },
       }),
     );
     renderPanel();
     const bar = await screen.findByRole("group", { name: "Bloqueos de la tarea" });
+    // A blocker may be the user's to lift: "Ahora" does not say there is nothing to do.
+    const now = screen.getByRole("group", { name: "Ahora" });
+    expect(now).not.toHaveTextContent("Nada que hacer");
+    expect(now).toHaveTextContent("Bloqueada · 2 bloqueos");
     expect(within(bar).getByText(/PR abierto/)).toBeInTheDocument();
     expect(within(bar).queryByText("ya resuelto")).not.toBeInTheDocument();
     expect(
