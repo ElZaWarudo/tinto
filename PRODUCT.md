@@ -45,12 +45,13 @@ Delivery exists to give observability while every step keeps moving, with the fe
 - Built with React and plain CSS inside Tauri; panels are docked with dockview and can be detached into their own windows.
 - One Tinto at a time holds the Delivery state.
 - Several themes exist today (dark by default, plus light and others).
-- Not binding for a redesign (asked 2026-11-13, left unmarked by the user): the square, no-rounded-corners look and the high information density of the current interface. Both are open decisions.
+- Not binding for a redesign (asked 2026-11-13, left unmarked by the user): the high information density of the current interface. It is an open decision.
 
 ## Brand Commitments
 
 - The name **Tinto** and its coffee idea: a Colombian tinto is the small black coffee drunk through the day to stay alert. "A Colombian tinto keeps you awake. This app does too." Small, brief, useful.
 - The interface is in Spanish.
+- Square corners: no rounded containers, buttons, chips or pills, in any theme. Stated by the user on 2026-10-21 and again on 2026-11-13 ("no soy amigo de los bordes redondeados").
 
 ## Evidence on Hand
 
