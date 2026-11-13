@@ -6,7 +6,7 @@
 
 import { useSyncExternalStore } from "react";
 
-export type Theme = "dark" | "purple" | "plum" | "light";
+export type Theme = "dark" | "purple" | "plum" | "light" | "tinto";
 export type ThemeSetting = Theme | "system";
 
 export const THEME_OPTIONS: { value: ThemeSetting; label: string }[] = [
@@ -14,6 +14,7 @@ export const THEME_OPTIONS: { value: ThemeSetting; label: string }[] = [
   { value: "purple", label: "Morado oscuro" },
   { value: "plum", label: "Ciruela" },
   { value: "light", label: "Claro" },
+  { value: "tinto", label: "Tinto" },
   { value: "system", label: "Según el sistema" },
 ];
 

@@ -59,6 +59,10 @@ describe("theme", () => {
     themeStore.set("light");
     expect(rootTheme()).toBe("light");
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+
+    themeStore.set("tinto");
+    expect(rootTheme()).toBe("tinto");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("tinto");
   });
 
   it("restores the saved setting on start and ignores unknown values", async () => {

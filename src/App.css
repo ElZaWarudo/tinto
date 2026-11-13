@@ -1,12 +1,63 @@
+/* Overpass and Overpass Mono, bundled for the Tinto theme (SIL OFL, see
+   assets/fonts/OVERPASS-LICENSE.txt). Only that theme names them, through
+   --font-ui and --mono, so the browser never downloads them for the others. */
+@font-face {
+  font-family: "Overpass";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./assets/fonts/overpass-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Overpass";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./assets/fonts/overpass-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+@font-face {
+  font-family: "Overpass Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("./assets/fonts/overpass-mono-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Overpass Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("./assets/fonts/overpass-mono-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+/* Fonts: --font-ui and --mono are left undefined except by a theme that brings
+   its own faces (Tinto), so every rule reading them falls back to its own
+   stack in the other themes. */
 :root,
 [data-theme="dark"] {
-  font-family:
+  font-family: var(
+    --font-ui,
     "Segoe UI Variable",
     "Segoe UI",
     system-ui,
     -apple-system,
     BlinkMacSystemFont,
-    sans-serif;
+    sans-serif
+  );
   font-size: 14px;
   line-height: 1.5;
 
@@ -322,6 +373,107 @@
   --tree-guide: rgba(0, 0, 0, 0.08);
 }
 
+/* Tinto: a light theme drawn from transit line diagrams. Plan paper ground,
+   white surfaces, warm hairlines and a coffee-black ink for text, for the
+   primary button and for the solid window bar (--shell). One colour per job:
+   green (the Entrega line) for running and done, blue (the Agentes line) for
+   information and links, amber only for what waits on the user, red only for
+   what broke. Neutrals are tinted warm from the ink; text tokens keep 4.5:1 on
+   the ground and on white. Overpass and Overpass Mono through --font-ui and
+   --mono; corners are square (see "Tinto: square corners" below). */
+[data-theme="tinto"] {
+  color-scheme: light;
+
+  --font-ui:
+    "Overpass", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
+    sans-serif;
+  --mono: "Overpass Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-mono: var(--mono);
+
+  /* The two lines of the Delivery diagram. */
+  --line-agents: #1b5e8c;
+  --line-delivery: #1f7a5a;
+  --shell: #241a17;
+
+  --bg-deep: #ecebe5;
+  --bg-sunken: #fafaf7;
+  --bg: #f5f5f1;
+  --bg-raised: #ffffff;
+  --bg-elev: #ffffff;
+  --border: #dcdad3;
+  --border-strong: #c4c0b7;
+
+  --fg-strong: #241a17;
+  --fg: #3a2f2b;
+  --fg-soft: #4f4541;
+  --fg-muted: #6b625e;
+  --fg-subtle: #736a65;
+
+  --wash: #241a17;
+  --line: #8f8983;
+
+  --accent: #241a17;
+  --accent-fg: #1f7a5a;
+  --on-accent: #fbfaf7;
+  --accent-wash: #1f7a5a;
+  --accent-mid: #227d5c;
+  --accent-bright: #1f7a5a;
+  --accent-text: #1a6a4e;
+  --accent-text-strong: #155640;
+  --accent-soft: rgba(31, 122, 90, 0.12);
+
+  --danger: #b3261e;
+  --danger-soft: #c33a2f;
+  --danger-text: #a3221b;
+  --danger-text-strong: #8a1c16;
+  --danger-deep: #e8a19b;
+
+  --warn: #9a5c00;
+  --warn-wash: #b26a00;
+  --warn-bright: #935700;
+  --warn-soft: #9a5c00;
+  --warn-text: #7d4a00;
+
+  --info: #1b5e8c;
+  --info-deep: #164e75;
+  --info-bright: #1b5e8c;
+  --info-text: #174f77;
+  --info-text-strong: #123f60;
+  --sky: #2a6f9e;
+  --sky-text: #164e75;
+
+  --success: #1f7a5a;
+  --success-bright: #1f7a5a;
+  --success-soft: #1f7a5a;
+  --success-text: #1a6a4e;
+  --success-deep: #a6d8c3;
+
+  /* Steps waiting on the user are the user's, so they take the amber. */
+  --step: #9a5c00;
+  --violet: #6a4c93;
+  --added: #1f7a5a;
+
+  /* Light+ colours, matching the Shiki theme of code views. */
+  --syntax-keyword: #0000ff;
+  --syntax-string: #a31515;
+  --syntax-comment: #008000;
+
+  /* Paper tab on a quiet strip; the ink line is drawn below. */
+  --dock-strip: #ecebe5;
+  --dock-tab-active: #ffffff;
+  --dock-tab-inactive: #f5f5f1;
+  --dock-tab-hidden: #ecebe5;
+  --dock-tab-fg: #241a17;
+  --dock-tab-fg-muted: #6b625e;
+
+  --hover: rgba(36, 26, 23, 0.05);
+  --hover-strong: rgba(36, 26, 23, 0.08);
+  --active: rgba(36, 26, 23, 0.12);
+  --scrollbar-thumb: rgba(36, 26, 23, 0.26);
+  --scrollbar-thumb-hover: rgba(36, 26, 23, 0.42);
+  --tree-guide: rgba(36, 26, 23, 0.08);
+}
+
 /* Dockview reads its colours from these variables: keep themeVisualStudio's
    structure and feed it the theme tokens. The :root prefix outranks the
    .dockview-theme-vs block in dockview.css. */
@@ -342,9 +494,9 @@
   --dv-floating-border: 1px solid rgb(from var(--wash) r g b / 0.1);
 }
 
-/* File-tree language badges keep their language colours; on Claro they are
-   darkened so the pale ones stay readable on white. */
-:root[data-theme="light"] .tree-icon {
+/* File-tree language badges keep their language colours; on the light themes
+   they are darkened so the pale ones stay readable on white. */
+:root:is([data-theme="light"], [data-theme="tinto"]) .tree-icon {
   filter: brightness(0.62) saturate(1.5);
 }
 
@@ -2254,7 +2406,7 @@ select option:checked {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 3px 8px;
-  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-family: var(--mono, "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace);
   font-size: 12px;
   color: var(--fg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -2387,9 +2539,17 @@ select option:checked {
 .addons-code {
   margin: 0;
   border-radius: 6px;
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 12px;
 }
 .addons-command-row__cmd {
@@ -2482,9 +2642,17 @@ select option:checked {
   padding: 7px 10px;
 }
 .wsl-input--path {
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 12px;
 }
 .wsl-input::placeholder {
@@ -2537,9 +2705,17 @@ select option:checked {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
 }
 .wsl-browser__status strong {
   flex: none;
@@ -3454,9 +3630,17 @@ select option:checked {
 }
 .dashboard__status-label {
   color: var(--accent-fg);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 11px;
   text-transform: uppercase;
 }
@@ -3503,9 +3687,17 @@ select option:checked {
 .dashboard__counters dd {
   margin: 0;
   color: var(--fg);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 17px;
   line-height: 1;
 }
@@ -3608,9 +3800,17 @@ select option:checked {
   border-bottom: 1px solid var(--border);
   background: var(--bg-sunken);
   color: var(--fg-muted);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 11px;
   text-transform: uppercase;
 }
@@ -3646,9 +3846,17 @@ select option:checked {
   background: color-mix(in srgb, var(--warn), var(--bg) 86%);
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn), var(--border) 55%);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
 }
 .banner--warn::before {
   content: "WARN / ";
@@ -3738,9 +3946,17 @@ select option:checked {
   min-width: 0;
   border-right: 1px solid var(--border);
   color: var(--fg-muted);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 11px;
   text-align: center;
   text-transform: uppercase;
@@ -5150,9 +5366,17 @@ select option:checked {
   padding: 7px 14px;
   border-bottom: 0;
   color: var(--fg);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 12px;
   font-weight: 600;
 }
@@ -5463,9 +5687,17 @@ select option:checked {
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   color: color-mix(in srgb, var(--line) 21%, var(--fg));
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.045em;
@@ -10783,7 +11015,7 @@ select option:checked {
   border-radius: 9px;
   background: color-mix(in srgb, var(--danger) 16%, var(--bg-sunken));
   color: color-mix(in srgb, var(--danger-soft) 54%, var(--fg-strong));
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui, "Segoe UI", system-ui, sans-serif);
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
@@ -10940,7 +11172,7 @@ select option:checked {
   right: 0;
   bottom: 5px;
   color: color-mix(in srgb, var(--danger-soft) 27%, var(--fg-strong));
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui, "Segoe UI", system-ui, sans-serif);
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
@@ -11137,7 +11369,7 @@ select option:checked {
   max-width: 640px;
   margin: 4px 8px 6px var(--file-line-label-gutter);
   white-space: normal;
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif);
   font-size: 13px;
 }
 .diff-note {
@@ -11185,7 +11417,7 @@ select option:checked {
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-raised);
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif);
   font-size: 13px;
 }
 .diff-notes-bar__hint,
@@ -11285,7 +11517,7 @@ select option:checked {
   padding: 1px 4px;
   background: rgb(from color-mix(in srgb, var(--danger) 21%, var(--bg-deep)) r g b / 0.94);
   color: color-mix(in srgb, var(--danger-soft) 27%, var(--fg-strong));
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui, "Segoe UI", system-ui, sans-serif);
   font-size: 10px;
   font-weight: 600;
   line-height: 1.2;
@@ -12067,9 +12299,17 @@ select option:checked {
   margin: 0;
   overflow: hidden;
   color: var(--fg);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(
+    --mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: 17px;
   line-height: 1.1;
   text-overflow: ellipsis;
@@ -12497,7 +12737,7 @@ a:focus-visible {
   border-radius: 4px;
   background: var(--tree-icon-bg);
   color: var(--tree-icon-fg);
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui, "Segoe UI", system-ui, sans-serif);
   font-size: 6px;
   font-weight: 800;
   letter-spacing: 0;
@@ -13511,7 +13751,7 @@ a:focus-visible {
 }
 .manage-workbench__repo-subtitle {
   color: var(--fg-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
@@ -14214,4 +14454,141 @@ a:focus-visible {
 .restart-modal .file-op-modal__button:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+/* ---- Tinto: shell and browser surfaces ----
+   Rules the Tinto theme needs beyond its tokens. Kept last so they read as one
+   place; each is scoped to [data-theme="tinto"], so no other theme changes. */
+
+/* Form controls take the theme's face instead of the platform's. Zero
+   specificity: a control that sets its own font (a mono path field) keeps it. */
+:where([data-theme="tinto"]) :where(button, input, select, textarea) {
+  font-family: inherit;
+}
+
+/* The window bar is solid ink with paper text. Its own controls get the
+   ink-side tokens; the menus and the theme panel they open are siblings of
+   those controls, so they keep the paper tokens. */
+[data-theme="tinto"] .menu-bar {
+  background: var(--shell);
+  border-bottom-color: var(--shell);
+  color: #f5f5f1;
+}
+[data-theme="tinto"]
+  .menu-bar
+  :is(
+    .menu-bar__brand,
+    .menu-bar__switcher,
+    .menu__trigger,
+    .menu-bar__notice,
+    .menu-bar__feedback,
+    .watch,
+    .theme-picker__trigger,
+    .window-controls
+  ) {
+  --bg-elev: var(--shell);
+  --bg: #3a2f2b;
+  --border: #5a4e48;
+  --fg-strong: #ffffff;
+  --fg: #f5f5f1;
+  --fg-muted: #cfc6c0;
+  --hover-strong: rgba(245, 245, 241, 0.12);
+  --active: rgba(245, 245, 241, 0.18);
+  --accent: #f5f5f1;
+  --accent-fg: #6fcfa6;
+  --warn: #f0b45a;
+  --danger: #ff9d94;
+  --danger-soft: #ff9d94;
+}
+.theme-swatch[data-theme="tinto"] .theme-swatch__bar {
+  background: var(--shell);
+  border-bottom-color: var(--shell);
+}
+
+/* Dock tabs: the active tab is paper with an ink line on top; the strip and
+   the other tabs stay quiet, over a hairline instead of a coloured rule. */
+[data-theme="tinto"]
+  .dockview-theme-vs
+  .dv-groupview:is(.dv-active-group, .dv-inactive-group)
+  > .dv-tabs-and-actions-container {
+  border-bottom: 1px solid var(--border);
+}
+[data-theme="tinto"]
+  .dockview-theme-vs
+  .dv-groupview.dv-active-group
+  > .dv-tabs-and-actions-container
+  .dv-tab.dv-active-tab {
+  border-top-color: var(--fg-strong);
+}
+
+/* Selection, caret and focus from the palette: a light wash of the Agentes
+   blue keeps code colours readable under a selection, and the focus ring is
+   the ink (paper on the window bar, where --accent turns paper). */
+[data-theme="tinto"] ::selection {
+  background: rgb(from var(--line-agents) r g b / 0.22);
+}
+[data-theme="tinto"] :is(input, textarea, [contenteditable="true"]) {
+  caret-color: var(--line-agents);
+}
+[data-theme="tinto"]
+  :is(button, [role="button"], [role="tab"], select, input, textarea, a):focus-visible {
+  outline-color: var(--accent);
+}
+[data-theme="tinto"] :is(select, input[type="checkbox"]):hover {
+  border-color: var(--fg-muted);
+}
+[data-theme="tinto"] input[type="checkbox"]:checked,
+[data-theme="tinto"] input[type="checkbox"]:checked:hover {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* Floating surfaces lift with a warm, soft shadow instead of a black one, and
+   modal scrims tint from the ink. */
+[data-theme="tinto"]
+  :is(
+    .menu__list,
+    .theme-picker__panel,
+    .tree-menu,
+    .shortcuts-modal,
+    .addons-modal,
+    .file-op-modal,
+    .agent-panel__session-menu-popover
+  ) {
+  box-shadow:
+    0 10px 28px rgba(36, 26, 23, 0.16),
+    0 1px 3px rgba(36, 26, 23, 0.12);
+}
+[data-theme="tinto"] :is(.shortcuts-backdrop, .addons-backdrop, .file-op-modal-overlay) {
+  background: rgba(36, 26, 23, 0.32);
+}
+
+/* Tinto: square corners. The user wants no rounded controls or containers,
+   and some 240 component rules set a radius, so one !important rule removes
+   them all in this theme. Genuinely round marks keep theirs: status dots,
+   spinners, avatars, and the Delivery stage strip, which draws its own
+   stations. Pseudo-elements are left alone: the ones with a radius draw the
+   file-tree icons. */
+[data-theme="tinto"]
+  :not(
+    .activity-dot,
+    .agent-panel__activity-dot,
+    .agent-panel__message-activity-signal,
+    .console-dock-panel__navigator-active-indicator,
+    .dashboard__loading-spinner,
+    .dashboard__loading-state,
+    .repo-tab__dot,
+    .secret-scan-indicator__mark,
+    .delivery-dot,
+    .delivery-thread__avatar,
+    .delivery-action__spinner,
+    .delivery-repo-tab__needs,
+    .delivery-coordinator-button__dot,
+    .delivery-track,
+    .delivery-track *,
+    .delivery-node,
+    .delivery-node *
+  ),
+[data-theme="tinto"] ::-webkit-scrollbar-thumb {
+  border-radius: 0 !important;
 }

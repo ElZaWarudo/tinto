@@ -32,6 +32,7 @@ describe("ThemePicker", () => {
       "Morado oscuro",
       "Ciruela",
       "Claro",
+      "Tinto",
       "Según el sistema",
     ]);
     expect(within(group).getByRole("radio", { name: "Oscuro" })).toBeChecked();
@@ -42,6 +43,7 @@ describe("ThemePicker", () => {
         within(group).getByRole("radio", { name }).querySelectorAll<HTMLElement>("[data-theme]"),
       ).map((swatch) => swatch.dataset.theme);
     expect(swatchThemes("Ciruela")).toEqual(["plum"]);
+    expect(swatchThemes("Tinto")).toEqual(["tinto"]);
     expect(swatchThemes("Según el sistema")).toEqual(["dark", "light"]);
   });
 
