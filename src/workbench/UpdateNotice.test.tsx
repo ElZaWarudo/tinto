@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,6 +24,27 @@ describe("UpdateNotice", () => {
     expect(screen.getByText("Tinto 1.0.1 está disponible.")).toBeInTheDocument();
     expect(downloadAndInstall).toHaveBeenCalled();
     expect(updater.relaunch).toHaveBeenCalled();
+  });
+
+  it("shows the download percent, then that it is installing", async () => {
+    type Emit = (event: { event: string; data?: object }) => void;
+    let emit: Emit = () => {};
+    const downloadAndInstall = vi.fn((onEvent: Emit) => {
+      emit = onEvent;
+      return new Promise(() => {});
+    });
+    updater.check.mockResolvedValue({ version: "1.0.1", downloadAndInstall });
+    render(<UpdateNotice />);
+    await userEvent.click(await screen.findByRole("button", { name: "Actualizar y reiniciar" }));
+
+    act(() => {
+      emit({ event: "Started", data: { contentLength: 200 } });
+      emit({ event: "Progress", data: { chunkLength: 84 } });
+    });
+    expect(screen.getByRole("button", { name: "Descargando 42 %" })).toBeDisabled();
+
+    act(() => emit({ event: "Finished" }));
+    expect(screen.getByRole("button", { name: "Instalando…" })).toBeDisabled();
   });
 
   it("says why an install failed and lets the user try again", async () => {

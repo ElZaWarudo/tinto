@@ -1,7 +1,8 @@
 // Theme picker in the menu bar: the trigger shows the theme in effect, and the
 // panel lays every theme out as a swatch painted with that theme's own tokens
 // (the [data-theme] blocks in App.css match any element). Choosing applies at
-// once; arrow keys move the choice like any radio group, Escape closes.
+// once (a mouse click cross-fades); arrow keys move the choice like any radio
+// group, instantly, and Escape closes.
 
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { Icon } from "./Icon";
@@ -127,7 +128,15 @@ export function ThemePicker({
                     className="theme-picker__option"
                     data-value={option.value}
                     data-testid={`theme-option-${option.value}`}
-                    onClick={() => themeStore.set(option.value)}
+                    onClick={(event) => {
+                      // A mouse click cross-fades the whole window (App.css,
+                      // ::view-transition-*); Enter/Space (detail 0) stays instant.
+                      if (event.detail > 0 && document.startViewTransition) {
+                        document.startViewTransition(() => themeStore.set(option.value));
+                      } else {
+                        themeStore.set(option.value);
+                      }
+                    }}
                   >
                     <ThemeSwatch theme={option.value} />
                     <span className="theme-picker__option-label">

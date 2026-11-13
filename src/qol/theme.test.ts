@@ -95,6 +95,28 @@ describe("theme", () => {
     expect(rootTheme()).toBe("purple");
   });
 
+  it("turns transitions off for the frame a theme change lands in", async () => {
+    mockSystemScheme(false);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const { themeStore } = await freshStore();
+    themeStore.hydrate();
+    frames.splice(0).forEach((frame) => frame(0));
+
+    themeStore.set("light");
+    expect(document.documentElement.dataset.themeSwitching).toBe("");
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(document.documentElement.dataset.themeSwitching).toBeUndefined();
+
+    // Re-applying the same theme leaves transitions alone.
+    themeStore.set("light");
+    expect(document.documentElement.dataset.themeSwitching).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
   it("follows a change saved by another window", async () => {
     mockSystemScheme(false);
     const { themeStore, THEME_STORAGE_KEY } = await freshStore();

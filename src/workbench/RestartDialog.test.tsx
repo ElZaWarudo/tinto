@@ -34,6 +34,7 @@ describe("RestartDialog", () => {
     expect(resumed).toHaveTextContent("codex · api");
 
     fireEvent.click(screen.getByRole("button", { name: "Reiniciar" }));
+    expect(screen.getByRole("button", { name: "Reiniciando…" })).toBeDisabled();
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_tinto", { installer: null }));
   });
 
