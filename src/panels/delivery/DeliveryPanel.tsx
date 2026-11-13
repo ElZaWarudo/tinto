@@ -3868,6 +3868,10 @@ function StageTrack({
                     onClick={() => onFocus(job)}
                   >
                     {content}
+                    {/* What pointing at it offers; its own words say the rest. */}
+                    <span className="delivery-node__hint" aria-hidden="true">
+                      Ver en el historial
+                    </span>
                   </button>
                 ) : (
                   <div>{content}</div>

@@ -1990,7 +1990,10 @@
   gap: 0;
   background: none;
   border: 0;
-  overflow: hidden;
+  /* Clipped sideways only (a wrapped row cuts its first segment at the edge):
+     a station's halo and its hint reach above the row. */
+  overflow: visible;
+  overflow-x: clip;
 }
 [data-theme="tinto"] .delivery-node {
   --station: 14px;
@@ -2162,6 +2165,10 @@
   > :is(.delivery-icon, .delivery-dot) {
   display: none;
 }
+/* Only the line diagram shows the hint of what a stage opens. */
+.delivery-node__hint {
+  display: none;
+}
 /* Pointing at a stage that opens its history: its station and its words
    answer, not a grey box behind them. */
 [data-theme="tinto"] .delivery-panel .delivery-node > button:hover:not(:disabled) {
@@ -2186,13 +2193,40 @@
   .delivery-node
   > button:is(:hover, :focus-visible):not(:disabled)
   .delivery-node__name {
-  color: var(--fg-strong);
+  color: var(--line);
   text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
 }
 [data-theme="tinto"] .delivery-node > button:is(:hover, :focus-visible):not(:disabled) small {
-  color: var(--fg);
+  color: var(--fg-strong);
+}
+/* What pointing at a stage offers, said above its station. */
+[data-theme="tinto"] .delivery-node__hint {
+  display: block;
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% - var(--station-top) + 7px);
+  left: 50%;
+  padding: 2px 7px;
+  background: var(--fg-strong);
+  color: var(--bg);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 3px);
+  transition:
+    opacity 120ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+[data-theme="tinto"]
+  .delivery-node
+  > button:is(:hover, :focus-visible):not(:disabled)
+  > .delivery-node__hint {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 [data-theme="tinto"] .delivery-node .delivery-node__name .delivery-icon {
   color: var(--fg-muted);
