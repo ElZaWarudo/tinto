@@ -1,0 +1,8 @@
+Overpass and Overpass Mono
+Copyright 2016 Red Hat, Inc.
+
+These fonts are licensed under the SIL Open Font License, Version 1.1.
+The license is available with a FAQ at https://openfontlicense.org
+
+Source: Google Fonts (fonts.gstatic.com), Overpass v19 and Overpass Mono v21,
+variable weight, latin and latin-ext subsets.
