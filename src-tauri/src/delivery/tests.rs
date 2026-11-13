@@ -10539,6 +10539,31 @@ fn round_now(h: &Harness, task: &DeliveryTask) -> Option<super::phase::CurrentRo
 }
 
 #[test]
+fn a_check_records_the_round_it_was_dispatched_in() {
+    let h = harness();
+    let task = h.task("R-9");
+    let check = |prompt: &str| {
+        let mut check = h.new_job(&task, "checks", prompt);
+        check.agent = DeliveryAgent::Shell;
+        let job = h.service.dispatch(check).unwrap();
+        h.wait(&job.id);
+        job
+    };
+    assert_eq!(check("exit=0").round_number, None);
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(
+        &h,
+        &task,
+        "r1",
+        "review",
+        "findings",
+        &["Falta un caso"],
+        false,
+    );
+    assert_eq!(check("exit=0").round_number, Some(2));
+}
+
+#[test]
 fn each_send_back_opens_a_round_that_closes_once_its_work_is_committed() {
     use super::phase::Phase;
     let h = harness();

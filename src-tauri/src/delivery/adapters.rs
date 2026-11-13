@@ -2891,6 +2891,7 @@ pub(crate) mod tests {
             tracked_before: None,
             task_checks: Vec::new(),
             round: Vec::new(),
+            round_number: None,
             guide_rules: Vec::new(),
             needs_environment: false,
             waits_environment: None,

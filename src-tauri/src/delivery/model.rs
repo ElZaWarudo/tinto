@@ -524,6 +524,10 @@ pub struct DeliveryJob {
     /// came back and what to address, as the job's instructions state them.
     #[serde(default)]
     pub round: Vec<String>,
+    /// The number of the task's round when the job was dispatched in one,
+    /// Tinto's commands included; `None` in the initial delivery.
+    #[serde(default)]
+    pub round_number: Option<u32>,
     /// The repo's approved guide rules for the job's stage when it was
     /// dispatched, as its instructions state them.
     #[serde(default)]

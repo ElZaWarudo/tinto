@@ -35,12 +35,15 @@ export const CHECKS_ROW = "checks";
 /** "This is round 4 of the task: …": what a stage dispatched in a round was told. */
 const TOLD_ROUND = /^This is round (\d+) of the task/;
 
-/** The round a job belongs to: the one it was told about when dispatched,
- *  otherwise the last one opened at or before it was created; null for the
- *  initial delivery. */
+/** The round a job belongs to: the one it records it was dispatched in (or,
+ *  for jobs from before that record, the one it was told about), otherwise
+ *  the last one opened at or before it was created; null for the initial
+ *  delivery. A job dispatched with no round open goes by its time: after a
+ *  round closed, it still shows under that round. */
 function roundOfJob(job: DeliveryJob, rounds: DeliveryRound[]): DeliveryRound | null {
   const told = TOLD_ROUND.exec(job.round?.[0] ?? "");
-  const named = told ? rounds.find((round) => round.number === Number(told[1])) : undefined;
+  const number = job.round_number ?? (told ? Number(told[1]) : undefined);
+  const named = rounds.find((round) => round.number === number);
   if (named) return named;
   // The latest opening, not the highest number: a round that was resumed
   // opens again after the one that interrupted it.

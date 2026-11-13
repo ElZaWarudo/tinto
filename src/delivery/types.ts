@@ -313,6 +313,9 @@ export interface DeliveryJob {
   task_checks?: string[];
   /** What the job was told about the task's round when it was dispatched in one. */
   round?: string[];
+  /** The number of the task's round when the job was dispatched in one, checks
+   *  included; null in the initial delivery, absent on jobs from before it. */
+  round_number?: number | null;
   /** It needs the repo's environment: it waits queued while that does not answer. */
   needs_environment?: boolean;
   /** Why it waits on the environment, while it does. */

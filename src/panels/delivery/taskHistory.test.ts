@@ -120,6 +120,18 @@ describe("taskHistory", () => {
       ],
       latest: ["i2"],
     },
+    {
+      name: "a check goes to the round it records, even before the round's resumed opening",
+      jobs: [job("i1", 1), check("c2", 8, "npm test", { round_number: 2 })],
+      // Round 2 opened at 5, interrupted by round 3, opened again at 20.
+      rounds: [round(2, 20), round(3, 10, 18)],
+      expected: [
+        [2, [["c2"]]],
+        [3, []],
+        [0, [["i1"]]],
+      ],
+      latest: ["i1"],
+    },
   ])("$name", ({ jobs, rounds, expected, latest }) => {
     expect(shape(jobs, rounds)).toEqual(expected);
     // Where a stage picked on the track lands: its latest job's row, one per stage.

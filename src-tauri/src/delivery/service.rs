@@ -2047,6 +2047,8 @@ impl DeliveryService {
                 super::rounds::note(&store, &task.id)?
             }
         };
+        // Every job, checks included, records the round it ran in.
+        let round_number = super::rounds::open_of(&store, &task.id)?.map(|open| open.number);
         let model = match request.model.filter(|model| !model.trim().is_empty()) {
             None if request.agent == DeliveryAgent::Codex => store
                 .setting::<Option<String>>(CODEX_MODEL_SETTING)?
@@ -2270,6 +2272,7 @@ impl DeliveryService {
             tracked_before: None,
             task_checks: Vec::new(),
             round,
+            round_number,
             guide_rules,
             needs_environment: request.needs_environment || qa,
             waits_environment: None,
