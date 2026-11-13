@@ -42,6 +42,9 @@ import {
   taskAsks,
   taskLabel,
   taskStatus,
+  taskTrack,
+  stepKey,
+  type Station,
   type StatusGroup,
   type TaskStatus,
 } from "./taskStatus";
@@ -991,6 +994,54 @@ describe("a task in a round", () => {
       "Ronda 1 · entrega inicial",
     ]);
     expect(roundHistory(overview(), "t1")).toEqual([]);
+  });
+});
+
+describe("taskTrack", () => {
+  const round = {
+    id: "r2",
+    task_id: "t1",
+    number: 2,
+    kind: "qa" as const,
+    short: "5 hallazgos de QA",
+    cause: "5 hallazgos de QA",
+    items: [],
+    opened_at_ms: 100,
+    at: "implementation",
+  };
+  /** Each stage's and step's station, by role or step key. */
+  const stations = (over: Partial<DeliveryOverview>): Record<string, Station> => {
+    const track = taskTrack(overview(over), task);
+    return Object.fromEntries([
+      ...track.agents.map((stop) => [stop.role, stop.station]),
+      ...track.steps.map((stop) => [stepKey(stop.step), stop.station]),
+    ]);
+  };
+
+  it.each<[Station, string, Partial<DeliveryOverview>]>([
+    ["passed", "tests", { jobs: [job()] }],
+    ["running", "tests", { jobs: [job({ status: "started", ended_at_ms: null })] }],
+    ["pending", "review", { jobs: [job()] }],
+    [
+      "repeats",
+      "review",
+      {
+        jobs: [job({ role: "review", created_at_ms: 1 })],
+        phases: {
+          t1: {
+            kind: "next_stage",
+            role: "implementation",
+            waits_on: "agent",
+            next_stage: null,
+            round,
+          },
+        },
+      },
+    ],
+    ["yours", "commit", { approvals: [approval({ status: "pending" })] }],
+    ["broke", "tests", { jobs: [job({ status: "failed" })] }],
+  ])("draws a %s station for %s", (station, at, over) => {
+    expect(stations(over)[at]).toBe(station);
   });
 });
 

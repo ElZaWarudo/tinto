@@ -38,6 +38,7 @@ import {
 import { armExternalTabDetach } from "../../workspace/externalTabDetach";
 import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
+import { useResolvedTheme } from "../../qol/theme";
 import { Icon as AppIcon, type IconName } from "../../workbench/Icon";
 import {
   codexReasoningLabel,
@@ -113,7 +114,6 @@ import type {
   DeliveryRun,
   DeliveryStageAgent,
   DeliveryTask,
-  DeliveryDecision,
   DeliveryTiming,
   DeliveryUsage,
 } from "../../delivery/types";
@@ -163,7 +163,6 @@ import {
   latestApproval,
   latestOfRole,
   SCOPE_ROLE,
-  scopeOutcome,
   lower,
   nextStageOf,
   phaseOf,
@@ -179,9 +178,7 @@ import {
   waitsOnLabel,
   waitsOnPhrase,
   quietFor,
-  rolesOf,
   stepKey,
-  stepsOf,
   taskLabel,
   issueProgress,
   entryTasks,
@@ -198,19 +195,17 @@ import {
   approveLabel,
   approvesInOneClick,
   files,
-  type DeliveryCurrentRound,
   type DeliveryStep,
   nowLine,
   roundHistory,
   roundOf,
-  roundRung,
-  roundStage,
   reviewerBlock,
   stageLabel,
   taskStatus,
+  taskTrack,
+  type TaskTrack,
   qaProblemsToDecide as problemsToDecide,
   verdictsOf,
-  trackSteps,
   type ListGroup,
   listGroup,
   searchTasks,
@@ -1754,6 +1749,17 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       ),
     [overview, tasks, now],
   );
+  // The Tinto theme ends each row with its stages as a small line: read once
+  // per overview, not on every tick of the clock.
+  const theme: string = useResolvedTheme();
+  const tinto = theme === "tinto";
+  const tracks = useMemo(
+    () =>
+      new Map(
+        tinto && overview ? tasks.map((task) => [task.id, taskTrack(overview, task)] as const) : [],
+      ),
+    [tinto, overview, tasks],
+  );
   // The queue's rows of a task that just came to need the user, tinted once:
   // never on the first load, a filter or an unfolding, only on a task that
   // changed group.
@@ -1989,6 +1995,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     );
     const qaHere =
       qaLease?.state === "active" || qaLease?.state === "quarantined" ? qaLease.state : null;
+    const track = tracks.get(task.id);
     return (
       <button
         key={task.id}
@@ -2035,6 +2042,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
               #{pr.number}
             </span>
           )}
+          {track && <MiniLine track={track} />}
         </span>
         <span className="delivery-task-row__title">
           {task.package ? task.package.title || task.title : task.title || task.branch}
@@ -2650,6 +2658,7 @@ function TaskDetail({
   const hasOpenJob = jobs.some(isOpen);
   const next = nextStageOf(overview, task.id);
   const round = roundOf(overview, task.id);
+  const track = useMemo(() => taskTrack(overview, task), [overview, task]);
   const pastRounds = roundHistory(overview, task.id);
   const handoff = lastHandoff(jobs);
   const broken = brokenJobOf(overview, task.id);
@@ -2658,8 +2667,6 @@ function TaskDetail({
     (approval) =>
       approval.status === "pending" || approval.status === "approved" || approval.progress,
   );
-  // A middle package of a split issue ends at its merge.
-  const ladder = stepsOf(overview, task.id);
   const progress = issueProgress(overview, task);
   // A reply to a reviewer holds nothing: the next step can still be asked.
   const ladderStep = nextStepOf(overview, task.id);
@@ -3385,16 +3392,10 @@ function TaskDetail({
       {!broken && <BlockedBar {...blockerProps} />}
 
       <StageTrack
-        task={task}
-        decisions={taskDecisions}
+        track={track}
         repo={task.repo}
-        jobs={jobs}
-        verdicts={verdicts}
         approvals={approvals}
-        steps={trackSteps(ladder, approvals)}
-        pr={pr}
         next={next}
-        round={round}
         onFocus={focusStage}
       />
 
@@ -3752,34 +3753,38 @@ function StageAgentEditor({ repo, role }: { repo: string; role: string }) {
   );
 }
 
+/** A task's stages and steps as small stations on its list row (the Tinto
+ *  theme's): where it is, at a glance. The row's text already says it. */
+function MiniLine({ track }: { track: TaskTrack }) {
+  return (
+    <span className="delivery-mini-line" aria-hidden>
+      {track.agents.map((stop) => (
+        <i key={`agent-${stop.role}`} data-station={stop.station} />
+      ))}
+      {track.steps.map((stop) => (
+        <i
+          key={`step-${stepKey(stop.step)}`}
+          className="delivery-mini-line__step"
+          data-station={stop.station}
+        />
+      ))}
+    </span>
+  );
+}
+
 function StageTrack({
-  task,
-  decisions,
+  track,
   repo,
-  jobs,
-  verdicts,
   approvals,
-  steps,
-  pr,
   next,
-  round,
   onFocus,
 }: {
-  /** Alcance reads its skip from the task and its questions from its decisions. */
-  task: DeliveryTask;
-  decisions: DeliveryDecision[];
+  /** The task's stages and steps, as `taskTrack` reads them. */
+  track: TaskTrack;
   /** The task's repo, whose settings say who runs each stage. */
   repo: string;
-  jobs: DeliveryJob[];
-  verdicts: Record<string, DeliveryJobVerdict>;
   approvals: DeliveryApproval[];
-  /** The delivery steps the task climbs. */
-  steps: DeliveryStep[];
-  /** The PR step shows the followed PR's live state once it exists. */
-  pr: DeliveryPr | undefined;
   next: string | null;
-  /** The round the task is in: the track shows that round's stages and steps. */
-  round: DeliveryCurrentRound | null;
   onFocus: (job: DeliveryJob) => void;
 }) {
   return (
@@ -3787,18 +3792,8 @@ function StageTrack({
       <div className="delivery-track__part">
         <h3 id="delivery-track-agents">Agentes</h3>
         <ol aria-labelledby="delivery-track-agents">
-          {rolesOf(jobs).map((role) => {
-            const job = latestOfRole(jobs, role);
-            const inRound = roundStage(role, job, verdicts, round);
-            const scope = role === SCOPE_ROLE ? scopeOutcome(task, job, jobs, decisions) : null;
-            const outcome: { tone: Tone | "todo"; label: string; title?: string } = inRound
-              ? { ...inRound, label: role === next ? "Siguiente" : inRound.label }
-              : scope
-                ? scope
-                : job
-                  ? attemptOutcome(job, jobs, verdicts)
-                  : { tone: "todo" as const, label: role === next ? "Siguiente" : "—" };
-            const tone = outcome.tone;
+          {track.agents.map((outcome) => {
+            const { role, job, inRound, tone } = outcome;
             const content = (
               <>
                 <span className="delivery-node__name">
@@ -3824,6 +3819,7 @@ function StageTrack({
               <li
                 key={role}
                 className={`delivery-node delivery-node--${tone}`}
+                data-station={outcome.station}
                 aria-current={role === next ? "step" : undefined}
               >
                 {job ? (
@@ -3851,31 +3847,9 @@ function StageTrack({
       <div className="delivery-track__part delivery-track__part--rungs">
         <h3 id="delivery-track-rungs">Entrega</h3>
         <ol aria-labelledby="delivery-track-rungs">
-          {steps.map((ladder) => {
+          {track.steps.map((step) => {
+            const { step: ladder, approval } = step;
             const { rung, label } = ladder;
-            const live = rung === "pr" && pr ? prSummary(pr) : null;
-            const approval = latestStep(approvals, ladder);
-            const unlinked = rung === "pr" && !pr && approval?.status === "executed";
-            const before = rungStep(approval);
-            const step = roundRung(ladder, approval, round)
-              ? {
-                  tone: "todo" as const,
-                  icon: "ring" as const,
-                  label: "Se repetirá",
-                  // What it was before the round, for who asks.
-                  title: `Se repetirá en esta ronda${approval ? `. Antes: ${before.title ?? before.label}` : ""}`,
-                }
-              : live
-                ? { ...live, title: `${pr?.repo}#${pr?.number}` }
-                : unlinked
-                  ? {
-                      // Done, and nothing the user has to give: neutral.
-                      tone: "waiting" as const,
-                      icon: "alert" as const,
-                      label: "Hecho · sin PR vinculado",
-                      title: approval.outcome ?? undefined,
-                    }
-                  : before;
             const body = (
               <>
                 <span className="delivery-node__name">
@@ -3893,6 +3867,7 @@ function StageTrack({
                 key={stepKey(ladder)}
                 className={`delivery-node delivery-node--${step.tone}`}
                 data-rung={rung}
+                data-station={step.station}
               >
                 {paused ? (
                   <button
@@ -3916,53 +3891,6 @@ function StageTrack({
       </div>
     </div>
   );
-}
-
-function rungStep(approval: DeliveryApproval | undefined): {
-  tone: Tone | "todo";
-  icon: StatusIcon;
-  label: string;
-  title?: string;
-} {
-  if (!approval) return { tone: "todo", icon: "ring", label: "—" };
-  switch (approval.status) {
-    case "pending":
-      return { tone: "step", icon: "flag", label: "Tu aprobación" };
-    case "approved":
-      return { tone: "waiting", icon: "clock", label: "Lo hace el coordinador" };
-    case "executed":
-      if (approval.conflicts?.length)
-        return {
-          tone: "attention",
-          icon: "alert",
-          label: `Conflictos en ${approval.conflicts.join(", ")}`,
-          title: approval.outcome ?? undefined,
-        };
-      return {
-        tone: "ok",
-        icon: "check",
-        label: approval.outcome || "Hecho",
-        title: approval.outcome ?? undefined,
-      };
-    case "rejected":
-      return { tone: "danger", icon: "x", label: "Rechazado" };
-    case "undone":
-      return {
-        tone: "todo",
-        icon: "ring",
-        label: "Deshecho",
-        title: approval.outcome ?? undefined,
-      };
-    case "drifted":
-      return {
-        tone: "step",
-        icon: "alert",
-        label: "Ya no coincide",
-        title: approval.notice ?? undefined,
-      };
-    default:
-      return { tone: "danger", icon: "x", label: "Falló", title: approval.outcome ?? undefined };
-  }
 }
 
 /** Who prepared a request. One made in Tinto's own view may come from the

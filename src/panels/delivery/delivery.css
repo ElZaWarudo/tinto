@@ -1954,6 +1954,235 @@
   border-top-color: var(--fg-muted);
 }
 
+/* ---------- Tinto theme: the stage track as a line diagram ---------- */
+/* Each group is a line in its own colour and each stage a station on it: the
+   station's form says where the stage stands (filled passed, ring with a dot
+   running, hollow on a dashed grey line pending, double ring repeats, thick
+   amber ring yours, red square broke) and colour backs it up. The cells lose
+   their boxes. The cells of a row share its width equally, so each one draws
+   the segment that leads to its station from the middle of the cell before
+   it; a wrapped row starts its line at its edge (the list clips the
+   overhang), and nothing runs past a group's last station. */
+[data-theme="tinto"] .delivery-track__part {
+  --line: var(--line-agents, #1b5e8c);
+}
+[data-theme="tinto"] .delivery-track__part--rungs {
+  --line: var(--line-delivery, #1f7a5a);
+}
+[data-theme="tinto"] .delivery-track h3 {
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--line);
+}
+[data-theme="tinto"] .delivery-track ol {
+  gap: 0;
+  background: none;
+  border: 0;
+  overflow: hidden;
+}
+[data-theme="tinto"] .delivery-node {
+  --station: 14px;
+  --station-top: 5px;
+  /* The segment's top: centred on the station. */
+  --segment-top: calc(var(--station-top) + var(--station) / 2 - 2px);
+  --edge: var(--line);
+  --fill: var(--line);
+  --ring: 2.5px;
+  --size: var(--station);
+  background: none;
+  border-top: 0;
+}
+[data-theme="tinto"] .delivery-node + .delivery-node::before {
+  content: "";
+  position: absolute;
+  top: var(--segment-top);
+  left: -50%;
+  width: 100%;
+  height: 4px;
+  background: var(--line);
+}
+/* Not reached yet: the segment that leads to it is dashed and grey. */
+[data-theme="tinto"] .delivery-node:is([data-station="pending"], [data-station="repeats"])::before {
+  background: repeating-linear-gradient(90deg, var(--fg-muted) 0 6px, transparent 6px 10px) center /
+    100% 2px no-repeat;
+}
+/* The merge landing: over its dashed segment, the line draws itself to the
+   Merge station as it fills. Being a transition, a merged task shows it at rest. */
+[data-theme="tinto"] .delivery-node[data-rung="merge"]::before {
+  content: "";
+  top: var(--segment-top);
+  left: -50%;
+  right: auto;
+  width: 100%;
+  height: 4px;
+  background: repeating-linear-gradient(90deg, var(--fg-muted) 0 6px, transparent 6px 10px) center /
+    100% 2px no-repeat;
+  transform: none;
+  opacity: 1;
+  transition: none;
+}
+[data-theme="tinto"] .delivery-node[data-rung="merge"] > :is(div, button)::after {
+  content: "";
+  position: absolute;
+  top: var(--segment-top);
+  left: -50%;
+  width: 100%;
+  height: 4px;
+  background: var(--line);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 300ms var(--ease-out);
+}
+[data-theme="tinto"]
+  .delivery-node[data-rung="merge"]:not([data-station="pending"], [data-station="repeats"])
+  > :is(div, button)::after {
+  transform: scaleX(1);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="tinto"] .delivery-node[data-rung="merge"] > :is(div, button)::after {
+    transform: none;
+    opacity: 0;
+    transition: opacity 300ms ease;
+    /* A fade is not motion: it keeps its time over the global rule. */
+    transition-duration: 300ms !important;
+  }
+  [data-theme="tinto"]
+    .delivery-node[data-rung="merge"]:not([data-station="pending"], [data-station="repeats"])
+    > :is(div, button)::after {
+    opacity: 1;
+  }
+}
+/* The station, centred over the stage's name and lines. */
+[data-theme="tinto"] .delivery-node > div,
+[data-theme="tinto"] .delivery-panel .delivery-node > button {
+  justify-items: center;
+  padding: var(--station-top) 6px 6px;
+  text-align: center;
+}
+[data-theme="tinto"] .delivery-node:has(> .delivery-menu) > div,
+[data-theme="tinto"] .delivery-panel .delivery-node:has(> .delivery-menu) > button {
+  padding-right: 22px;
+  padding-left: 22px;
+}
+[data-theme="tinto"] .delivery-node > :is(div, button)::before {
+  content: "";
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  width: var(--size);
+  height: var(--size);
+  margin: calc((var(--station) - var(--size)) / 2) 0 calc((var(--station) - var(--size)) / 2 + 3px);
+  border: var(--ring) solid var(--edge);
+  border-radius: 50%;
+  background: var(--fill);
+  box-shadow: var(--inner, none);
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease;
+}
+[data-theme="tinto"] .delivery-node[data-rung="merge"] > :is(div, button)::before {
+  transition-duration: 300ms;
+  transition-timing-function: var(--ease-out);
+}
+[data-theme="tinto"] .delivery-node[data-station="running"] {
+  --fill: radial-gradient(circle, var(--line) 0 2.5px, var(--bg) 3px);
+}
+[data-theme="tinto"] .delivery-node[data-station="pending"] {
+  --edge: var(--fg-muted);
+  --fill: var(--bg);
+}
+[data-theme="tinto"] .delivery-node[data-station="repeats"] {
+  --ring: 2px;
+  --fill: var(--bg);
+  --inner: inset 0 0 0 1.5px var(--bg), inset 0 0 0 3px var(--line);
+}
+[data-theme="tinto"] .delivery-node[data-station="yours"] {
+  --edge: var(--warn);
+  --fill: var(--bg);
+  --ring: 3.5px;
+}
+[data-theme="tinto"] .delivery-node[data-station="broke"] {
+  --edge: var(--danger);
+  --fill: var(--danger);
+  --size: 12px;
+}
+[data-theme="tinto"] .delivery-node[data-station="broke"] > :is(div, button)::before {
+  border-radius: 0;
+}
+/* The station says the state; only a neutral note (findings, news on the PR,
+   a wait) keeps its icon, in grey. */
+[data-theme="tinto"]
+  .delivery-node:is(
+    .delivery-node--ok,
+    .delivery-node--live,
+    .delivery-node--step,
+    .delivery-node--danger,
+    .delivery-node--todo
+  )
+  .delivery-node__name
+  > :is(.delivery-icon, .delivery-dot) {
+  display: none;
+}
+[data-theme="tinto"] .delivery-node .delivery-node__name .delivery-icon {
+  color: var(--fg-muted);
+}
+/* The agent menu sits by the name, off the line. */
+[data-theme="tinto"] .delivery-node > .delivery-menu {
+  top: calc(var(--station-top) + var(--station) + 1px);
+  right: 0;
+}
+/* The list clips what overhangs a row: focus is drawn inside the cell. */
+[data-theme="tinto"] .delivery-panel .delivery-node button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* A task row's line: one small station per stage and step, in the same forms. */
+[data-theme="tinto"] .delivery-mini-line {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+[data-theme="tinto"] .delivery-mini-line i {
+  --line: var(--line-agents, #1b5e8c);
+  box-sizing: border-box;
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: var(--line);
+}
+[data-theme="tinto"] .delivery-mini-line .delivery-mini-line__step {
+  --line: var(--line-delivery, #1f7a5a);
+}
+[data-theme="tinto"]
+  .delivery-mini-line
+  i:not(.delivery-mini-line__step)
+  + .delivery-mini-line__step {
+  margin-left: 4px;
+}
+[data-theme="tinto"] .delivery-mini-line [data-station="running"] {
+  background: radial-gradient(circle, var(--line) 0 0.75px, var(--bg) 1px);
+}
+[data-theme="tinto"] .delivery-mini-line [data-station="repeats"] {
+  background: var(--bg);
+}
+[data-theme="tinto"] .delivery-mini-line [data-station="pending"] {
+  border-color: var(--fg-muted);
+  background: var(--bg);
+}
+[data-theme="tinto"] .delivery-mini-line [data-station="yours"] {
+  border: 2px solid var(--warn);
+  background: var(--bg);
+}
+[data-theme="tinto"] .delivery-mini-line [data-station="broke"] {
+  border-color: var(--danger);
+  border-radius: 0;
+  background: var(--danger);
+}
+
 .delivery-request {
   display: grid;
   gap: 8px;

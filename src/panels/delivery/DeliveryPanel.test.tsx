@@ -6,6 +6,7 @@ import type { AgentSession } from "../../bus/contract";
 import { agentSessionStore } from "../../agent/sessionStore";
 import { setWindowsHostOverrideForTests } from "../../workbench/platform";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../../workspace/actions";
+import { THEME_STORAGE_KEY, themeStore, type ThemeSetting } from "../../qol/theme";
 import type {
   DeliveryApproval,
   DeliveryDecision,
@@ -654,6 +655,27 @@ describe("DeliveryPanel", () => {
     expect(within(changes).getByText("−")).toBeInTheDocument();
     expect(screen.getByText("11111111 → 22222222")).toBeInTheDocument();
     expect(screen.getByText("Implement the parser change.")).toBeInTheDocument();
+  });
+
+  it("ends each task row with its stages as a small line only in the Tinto theme", async () => {
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    act(() => themeStore.set("tinto" as ThemeSetting));
+    try {
+      renderPanel();
+      await screen.findByRole("heading", { name: /AGOS-501/ });
+      const list = screen.getByRole("navigation", { name: "Tareas de Delivery" });
+      const row = within(list).getByText("Fix the thing").closest("button")!;
+      const marks = [...row.querySelectorAll(".delivery-mini-line i")].map((mark) =>
+        mark.getAttribute("data-station"),
+      );
+      // Alcance, tests (passed), implementation, review, QA, then the six steps.
+      expect(marks).toEqual(["pending", "passed", ...Array<string>(9).fill("pending")]);
+      act(() => themeStore.set("dark"));
+      expect(row.querySelector(".delivery-mini-line")).toBeNull();
+    } finally {
+      themeStore.set("dark");
+      localStorage.removeItem(THEME_STORAGE_KEY);
+    }
   });
 
   it("counts the running agents without a meter when the capacity has no limit", async () => {

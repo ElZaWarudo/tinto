@@ -916,6 +916,174 @@ export function roundRung(
   return !approval || approval.requested_at_ms < round.opened_at_ms;
 }
 
+/** How a delivery step reads from its latest approval. */
+export function rungStep(approval: DeliveryApproval | undefined): {
+  tone: Tone | "todo";
+  icon: StatusIcon;
+  label: string;
+  title?: string;
+} {
+  if (!approval) return { tone: "todo", icon: "ring", label: "—" };
+  switch (approval.status) {
+    case "pending":
+      return { tone: "step", icon: "flag", label: "Tu aprobación" };
+    case "approved":
+      return { tone: "waiting", icon: "clock", label: "Lo hace el coordinador" };
+    case "executed":
+      if (approval.conflicts?.length)
+        return {
+          tone: "attention",
+          icon: "alert",
+          label: `Conflictos en ${approval.conflicts.join(", ")}`,
+          title: approval.outcome ?? undefined,
+        };
+      return {
+        tone: "ok",
+        icon: "check",
+        label: approval.outcome || "Hecho",
+        title: approval.outcome ?? undefined,
+      };
+    case "rejected":
+      return { tone: "danger", icon: "x", label: "Rechazado" };
+    case "undone":
+      return {
+        tone: "todo",
+        icon: "ring",
+        label: "Deshecho",
+        title: approval.outcome ?? undefined,
+      };
+    case "drifted":
+      return {
+        tone: "step",
+        icon: "alert",
+        label: "Ya no coincide",
+        title: approval.notice ?? undefined,
+      };
+    default:
+      return { tone: "danger", icon: "x", label: "Falló", title: approval.outcome ?? undefined };
+  }
+}
+
+/** Where a stage stands on the task's line, said by the form of its station:
+ *  passed, running, still to come, to run again in this round, waiting on the
+ *  user, or broken. */
+export type Station = "passed" | "running" | "pending" | "repeats" | "yours" | "broke";
+
+/** A stage of the track (Agentes): its latest attempt and how it reads. */
+export interface AgentStop {
+  role: string;
+  job: DeliveryJob | undefined;
+  /** It reads as the open round says, not as its own attempt went. */
+  inRound: boolean;
+  tone: Tone | "todo";
+  label: string;
+  title?: string;
+  station: Station;
+}
+
+/** A step of the track (Entrega): its latest approval and how it reads. */
+export interface StepStop {
+  step: DeliveryStep;
+  approval: DeliveryApproval | undefined;
+  tone: Tone | "todo";
+  icon: StatusIcon;
+  label: string;
+  title?: string;
+  station: Station;
+}
+
+export interface TaskTrack {
+  agents: AgentStop[];
+  steps: StepStop[];
+}
+
+/** The station a tone draws. A neutral note (findings, news on the PR, a
+ *  wait) says nothing of progress: `done` says whether its stage was reached. */
+function stationOf(tone: Tone | "todo", done: boolean): Station {
+  switch (tone) {
+    case "ok":
+      return "passed";
+    case "live":
+      return "running";
+    case "step":
+      return "yours";
+    case "danger":
+      return "broke";
+    default:
+      return done ? "passed" : "pending";
+  }
+}
+
+/** The task's stages and delivery steps as its track shows them, in order:
+ *  the one reading both the stage strip and the list row's line draw. */
+export function taskTrack(overview: DeliveryOverview, task: DeliveryTask): TaskTrack {
+  const jobs = jobsOf(overview, task.id);
+  const verdicts = verdictsOf(overview, task.id);
+  const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
+  const decisions = (overview.decisions ?? []).filter((decision) => decision.task_id === task.id);
+  const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
+  const next = nextStageOf(overview, task.id);
+  const round = roundOf(overview, task.id);
+  const agents = rolesOf(jobs).map((role): AgentStop => {
+    const job = latestOfRole(jobs, role);
+    const inRound = roundStage(role, job, verdicts, round);
+    const scope = role === SCOPE_ROLE ? scopeOutcome(task, job, jobs, decisions) : null;
+    const outcome: { tone: Tone | "todo"; label: string; title?: string } = inRound
+      ? { ...inRound, label: role === next ? "Siguiente" : inRound.label }
+      : (scope ??
+        (job
+          ? attemptOutcome(job, jobs, verdicts)
+          : { tone: "todo", label: role === next ? "Siguiente" : "—" }));
+    // Reached, under a neutral note: findings open or answered, Alcance skipped.
+    const done =
+      outcome.tone === "attention" ||
+      (!!job && !!verdicts[job.id]?.answered) ||
+      (role === SCOPE_ROLE && !!task.scope_skip && !(job && isOpen(job)));
+    return {
+      role,
+      job,
+      inRound: !!inRound,
+      ...outcome,
+      station: inRound?.tone === "todo" ? "repeats" : stationOf(outcome.tone, done),
+    };
+  });
+  const steps = trackSteps(stepsOf(overview, task.id), approvals).map((step): StepStop => {
+    const live = step.rung === "pr" && pr ? prSummary(pr) : null;
+    const approval = latestStep(approvals, step);
+    const unlinked = step.rung === "pr" && !pr && approval?.status === "executed";
+    const before = rungStep(approval);
+    const repeats = roundRung(step, approval, round);
+    const shown = repeats
+      ? {
+          tone: "todo" as const,
+          icon: "ring" as const,
+          label: "Se repetirá",
+          // What it was before the round, for who asks.
+          title: `Se repetirá en esta ronda${approval ? `. Antes: ${before.title ?? before.label}` : ""}`,
+        }
+      : live
+        ? { ...live, title: `${pr?.repo}#${pr?.number}` }
+        : unlinked
+          ? {
+              // Done, and nothing the user has to give: neutral.
+              tone: "waiting" as const,
+              icon: "alert" as const,
+              label: "Hecho · sin PR vinculado",
+              title: approval.outcome ?? undefined,
+            }
+          : before;
+    // The PR open, or done without a link, is a step taken; approved, the
+    // coordinator is taking it.
+    const station: Station = repeats
+      ? "repeats"
+      : !live && approval?.status === "approved"
+        ? "running"
+        : stationOf(shown.tone, !!live || unlinked || shown.tone === "attention");
+    return { step, approval, ...shown, station };
+  });
+  return { agents, steps };
+}
+
 function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number): TaskStatus {
   const phase = phaseOf(overview, task.id);
   const attention = (label: string, icon: StatusIcon = "flag"): TaskStatus => ({
