@@ -81,6 +81,7 @@ const drawerApi = {
 export function CoordinatorDock({
   runs,
   focus = null,
+  request = null,
   overview,
   stalls,
   onHideStall,
@@ -91,6 +92,9 @@ export function CoordinatorDock({
   runs: DeliveryRun[];
   /** The batch shown until the user picks another; else the first. */
   focus?: string | null;
+  /** An explicit request to show `focus` (a stopped coordinator opened from
+   *  the queue): each new one, even for the same batch, drops the one picked. */
+  request?: object | null;
   overview: DeliveryOverview;
   /** Batches whose coordinator stopped with changes unread (not hidden). */
   stalls: CoordinatorStall[];
@@ -101,10 +105,11 @@ export function CoordinatorDock({
 }) {
   const sessions = useAgentSessionState().sessions;
   const actions = useWorkspaceActions();
-  // The batch the user picked, while the one to show is still the same: a new
-  // one to show (the queue's stopped coordinator) wins over it.
-  const [chosenRun, setChosenRun] = useState<{ id: string; focus: string | null } | null>(null);
-  const runId = chosenRun?.focus === focus ? chosenRun.id : null;
+  // The batch the user picked, while what to show is still the same: a new
+  // batch or request to show (the queue's stopped coordinator) wins over it.
+  const shownFor: unknown = request ?? focus;
+  const [chosenRun, setChosenRun] = useState<{ id: string; shownFor: unknown } | null>(null);
+  const runId = chosenRun && chosenRun.shownFor === shownFor ? chosenRun.id : null;
   const run =
     runs.find((candidate) => candidate.id === (runId ?? focus)) ??
     runs.find((candidate) => candidate.id === focus) ??
@@ -335,7 +340,7 @@ export function CoordinatorDock({
                   aria-label="Lote"
                   value={run.id}
                   onChange={(event) => {
-                    setChosenRun({ id: event.target.value, focus });
+                    setChosenRun({ id: event.target.value, shownFor });
                     setPicked(null);
                   }}
                 >

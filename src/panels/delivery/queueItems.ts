@@ -132,19 +132,24 @@ function broke(
   return need ? { need, ask: null, inPlace: null } : null;
 }
 
-/** The PRs to review that belong to the repo of `tasks`: only those of the
- *  GitHub repository one of its tasks' PRs is in (a folder's name says nothing
- *  of whose repository it is; the header's menu lists every request). */
+/** The PRs to review that belong to `repo`: those of the GitHub repository a
+ *  task's PR is in (a folder's name says nothing of whose repository it is;
+ *  the header's menu lists every request). Two checkouts of one repository:
+ *  the request goes to the first one's queue in the overview's order, once. */
 function reviewsOf(
   overview: DeliveryOverview,
-  tasks: DeliveryTask[],
+  repo: string | undefined,
   reviews: DeliveryReviewRequest[],
 ): DeliveryReviewRequest[] {
-  const ids = new Set(tasks.map((task) => task.id));
-  const known = new Set(
-    (overview.prs ?? []).filter((pr) => ids.has(pr.task_id)).map((pr) => pr.repo.toLowerCase()),
-  );
-  return reviews.filter((review) => known.has(review.repo.toLowerCase()));
+  const owner = (review: DeliveryReviewRequest) => {
+    const task = overview.tasks.find((candidate) =>
+      (overview.prs ?? []).some(
+        (pr) => pr.task_id === candidate.id && pr.repo.toLowerCase() === review.repo.toLowerCase(),
+      ),
+    );
+    return task ? repoKey(task.repo) : null;
+  };
+  return repo ? reviews.filter((review) => owner(review) === repoKey(repo)) : [];
 }
 
 /** A step approved from the queue itself: one approved in one click that
@@ -171,9 +176,12 @@ function batchHolds(
   const paused = [...new Set(held("batch_paused").map((task) => task.run_id))].flatMap(
     (runId) => overview.runs.find((run) => run.id === runId) ?? [],
   );
-  const proposing = new Set(held("settings_proposal").map((task) => task.id));
+  // Every pending proposal of the repo, whatever its task's phase: the batch
+  // still waits on one whose task is gone.
+  const repo = batch?.repo ?? tasks[0]?.repo;
   const proposals = (overview.settings_proposals ?? []).filter(
-    (proposal) => proposal.status === "pending" && proposing.has(proposal.task_id),
+    (proposal) =>
+      proposal.status === "pending" && !!repo && repoKey(proposal.repo) === repoKey(repo),
   );
   return [
     ...stalls.map((stall) =>
@@ -204,8 +212,11 @@ function batchHolds(
         inPlace: { kind: "resume", runId: run.id },
       }),
     ),
-    ...proposals.map((proposal) => {
-      const task = tasks.find((candidate) => candidate.id === proposal.task_id)!;
+    ...proposals.flatMap((proposal) => {
+      // In the task that made it; once that one is gone, in the repo's first:
+      // every task of the repo shows the repo's proposals.
+      const task = tasks.find((candidate) => candidate.id === proposal.task_id) ?? tasks[0];
+      if (!task) return [];
       return item({
         key: `proposal:${proposal.id}`,
         kind: "holds",
@@ -299,14 +310,15 @@ export function deliveryQueue(
       );
     }
   }
-  const toReview: QueueItem[] = reviewsOf(overview, tasks, reviews).map((review) =>
-    item({
-      key: `review:${review.url}`,
-      kind: "review",
-      title: `PR #${review.number} · ${review.author}`,
-      need: review.draft ? `${review.title} · borrador` : review.title,
-      review,
-    }),
+  const toReview: QueueItem[] = reviewsOf(overview, batch?.repo ?? tasks[0]?.repo, reviews).map(
+    (review) =>
+      item({
+        key: `review:${review.url}`,
+        kind: "review",
+        title: `PR #${review.number} · ${review.author}`,
+        need: review.draft ? `${review.title} · borrador` : review.title,
+        review,
+      }),
   );
   return [...holds, ...broken, ...toReview];
 }

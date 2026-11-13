@@ -87,17 +87,20 @@ function Dock({
   runs,
   open = true,
   focus = null,
+  request = null,
   stalled = [],
 }: {
   runs: DeliveryRun[];
   open?: boolean;
   focus?: string | null;
+  request?: object | null;
   stalled?: string[];
 }) {
   return (
     <CoordinatorDock
       runs={runs}
       focus={focus}
+      request={request}
       overview={overview}
       stalls={stalled.map((id) => ({
         run: runs.find((candidate) => candidate.id === id)!,
@@ -282,6 +285,21 @@ describe("CoordinatorDock", () => {
     await waitFor(() =>
       expect(client.handOverDeliveryRun).toHaveBeenCalledWith(["r1", "r3"], "s-new"),
     );
+  });
+
+  it("opens on the stopped batch asked again, over another one picked since", async () => {
+    const user = userEvent.setup();
+    const runs = [run({ id: "r1", title: "Lote A" }), run({ id: "r2", title: "Lote B" })];
+    const { rerender } = render(
+      <Dock runs={runs} focus="r1" request={{ kind: "stall" }} stalled={["r1"]} />,
+    );
+    const batch = () => screen.getByRole("combobox", { name: "Lote" });
+    await user.selectOptions(batch(), "r2");
+    expect(batch()).toHaveValue("r2");
+    // The same batch asked once more: a new request, so it shows again.
+    rerender(<Dock runs={runs} focus="r1" request={{ kind: "stall" }} stalled={["r1"]} />);
+    expect(batch()).toHaveValue("r1");
+    expect(screen.getByRole("group", { name: "Coordinador parado" })).toBeInTheDocument();
   });
 
   it("starts nothing without a batch ticked", async () => {

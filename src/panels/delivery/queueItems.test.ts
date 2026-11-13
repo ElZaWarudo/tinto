@@ -8,6 +8,7 @@ import type {
   DeliveryPr,
   DeliveryReviewRequest,
   DeliveryRun,
+  DeliverySettingsProposal,
   DeliveryTask,
   DeliveryTaskPhase,
   DeliveryWaiter,
@@ -366,9 +367,40 @@ describe("deliveryQueue", () => {
     ]);
     // A folder named like a repository says nothing of whose it is.
     expect(queue(overview(), reviews)).toEqual([]);
+    // Two checkouts of one repository, each with a task's PR: the request is
+    // counted once, in the first one's queue.
+    const CLONE = "C:\\work\\agentos-2";
+    const both = overview({
+      tasks: [task("t1"), { ...task("t2"), repo: CLONE }],
+      prs: [pr(), pr({ task_id: "t2", number: 6 })],
+    });
+    const reviewsIn = (repo: string) =>
+      deliveryQueue(
+        both,
+        both.tasks.filter((one) => one.repo === repo),
+        reviews,
+        0,
+        () => false,
+        { repo, stalls: [], hiddenStalls: [], guides: [] },
+      ).filter((item) => item.review).length;
+    expect([reviewsIn(REPO), reviewsIn(CLONE)]).toEqual([1, 0]);
   });
 
   const stall = { run: RUN, unread: 2, since: 5 };
+  const proposal: DeliverySettingsProposal = {
+    id: "p1",
+    repo: REPO,
+    task_id: "t1",
+    run_id: "r1",
+    reason: "",
+    changes: {},
+    status: "pending",
+    approved: null,
+    requested_by: "coord",
+    requested_at_ms: 1,
+    decided_by: null,
+    decided_at_ms: null,
+  };
   it.each<[string, Partial<DeliveryOverview>, Partial<Omit<BatchWaits, "repo">>, object[]]>([
     [
       "a stopped coordinator, opened on its batch",
@@ -429,26 +461,25 @@ describe("deliveryQueue", () => {
     [
       "a settings proposal, once, in the task that holds it",
       {
+        tasks: [task("t1"), task("t2")],
         phases: { t1: phase({ kind: "settings_proposal" }) },
-        settings_proposals: [
-          {
-            id: "p1",
-            repo: REPO,
-            task_id: "t1",
-            run_id: "r1",
-            reason: "",
-            changes: {},
-            status: "pending",
-            approved: null,
-            requested_by: "coord",
-            requested_at_ms: 1,
-            decided_by: null,
-            decided_at_ms: null,
-          },
-        ],
+        settings_proposals: [proposal],
       },
       {},
-      [{ key: "proposal:p1", need: "Aprobar cambio de ajustes", ask: "settings" }],
+      [
+        {
+          key: "proposal:p1",
+          need: "Aprobar cambio de ajustes",
+          ask: "settings",
+          task: expect.objectContaining({ id: "t1" }),
+        },
+      ],
+    ],
+    [
+      "a settings proposal whose task is gone, in a task of the repo that shows it",
+      { tasks: [task("t2")], settings_proposals: [proposal] },
+      {},
+      [{ key: "proposal:p1", ask: "settings", task: expect.objectContaining({ id: "t2" }) }],
     ],
     [
       "a task held by a blocker nobody works on, in the block that lists it",

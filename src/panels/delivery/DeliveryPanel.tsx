@@ -1054,9 +1054,10 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     }
   };
   // Goes to what waits on the user, in the view that holds it; a repo in a
-  // window of its own only comes forward.
+  // window of its own only comes forward. A repo's own window is that view.
   const goTo = (repo: string, what: Asked) => {
-    if (!(repoKey(repo) in detached)) setAsked(what);
+    const here = only ? repoKey(only) === repoKey(repo) : !(repoKey(repo) in detached);
+    if (here) setAsked(what);
   };
   // The PRs that wait for the user's review, wherever they are: read on
   // opening and every so often, and left out while GitHub cannot be read.
@@ -1694,22 +1695,26 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       ? asked
       : null;
   const [coordinatorOpen, setCoordinatorOpen] = useState(false);
-  const [coordinatorRun, setCoordinatorRun] = useState<string | null>(null);
+  // The request that opened the sheet on a stopped batch: each one, even for
+  // the same batch, shows that batch over one picked in the sheet since.
+  const [coordinatorAsk, setCoordinatorAsk] = useState<Extract<Asked, { kind: "stall" }> | null>(
+    null,
+  );
   if (askedStall && askedStall !== seenAsk) {
     setSeenAsk(askedStall);
-    setCoordinatorRun(askedStall.runId);
+    setCoordinatorAsk(askedStall);
     setCoordinatorOpen(true);
   }
-  // Or a row of its queue answered in place: its control gets the focus.
+  // Or a row of its queue answered in place: the queue shows again (settings
+  // closed), and its control gets the focus once drawn.
   const askedRow = asked?.kind === "queue" && repoKey(asked.repo) === key ? asked : null;
+  if (askedRow && askedRow !== seenAsk) {
+    setSeenAsk(askedRow);
+    setSettingsAt(null);
+  }
   useEffect(() => {
     if (askedGuides || askedStall) settleAsked();
-    if (!askedRow) return;
-    settleAsked();
-    const row = document.querySelector(`[data-queue-key="${CSS.escape(askedRow.key)}"]`);
-    row?.scrollIntoView?.({ block: "nearest" });
-    row?.querySelector<HTMLElement>(".delivery-queue__control")?.focus();
-  }, [askedGuides, askedStall, askedRow, settleAsked]);
+  }, [askedGuides, askedStall, settleAsked]);
   const choice = repos.find((candidate) => repoKey(candidate.path) === key) ?? {
     path: repo,
     distro: null,
@@ -1791,6 +1796,22 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         (id) => drafted.split("\n").includes(id),
       )
     : [];
+  // The asked row's control, focused once drawn; a row gone meanwhile (the
+  // batch resumed elsewhere) settles the request too.
+  const queueKeys = queue.map((item) => item.key).join("\n");
+  useEffect(() => {
+    if (!askedRow) return;
+    if (!queueKeys.split("\n").includes(askedRow.key)) {
+      settleAsked();
+      return;
+    }
+    const row = document.querySelector(`[data-queue-key="${CSS.escape(askedRow.key)}"]`);
+    const control = row?.querySelector<HTMLElement>(".delivery-queue__control");
+    if (!control) return;
+    row?.scrollIntoView?.({ block: "nearest" });
+    control.focus();
+    settleAsked();
+  }, [askedRow, queueKeys, settingsAt, settleAsked]);
   // "Ver": the task, on what it asks; a batch's item, where it is answered.
   const showAsk = (item: QueueItem) => {
     if (item.task) reveal(item.task);
@@ -2272,7 +2293,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         {overview && activeRuns.length > 0 && (
           <CoordinatorDock
             runs={activeRuns}
-            focus={coordinatorRun ?? lot}
+            focus={coordinatorAsk?.runId ?? lot}
+            request={coordinatorAsk}
             overview={overview}
             stalls={repoStalls}
             onHideStall={shared.hideStall}
@@ -2280,7 +2302,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
             onOpenChange={(open) => {
               setCoordinatorOpen(open);
               // Closed, it shows the batch the list does again.
-              if (!open) setCoordinatorRun(null);
+              if (!open) setCoordinatorAsk(null);
             }}
           />
         )}
