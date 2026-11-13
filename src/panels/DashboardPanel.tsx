@@ -275,6 +275,15 @@ export function DashboardPanel() {
     state.config?.active ?? null,
     state.snapshotStatus === "ready",
   );
+  // Reveal the ledger only when this mount actually showed the loading state;
+  // dockview re-attaching an already loaded panel should not replay it.
+  const [sawLoading, setSawLoading] = useState(!loaded);
+  const [revealing, setRevealing] = useState(false);
+  if (!loaded && !sawLoading) setSawLoading(true);
+  if (loaded && sawLoading) {
+    setSawLoading(false);
+    setRevealing(true);
+  }
 
   const activeConfig = (state.config?.workbenches ?? []).find(
     (workbench) => workbench.name === state.config?.active,
@@ -322,7 +331,12 @@ export function DashboardPanel() {
   const blockedCount = allDeltas.filter((repo) => repo.error).length;
 
   return (
-    <div className="dashboard">
+    <div
+      className={revealing ? "dashboard dashboard--revealing" : "dashboard"}
+      onAnimationEnd={(e) => {
+        if (e.animationName === "dashboard-reveal") setRevealing(false);
+      }}
+    >
       <div className="dashboard__status-band" aria-label="Estado del workbench">
         <div className="dashboard__status-title">
           <span className="dashboard__status-label">Bitácora del workbench</span>

@@ -266,6 +266,23 @@ describe("RepoCard", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  it("confirms a successful fetch, then returns to idle", async () => {
+    vi.useFakeTimers();
+    try {
+      renderCard({}, { source: "local", onFetch: vi.fn(() => Promise.resolve()) });
+      const fetchButton = screen.getByTestId("repo-card-fetch");
+      fireEvent.click(fetchButton);
+      await act(async () => {});
+      expect(fetchButton).toHaveTextContent(/^Actualizado$/);
+      expect(fetchButton).toHaveAttribute("data-state", "done");
+
+      act(() => vi.advanceTimersByTime(1500));
+      expect(fetchButton).toHaveTextContent(/^Actualizar$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("offers the same opt-in fetch for WSL repos and hides it without an upstream", () => {
     const onFetch = vi.fn(() => Promise.resolve());
     renderCard({}, { source: "wsl", onFetch });
