@@ -4,6 +4,19 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.4.2] - 2026-11-13
+
+### Features
+
+- **delivery:** one queue for everything that needs you, one phrase per state
+
+### Fixes
+
+- **delivery:** a stopped coordinator's notice takes the focus when the queue opens it
+- **delivery:** a proposal with no task left still reaches you, and a jump leaves the settings page
+- **delivery:** the queue keeps a proposal whose task is gone, and a stall jump opens its own batch
+- **delivery:** a task that waits for another task or a PR stays out of the queue
+
 ## [1.4.1] - 2026-11-13
 
 ### Features
