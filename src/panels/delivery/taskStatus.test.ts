@@ -19,7 +19,6 @@ import {
   costOf,
   historyKey,
   entryTasks,
-  issueProgress,
   issueRowId,
   packageState,
   taskListGroups,
@@ -883,11 +882,9 @@ describe("an issue delivered in packages", () => {
     ],
   });
 
-  it("names each package and says where the issue's packages stand", () => {
+  it("names each package", () => {
     expect(taskLabel(ui)).toBe("AGOS-432 · 2/2");
     expect(taskLabel(task)).toBe("AGOS-501");
-    expect(issueProgress(split, ui)).toBe("1/2 fusionado · 2/2 en QA");
-    expect(issueProgress(split, task)).toBeNull();
   });
 
   it("ends a middle package's ladder at its merge", () => {

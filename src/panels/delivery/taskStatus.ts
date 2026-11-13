@@ -565,18 +565,6 @@ export function packageState(
   return packageWhere(overview, pkg.task_id);
 }
 
-/** "1/2 fusionado · 2/2 en QA": where each package of the task's split
- *  issue stands; null for a task that is a whole issue. */
-export function issueProgress(overview: DeliveryOverview, task: DeliveryTask): string | null {
-  const issue = splitIssueOf(overview, task);
-  if (!issue) return null;
-  const parts = [];
-  for (let index = 1; index <= issue.of; index++) {
-    parts.push(`${index}/${issue.of} ${packageState(overview, issue, index)}`);
-  }
-  return parts.join(" · ");
-}
-
 /** A row of the task list: a task, or a split issue holding its packages in order. */
 export type TaskListEntry =
   | { kind: "task"; task: DeliveryTask }
