@@ -91,7 +91,11 @@ export function FullFileView({
   }
   if (content === undefined) {
     return (
-      <div className="full-file full-file--loading" data-testid="full-loading" role="status">
+      <div
+        className="full-file full-file--loading loading-reveal"
+        data-testid="full-loading"
+        role="status"
+      >
         Cargando…
       </div>
     );

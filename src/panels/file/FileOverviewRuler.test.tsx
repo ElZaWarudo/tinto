@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -266,6 +266,26 @@ describe("FileOverviewRuler", () => {
     expect(button).toHaveClass("file-overview-ruler__mark--active");
     expect(button).toHaveAttribute("data-marker-line", "42");
     expect(button).not.toHaveAttribute("data-line");
+  });
+
+  it("marks the line a marker click lands on, but not a keyboard jump", () => {
+    vi.useFakeTimers();
+    try {
+      const { ref, node } = makeBody(100);
+      const markers: FileOverviewMarker[] = [{ line: 42, severity: "critical", label: "Secret" }];
+      render(<FileOverviewRuler markers={markers} totalLines={100} bodyRef={ref} />);
+      const landed = () => node.querySelectorAll(".file-overview-ruler__landing");
+
+      fireEvent.click(screen.getByRole("button"));
+      expect(node.querySelector('[data-line="42"]')).toHaveClass("file-overview-ruler__landing");
+      act(() => vi.advanceTimersByTime(600));
+      expect(landed()).toHaveLength(0);
+
+      fireEvent.keyDown(screen.getByTestId("file-overview-ruler-track"), { key: "ArrowDown" });
+      expect(landed()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores rail marker attributes when resolving a jump target", () => {

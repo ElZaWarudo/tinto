@@ -368,7 +368,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
           // or the initial load is still in flight: show a spinner instead of a
           // premature "no changes" flash.
           <div
-            className="file-view__loading"
+            className="file-view__loading loading-reveal"
             data-testid="diff-loading"
             role="status"
             aria-live="polite"

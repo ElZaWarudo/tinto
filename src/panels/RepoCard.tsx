@@ -3,7 +3,7 @@
 // agent launch, and the latest commit. A single click opens the project; files
 // are drilled into via the project's own explorer, not here.
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   cancelAgentInstall,
   confirmAgentInstall,
@@ -486,6 +486,9 @@ function RepoCardImpl({
   const { status, branch, head, error } = delta;
   const [fetching, setFetching] = useState(false);
   const [fetchMessage, setFetchMessage] = useState<string | null>(null);
+  const [fetchDone, setFetchDone] = useState(false);
+  const fetchDoneTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(fetchDoneTimer.current), []);
   const active = nowMs - activityMs < ACTIVITY_WINDOW_MS;
   const upstream = upstreamLabel(branch);
   const hasRemoteUpstream = branch?.ahead != null && branch?.behind != null;
@@ -512,7 +515,13 @@ function RepoCardImpl({
     if (!onFetch || fetching) return;
     setFetching(true);
     setFetchMessage(null);
+    setFetchDone(false);
+    window.clearTimeout(fetchDoneTimer.current);
     Promise.resolve(onFetch())
+      .then(() => {
+        setFetchDone(true);
+        fetchDoneTimer.current = window.setTimeout(() => setFetchDone(false), 1500);
+      })
       .catch((e) =>
         setFetchMessage(
           reportActionFailure(
@@ -586,8 +595,9 @@ function RepoCardImpl({
               type="button"
               className="repo-card__fetch"
               data-testid="repo-card-fetch"
+              data-state={fetching ? "fetching" : fetchDone ? "done" : "idle"}
               aria-label={`${
-                fetching ? "Actualizando" : "Actualizar"
+                fetching ? "Actualizando" : fetchDone ? "Actualizado:" : "Actualizar"
               } referencias remotas de ${name}`}
               title="Actualizar las referencias remotas de este repo"
               disabled={fetching}
@@ -597,7 +607,7 @@ function RepoCardImpl({
               }}
               onKeyDown={(e) => e.stopPropagation()}
             >
-              {fetching ? "Actualizando…" : "Actualizar"}
+              {fetching ? "Actualizando…" : fetchDone ? "Actualizado" : "Actualizar"}
             </button>
           )}
         </div>

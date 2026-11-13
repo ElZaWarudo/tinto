@@ -1,5 +1,7 @@
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 
+const LANDING_CLASS = "file-overview-ruler__landing";
+const LANDING_MS = 600;
 const MINIMAP_MIN_HEIGHT_PX = 96;
 const MINIMAP_LINE_HEIGHT_PX = 4;
 const MINIMAP_MAX_RENDERED_LINES = 600;
@@ -73,10 +75,26 @@ export function FileOverviewRuler({
     };
   }, [bodyRef]);
 
-  const jumpToLine = (line: number) => {
+  // Mouse jumps mark the line they land on for a moment. The class is set on the
+  // DOM node directly, so a re-render that rewrites its className drops it early.
+  const landing = useRef<{ el: HTMLElement; timer: number } | null>(null);
+  const clearLanding = () => {
+    if (!landing.current) return;
+    window.clearTimeout(landing.current.timer);
+    landing.current.el.classList.remove(LANDING_CLASS);
+    landing.current = null;
+  };
+  useEffect(() => clearLanding, []);
+
+  const jumpToLine = (line: number, markLanding = false) => {
     const root = bodyRef?.current ?? document;
     const lineEl = findLineTarget(root, targetAttribute, line);
     lineEl?.scrollIntoView({ block: "center", inline: "nearest" });
+    if (markLanding && lineEl) {
+      clearLanding();
+      lineEl.classList.add(LANDING_CLASS);
+      landing.current = { el: lineEl, timer: window.setTimeout(clearLanding, LANDING_MS) };
+    }
     setActiveLine(line);
     onActiveLineChange?.(line);
   };
@@ -92,7 +110,7 @@ export function FileOverviewRuler({
     if (rect.height <= 0) return;
     const ratio = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
     const line = Math.max(1, Math.min(totalLines, Math.round(ratio * (totalLines - 1)) + 1));
-    jumpToLine(line);
+    jumpToLine(line, true);
   };
 
   const onTrackKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -251,7 +269,7 @@ export function FileOverviewRuler({
                 data-marker-count={marker.count}
                 data-source={source}
                 data-sources={marker.sources.join(" ")}
-                onClick={() => jumpToLine(marker.line)}
+                onClick={() => jumpToLine(marker.line, true)}
               >
                 <span className="file-overview-ruler__mark-icon" aria-hidden="true">
                   {sourceIcon(source)}

@@ -417,7 +417,7 @@ function RepoOverview({ repo }: { repo: string }) {
             No se pudo cargar el historial de commits.
           </p>
         ) : commits === null ? (
-          <p className="repo-panel__muted" role="status" aria-live="polite">
+          <p className="repo-panel__muted loading-reveal" role="status" aria-live="polite">
             Cargando commits…
           </p>
         ) : commits.length === 0 ? (

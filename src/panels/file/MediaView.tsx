@@ -53,7 +53,11 @@ export function MediaView({ repo, path, kind }: { repo: string; path: string; ki
   }
   if (content === undefined) {
     return (
-      <div className="media-view media-view--state" data-testid="media-loading" role="status">
+      <div
+        className="media-view media-view--state loading-reveal"
+        data-testid="media-loading"
+        role="status"
+      >
         Cargando vista previa…
       </div>
     );
