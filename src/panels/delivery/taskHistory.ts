@@ -14,6 +14,9 @@ export interface HistoryRow {
   attempts: DeliveryJob[];
   /** The check row only: each command's last run, in the order they first ran. */
   checks?: DeliveryJob[];
+  /** The row of its stage's latest job, whatever entry holds it: where a
+   *  stage picked on the track lands. Never the check row. */
+  latest?: boolean;
 }
 
 export interface HistoryEntry {
@@ -69,10 +72,14 @@ function rowsOf(jobs: DeliveryJob[]): HistoryRow[] {
   return [...rows.values()];
 }
 
-/** The task's history, newest first: each round, then the initial delivery.
- *  `jobs` oldest first, as the overview keeps them; `rounds` the task's. */
+/** The task's history, newest first: each round by when it was last opened
+ *  (a resumed round comes back on top, with its own number), then the
+ *  initial delivery. `jobs` oldest first, as the overview keeps them;
+ *  `rounds` the task's. */
 export function taskHistory(jobs: DeliveryJob[], rounds: DeliveryRound[]): HistoryEntry[] {
-  const ordered = [...rounds].sort((a, b) => a.number - b.number);
+  const ordered = [...rounds].sort(
+    (a, b) => a.opened_at_ms - b.opened_at_ms || a.number - b.number,
+  );
   const byRound = new Map<DeliveryRound | null, DeliveryJob[]>([[null, []]]);
   for (const round of ordered) byRound.set(round, []);
   for (const job of jobs) byRound.get(roundOfJob(job, ordered))!.push(job);
@@ -92,6 +99,16 @@ export function taskHistory(jobs: DeliveryJob[], rounds: DeliveryRound[]): Histo
       to: round.closed_at_ms ?? null,
     })),
   ];
+  // Each stage's latest job by creation, wherever it sits.
+  const latest = new Map<string, { row: HistoryRow; at: number }>();
+  for (const row of entries.flatMap((entry) => entry.rows)) {
+    if (row.key === CHECKS_ROW) continue;
+    const seen = latest.get(row.job.role);
+    if (!seen || row.job.created_at_ms >= seen.at) {
+      latest.set(row.job.role, { row, at: row.job.created_at_ms });
+    }
+  }
+  for (const { row } of latest.values()) row.latest = true;
   return entries.reverse();
 }
 

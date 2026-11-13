@@ -2869,7 +2869,7 @@ function TaskDetail({
   const focusStage = (job: DeliveryJob) => {
     const latest = history
       .flatMap((entry) => entry.rows)
-      .find((row) => row.key !== CHECKS_ROW && row.job.role === job.role);
+      .find((row) => row.latest && row.job.role === job.role);
     setExpandedJobId(latest?.job.id ?? job.id);
     if (historyFold.current) historyFold.current.open = true;
     const row = document.getElementById(`delivery-stage-${task.id}-${job.role}`);
@@ -5341,8 +5341,10 @@ function DeliveryRequest({
 
 /** The history's line beside its title: how many rounds and the latest's cause. */
 function historyGist(entries: HistoryEntry[]): string {
+  // The last one opened (a resumed round comes back on top); counted to the highest number.
   const last = entries[0].round;
-  return last ? `${last.number} rondas · última: ${last.short}` : "Entrega inicial";
+  const count = Math.max(...entries.map((entry) => entry.round?.number ?? 1));
+  return last ? `${count} rondas · última: ${last.short}` : "Entrega inicial";
 }
 
 /** Rounds shown open, then as one line each, before the rest fold away. */
@@ -5367,14 +5369,7 @@ function TaskHistory({
 }) {
   const rounds = entries.slice(0, -1);
   const initial = entries[entries.length - 1];
-  // The stage track scrolls to a stage's most recent row.
-  const anchored = new Set<HistoryRow>();
-  const seen = new Set<string>();
-  for (const row of entries.flatMap((entry) => entry.rows)) {
-    if (row.key === CHECKS_ROW || seen.has(row.job.role)) continue;
-    seen.add(row.job.role);
-    anchored.add(row);
-  }
+  // The stage track scrolls to the row of the stage's latest job.
   const entry = (shown: HistoryEntry, open: boolean) => (
     <HistoryRound
       key={shown.round?.id ?? "initial"}
@@ -5382,7 +5377,7 @@ function TaskHistory({
       open={open}
       now={now}
       rows={shown.rows.map((row) =>
-        renderRow(row, anchored.has(row) ? `delivery-stage-${taskId}-${row.job.role}` : undefined),
+        renderRow(row, row.latest ? `delivery-stage-${taskId}-${row.job.role}` : undefined),
       )}
     />
   );

@@ -67,6 +67,7 @@ describe("taskHistory", () => {
       jobs: [job("t", 1, { role: "tests" }), job("i", 2), job("r", 3, { role: "review" })],
       rounds: [],
       expected: [[0, [["t"], ["i"], ["r"]]]],
+      latest: ["t", "i", "r"],
     },
     {
       name: "jobs go to the last round opened before them, newest round first",
@@ -77,6 +78,7 @@ describe("taskHistory", () => {
         [2, [["i2"]]],
         [0, [["i"], ["r"]]],
       ],
+      latest: ["i3", "r"],
     },
     {
       name: "what a stage was told about its round wins over the time it was created",
@@ -90,6 +92,7 @@ describe("taskHistory", () => {
         [2, [["told"]]],
         [0, [["i"]]],
       ],
+      latest: ["told"],
     },
     {
       name: "two attempts of a stage in a round are one row, the last shown",
@@ -99,9 +102,31 @@ describe("taskHistory", () => {
         [2, [["i", "i2"], ["r"]]],
         [0, []],
       ],
+      latest: ["i2", "r"],
     },
-  ])("$name", ({ jobs, rounds, expected }) => {
+    {
+      name: "a resumed round comes back on top, with the stage's latest attempt",
+      jobs: [
+        job("i1", 1),
+        job("i3", 12, { round: ["This is round 3 of the task: its work came back."] }),
+        job("i2", 22, { round: ["This is round 2 of the task: its work came back."] }),
+      ],
+      // Round 2, interrupted by round 3, opened again at 20.
+      rounds: [round(2, 20), round(3, 10, 18)],
+      expected: [
+        [2, [["i2"]]],
+        [3, [["i3"]]],
+        [0, [["i1"]]],
+      ],
+      latest: ["i2"],
+    },
+  ])("$name", ({ jobs, rounds, expected, latest }) => {
     expect(shape(jobs, rounds)).toEqual(expected);
+    // Where a stage picked on the track lands: its latest job's row, one per stage.
+    const marked = taskHistory(jobs, rounds).flatMap((entry) =>
+      entry.rows.filter((row) => row.latest).map((row) => row.job.id),
+    );
+    expect(marked).toEqual(latest);
     for (const entry of taskHistory(jobs, rounds)) {
       for (const row of entry.rows) expect(row.job).toBe(row.attempts[row.attempts.length - 1]);
     }
