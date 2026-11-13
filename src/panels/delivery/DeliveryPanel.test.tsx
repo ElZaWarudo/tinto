@@ -363,6 +363,65 @@ describe("DeliveryPanel", () => {
     expect(client.openDeliveryUrl).toHaveBeenCalledWith("https://github.com/o/r/pull/9");
   });
 
+  it("answers a one-click approval from the queue and goes to a decision's task with «Ver»", async () => {
+    const user = userEvent.setup();
+    const push: DeliveryApproval = {
+      id: "a1",
+      task_id: "t1",
+      rung: "push",
+      title: "Publicar delivery/agos-501",
+      body: "",
+      status: "pending",
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: null,
+      executed_at_ms: null,
+      outcome: null,
+    };
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task(), task({ id: "t2", key: "AGOS-502", title: "Second" })],
+        phases: {
+          t1: phase({ kind: "approval", rung: "push", stage: null }),
+          t2: phase({ kind: "decisions", count: 1 }),
+        },
+        approvals: [push],
+        decisions: [
+          {
+            id: "d1",
+            task_id: "t2",
+            kind: "choice",
+            question: "¿Instalamos también para Codex?",
+            detail: "",
+            options: [{ label: "Sí", consequence: "", recommended: true }],
+            text: "",
+            command: null,
+            undo: "",
+            status: "pending",
+            answer: null,
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_by: null,
+            decided_at_ms: null,
+          },
+        ],
+      }),
+    );
+    client.decideDeliveryApproval.mockResolvedValue({ ...push, status: "approved" });
+    renderPanel();
+    expect(await screen.findByRole("heading", { name: /AGOS-501/ })).toBeInTheDocument();
+    const queue = screen.getByRole("region", { name: "Te necesita" });
+    expect(queue).toHaveTextContent("Aprobar push · Publicar delivery/agos-501");
+    await user.click(within(queue).getByRole("button", { name: "Aprobar y publicar: AGOS-501" }));
+    await waitFor(() => expect(client.decideDeliveryApproval).toHaveBeenCalledWith("a1", true));
+
+    await user.click(within(queue).getByRole("button", { name: "Ver AGOS-502: 1 decisión" }));
+    expect(await screen.findByRole("heading", { name: /AGOS-502/ })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Decisiones pendientes" })).toHaveTextContent(
+      "¿Instalamos también para Codex?",
+    );
+  });
+
   it("gives each repo its own tab with only its tasks", async () => {
     const user = userEvent.setup();
     const other = "C:\\work\\tinto";
@@ -1492,12 +1551,15 @@ describe("DeliveryPanel", () => {
     expect(within(group).getByText(/preparado por/)).toHaveTextContent("el coordinador coord");
     expect(within(group).getByText(/No publica nada/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1 tarea te necesita" })).toBeInTheDocument();
-    expect(
-      within(screen.getByRole("region", { name: "Te necesitan" })).getByText("Aprobar commit"),
-    ).toBeInTheDocument();
+    const queue = screen.getByRole("region", { name: "Te necesita" });
+    expect(within(queue).getByText("Aprobar commit · AGOS-501: Fix the thing")).toBeInTheDocument();
+    const inQueue = { name: "Aprobar y hacer commit: AGOS-501" };
+    expect(within(queue).getByRole("button", inQueue)).toBeInTheDocument();
     const title = within(group).getByRole("textbox", { name: "Título" });
     await user.clear(title);
     await user.type(title, "AGOS-501: Reject empty input");
+    // Edited, it is approved only where the user edited it, never from the queue.
+    expect(within(queue).queryByRole("button", inQueue)).toBeNull();
     // Hidden and opened again, the step keeps the edited text, and its line
     // no longer approves it without it.
     await user.click(screen.getByRole("button", { name: "Revisar commit" }));
@@ -2412,9 +2474,7 @@ describe("DeliveryPanel", () => {
     const pending = await screen.findByRole("region", { name: "Decisiones pendientes" });
     expect(pending).toHaveTextContent("2 pendientes");
     expect(
-      within(screen.getByRole("region", { name: "Te necesitan" })).getByText(
-        "2 decisiones pendientes",
-      ),
+      within(screen.getByRole("region", { name: "Te necesita" })).getByText("2 decisiones"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Lanzar implementación" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Otra etapa…" })).toBeDisabled();
@@ -2498,11 +2558,15 @@ describe("DeliveryPanel", () => {
     const card = await screen.findByRole("region", { name: "Cambios de ajustes por aprobar" });
     expect(card).toHaveTextContent("AGOS-474 necesita correr los tests de memories y del frontend");
     expect(card).toHaveTextContent("Lo pide coord");
+    // A settings change is the batch's: its task's row says it, the queue leaves it out.
     expect(
-      within(screen.getByRole("region", { name: "Te necesitan" })).getByText(
+      within(screen.getByRole("region", { name: "En curso" })).getByText(
         "Aprobar cambio de ajustes",
       ),
     ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Te necesita" })).toHaveTextContent(
+      "Nada te necesita.",
+    );
     await waitFor(() => expect(card).toHaveTextContent("antes 2 · después 4"));
     expect(within(card).getByText("npm --prefix cli test")).toBeInTheDocument();
 
@@ -3969,9 +4033,7 @@ describe("DeliveryPanel", () => {
     renderPanel();
     expect(await screen.findByText("Ya no coincide")).toBeInTheDocument();
     expect(
-      within(screen.getByRole("region", { name: "Te necesitan" })).getByText(
-        "Push: ya no coincide",
-      ),
+      within(screen.getByRole("region", { name: "Te necesita" })).getByText("Push: ya no coincide"),
     ).toBeInTheDocument();
     expect(
       within(screen.getByRole("group", { name: "Comprobaciones de la entrega" })).getByText(
@@ -4581,7 +4643,9 @@ describe("DeliveryPanel", () => {
     client.changeDeliveryDecision.mockResolvedValue({});
     renderPanel();
     const section = await screen.findByRole("region", { name: "Decidido por el coordinador" });
-    expect(screen.queryByRole("region", { name: "Te necesitan" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Te necesita" })).toHaveTextContent(
+      "Nada te necesita.",
+    );
     expect(screen.getByRole("button", { name: /Lanzar implementación/ })).toBeEnabled();
     await user.click(
       within(section).getByRole("button", { name: "Cambiar «¿Formato del manifiesto?»" }),
@@ -4684,7 +4748,7 @@ describe("DeliveryPanel", () => {
     await user.click(within(section).getByRole("button", { name: "Marcar como visto" }));
     await waitFor(() => expect(client.markDeliveryPrSeen).toHaveBeenCalledWith("t1"));
     expect(
-      within(screen.getByRole("region", { name: "Te necesitan" })).getByText("PR: 3 novedades"),
+      within(screen.getByRole("region", { name: "Te necesita" })).getByText("PR: 3 novedades"),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Preparar merge…" }));

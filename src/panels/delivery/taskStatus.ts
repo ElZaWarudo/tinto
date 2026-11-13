@@ -134,6 +134,83 @@ export function taskAsks(pending: {
   ].filter((ask): ask is TaskAsk => !!ask);
 }
 
+/** The task's latest stage, when it broke and nothing runs again: what the
+ *  task's detail shows to retry. */
+export function brokenJobOf(overview: DeliveryOverview, taskId: string): DeliveryJob | null {
+  const jobs = jobsOf(overview, taskId);
+  const latest = [...jobs]
+    .reverse()
+    .find((job) => job.agent !== "shell" && job.result_state !== "stale" && !job.undone_at_ms);
+  return latest && !jobs.some(isOpen) && verdictsOf(overview, taskId)[latest.id]?.broken
+    ? latest
+    : null;
+}
+
+/** What the task waits on the user for, from the overview: the asks its
+ *  detail shows and the queue lists. */
+export function taskAsksOf(overview: DeliveryOverview, task: DeliveryTask): TaskAsk[] {
+  const pending = overview.approvals.filter(
+    (approval) => approval.task_id === task.id && approval.status === "pending",
+  );
+  return taskAsks({
+    decisions: pendingDecisions(overview, task.id),
+    approvals: pending.filter((approval) => approval.rung !== "pr_reply"),
+    replies: pending.filter((approval) => approval.rung === "pr_reply").length,
+    qaProblems: qaProblemsToDecide(overview, task.id),
+    settingsProposals: pendingSettingsProposals(overview, task).length,
+    broken: brokenJobOf(overview, task.id) !== null,
+    pr: (overview.prs ?? []).find((pr) => pr.task_id === task.id),
+  });
+}
+
+export function files(count: number): string {
+  return count === 1 ? "1 archivo" : `${count} archivos`;
+}
+
+/** What an open step's line says of it: its commits, or its title. */
+export function approvalSummary(approval: DeliveryApproval): string {
+  const commits = approval.commits ?? [];
+  return commits.length > 0
+    ? `${commits.length === 1 ? "1 commit" : `${commits.length} commits`} · ${files(commits.reduce((sum, commit) => sum + commit.paths.length, 0))}`
+    : approval.title;
+}
+
+/** What the button that approves a step says it does. */
+export function approveLabel(
+  approval: DeliveryApproval,
+  pr: DeliveryPr | null | undefined,
+): string {
+  switch (approval.rung) {
+    case "commit":
+      return "Aprobar y hacer commit";
+    case "sync":
+      return "Aprobar y sincronizar";
+    case "push":
+      return "Aprobar y publicar";
+    case "merge":
+      return "Aprobar y fusionar";
+    case "pr":
+      return pr?.state === "open"
+        ? `Aprobar y actualizar el PR #${pr.number}`
+        : "Aprobar y abrir el PR";
+    default:
+      return "Aprobar";
+  }
+}
+
+/** A step approved from its line, with nothing to choose or to read first:
+ *  the PR asks for reviewers, the merge shows its checks, a step Tinto noticed
+ *  something about says it, and a text the user `edited` is approved where
+ *  they edited it. */
+export function approvesInOneClick(approval: DeliveryApproval, edited: boolean): boolean {
+  return (
+    approval.status === "pending" &&
+    ["commit", "sync", "push", "jira"].includes(approval.rung) &&
+    !approval.notice &&
+    !edited
+  );
+}
+
 /** A key that tells the two Jira steps apart. */
 export function stepKey(step: DeliveryStep): string {
   return step.stage ? `${step.rung}-${step.stage}` : step.rung;
@@ -154,21 +231,21 @@ export interface TaskStatus {
   detail?: string;
 }
 
-/** The list's groups: whose turn a task is. What does not wait on the user
- *  is one group, whatever it waits for; each row says that. */
-export type ListGroup = "attention" | "ongoing" | "delivered";
+/** The list's groups: what is under way, whoever it waits for (each row says
+ *  who), and what was delivered. What needs the user is the queue above them. */
+export type ListGroup = "ongoing" | "delivered";
 
 export const GROUPS: { group: ListGroup; label: string }[] = [
-  { group: "attention", label: "Te necesitan" },
   { group: "ongoing", label: "En curso" },
   { group: "delivered", label: "Entregadas" },
 ];
 
-/** A status's order in the list: within "En curso", what runs comes first. */
+/** A status's order in the list: within "En curso", what needs the user comes
+ *  first, then what runs. */
 const STATUS_ORDER: StatusGroup[] = ["attention", "running", "waiting", "idle", "delivered"];
 
 export function listGroup(group: StatusGroup): ListGroup {
-  return group === "attention" || group === "delivered" ? group : "ongoing";
+  return group === "delivered" ? group : "ongoing";
 }
 
 /** The tasks that came to need the user since the previous groups: only a
