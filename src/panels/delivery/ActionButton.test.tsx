@@ -30,14 +30,14 @@ describe("ActionButton", () => {
     expect(screen.getByRole("button", { name: "Otra tarea" })).toBeEnabled();
     finish();
     await waitFor(() => expect(approve).toHaveClass("delivery-action--done"));
-    expect(refresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
     // The group waits for the refresh too.
     await waitFor(() => expect(screen.getByRole("button", { name: "Rechazar" })).toBeEnabled());
   });
 
   it("shows the check before the refresh that may remove it has ended", async () => {
     const user = userEvent.setup();
-    const refresh = vi.fn(() => new Promise<void>(() => {}));
+    const refresh = vi.fn(() => Promise.resolve());
     render(
       <DeliveryRefreshContext.Provider value={refresh}>
         <ActionButton onAction={() => Promise.resolve()}>Archivar</ActionButton>
@@ -46,7 +46,8 @@ describe("ActionButton", () => {
     const archive = screen.getByRole("button", { name: "Archivar" });
     await user.click(archive);
     await waitFor(() => expect(archive).toHaveClass("delivery-action--done"));
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   });
 
   it("says next to it why it failed, and does nothing when the user cancels", async () => {

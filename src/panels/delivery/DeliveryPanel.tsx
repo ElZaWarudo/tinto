@@ -2674,7 +2674,12 @@ function TaskDetail({
   // for already when it opens.
   const article = useRef<HTMLElement>(null);
   useEffect(() => {
-    article.current?.setAttribute("data-settled", "");
+    // Two frames: after a click this effect runs before the first paint, and
+    // the asks already there would fade in with every task opened.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => article.current?.setAttribute("data-settled", ""));
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
   // Replies to reviewers are answered together, in one place.
   const replies = openApprovals.filter(

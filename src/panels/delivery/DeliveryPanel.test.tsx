@@ -3499,7 +3499,10 @@ describe("DeliveryPanel", () => {
     ).toBeInTheDocument();
     await user.click(within(notice).getByRole("button", { name: "Pasar el PR a borrador" }));
     expect(client.deliveryPrToDraft).toHaveBeenCalledWith("t1");
-    await user.click(within(notice).getByRole("button", { name: "Cerrar el PR #299" }));
+    // The buttons of one notice wait for each other.
+    const close = within(notice).getByRole("button", { name: "Cerrar el PR #299" });
+    await waitFor(() => expect(close).toBeEnabled());
+    await user.click(close);
     expect(client.closeDeliveryPr).toHaveBeenCalledWith("t1");
   });
 

@@ -86,9 +86,10 @@ export function ActionButton({
         if (mounted.current) setState("idle");
         return;
       }
-      // The check shows before the refresh, which may remove this card.
+      // The check shows first: the refresh may remove this card.
       if (mounted.current) setState("done");
-      await Promise.all([refresh(), new Promise((resolve) => setTimeout(resolve, CHECK_MS))]);
+      await new Promise((resolve) => setTimeout(resolve, CHECK_MS));
+      await refresh();
     } catch (cause) {
       if (mounted.current) {
         setError(errorText(cause));
