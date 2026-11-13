@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
@@ -48,6 +48,34 @@ describe("ActionButton", () => {
     await waitFor(() => expect(archive).toHaveClass("delivery-action--done"));
     expect(refresh).not.toHaveBeenCalled();
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not run again while a slow refresh still shows what it acted on", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      let refreshed: () => void = () => {};
+      const refresh = vi.fn(() => new Promise<void>((resolve) => (refreshed = resolve)));
+      const retry = vi.fn(() => Promise.resolve());
+      render(
+        <DeliveryRefreshContext.Provider value={refresh}>
+          <ActionButton onAction={retry}>Reintentar</ActionButton>
+        </DeliveryRefreshContext.Provider>,
+      );
+      const button = screen.getByRole("button", { name: "Reintentar" });
+      await user.click(button);
+      await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+      // Long past the time the check stays: the refresh has not ended.
+      await act(() => vi.advanceTimersByTimeAsync(3000));
+      expect(button).toHaveClass("delivery-action--done");
+      await user.click(button);
+      expect(retry).toHaveBeenCalledTimes(1);
+      await act(async () => refreshed());
+      await act(() => vi.advanceTimersByTimeAsync(1500));
+      expect(button).toHaveClass("delivery-action--idle");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says next to it why it failed, and does nothing when the user cancels", async () => {

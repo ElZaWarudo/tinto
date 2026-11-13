@@ -39,8 +39,13 @@ function roundOfJob(job: DeliveryJob, rounds: DeliveryRound[]): DeliveryRound | 
   const told = TOLD_ROUND.exec(job.round?.[0] ?? "");
   const named = told ? rounds.find((round) => round.number === Number(told[1])) : undefined;
   if (named) return named;
+  // The latest opening, not the highest number: a round that was resumed
+  // opens again after the one that interrupted it.
   let found: DeliveryRound | null = null;
-  for (const round of rounds) if (round.opened_at_ms <= job.created_at_ms) found = round;
+  for (const round of rounds) {
+    if (round.opened_at_ms > job.created_at_ms) continue;
+    if (!found || round.opened_at_ms > found.opened_at_ms) found = round;
+  }
   return found;
 }
 

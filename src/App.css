@@ -14590,7 +14590,9 @@ a:focus-visible {
     .delivery-track,
     .delivery-track *,
     .delivery-node,
-    .delivery-node *
+    .delivery-node *,
+    .delivery-mini-line,
+    .delivery-mini-line *
   ),
 [data-theme="tinto"] ::-webkit-scrollbar-thumb {
   border-radius: 0 !important;

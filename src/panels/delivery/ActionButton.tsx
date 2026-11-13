@@ -63,21 +63,29 @@ export function ActionButton({
       mounted.current = false;
     };
   }, []);
+  // From the click until its refresh has ended: a second click in between
+  // would run the action again on what the panel still shows.
+  const busy = useRef(false);
+  // The check and the failure mark go away by themselves, the check only
+  // once the refresh has ended.
+  const [settled, setSettled] = useState(true);
   useEffect(() => {
-    if (state !== "done" && state !== "failed") return;
-    const timer = setTimeout(() => setState("idle"), DONE_MS);
-    return () => clearTimeout(timer);
-  }, [state]);
+    if (state === "failed" || (state === "done" && settled)) {
+      const timer = setTimeout(() => setState("idle"), DONE_MS);
+      return () => clearTimeout(timer);
+    }
+  }, [state, settled]);
 
   const working = state === "working";
   const click = async (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
-    // "done" too: its refresh may still be running.
-    if (working || state === "done") return;
+    if (busy.current) return;
     // A submit button still asks the form for its required fields first.
     const form = type === "submit" ? event.currentTarget.form : null;
     if (form && !form.reportValidity()) return;
+    busy.current = true;
     setError(null);
+    setSettled(false);
     setState("working");
     group?.setWorking(true);
     try {
@@ -96,6 +104,8 @@ export function ActionButton({
         setState("failed");
       }
     } finally {
+      busy.current = false;
+      if (mounted.current) setSettled(true);
       group?.setWorking(false);
     }
   };
