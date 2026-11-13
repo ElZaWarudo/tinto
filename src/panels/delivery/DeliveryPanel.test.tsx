@@ -850,6 +850,29 @@ describe("DeliveryPanel", () => {
     expect(within(history).getByText("Comprobaciones de Tinto al empezar")).toBeInTheDocument();
   });
 
+  it("closes a stage's row in one click while an earlier attempt is open in it", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job({ id: "j1", created_at_ms: 1 }),
+          job({ id: "j2", attempt: 2, created_at_ms: 2 }),
+        ],
+      }),
+    );
+    renderPanel();
+    const history = await screen.findByRole("region", { name: "Historial" });
+    const row = within(history).getByRole("button", { name: /^Tests\s*· 2 intentos/ });
+    await waitFor(() => expect(row).toHaveAttribute("aria-expanded", "true"));
+    const earlier = within(history).getByRole("button", { name: /^Tests\s*· intento 1/ });
+    await user.click(earlier);
+    expect(earlier).toHaveAttribute("aria-expanded", "true");
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    await user.click(row);
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    expect(within(history).queryByRole("button", { name: /^Tests\s*· intento 1/ })).toBeNull();
+  });
+
   it("shows only the end of a check's long output", async () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({

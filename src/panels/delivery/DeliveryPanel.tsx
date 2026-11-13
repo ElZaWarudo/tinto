@@ -3589,28 +3589,34 @@ function TaskDetail({
               renderRow={(row, id) => {
                 // Opened, or one of the row's attempts is: they show inside it.
                 const holdsOpen = row.attempts.some((attempt) => attempt.id === expandedJobId);
-                const renderJob = (job: DeliveryJob, main?: ReactNode) => (
-                  <JobRow
-                    key={job.id}
-                    id={main === undefined ? undefined : id}
-                    job={job}
-                    jobs={jobs}
-                    verdicts={verdicts}
-                    wait={overview.queued?.[job.id]}
-                    now={now}
-                    attempts={main === undefined ? undefined : row.attempts.length}
-                    expanded={expandedJobId === job.id || (main !== undefined && holdsOpen)}
-                    undoable={latestUndoable?.id === job.id && !hasOpenJob}
-                    onToggle={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
-                    onUndo={() => undo(job)}
-                    onContinue={() => onContinueJob(job)}
-                  >
-                    {main}
-                  </JobRow>
-                );
+                const renderJob = (job: DeliveryJob, main?: ReactNode) => {
+                  // The row closes on one click whatever it shows open; an
+                  // earlier attempt inside it toggles by its own id.
+                  const expanded = expandedJobId === job.id || (main !== undefined && holdsOpen);
+                  return (
+                    <JobRow
+                      key={job.id}
+                      id={main === undefined ? undefined : id}
+                      job={job}
+                      jobs={jobs}
+                      verdicts={verdicts}
+                      wait={overview.queued?.[job.id]}
+                      now={now}
+                      attempts={main === undefined ? undefined : row.attempts.length}
+                      expanded={expanded}
+                      undoable={latestUndoable?.id === job.id && !hasOpenJob}
+                      onToggle={() => setExpandedJobId(expanded ? null : job.id)}
+                      onUndo={() => undo(job)}
+                      onContinue={() => onContinueJob(job)}
+                    >
+                      {main}
+                    </JobRow>
+                  );
+                };
                 const older = row.attempts.filter((attempt) => attempt !== row.job).reverse();
                 if (row.key === CHECKS_ROW) {
                   const key = `${CHECKS_ROW}:${row.attempts[0].id}`;
+                  const expanded = expandedJobId === key || holdsOpen;
                   return (
                     <CheckRow
                       key={key}
@@ -3618,8 +3624,8 @@ function TaskDetail({
                       jobs={jobs}
                       verdicts={verdicts}
                       now={now}
-                      expanded={expandedJobId === key || holdsOpen}
-                      onToggle={() => setExpandedJobId(expandedJobId === key ? null : key)}
+                      expanded={expanded}
+                      onToggle={() => setExpandedJobId(expanded ? null : key)}
                     >
                       {[...row.attempts].reverse().map((job) => renderJob(job))}
                     </CheckRow>
