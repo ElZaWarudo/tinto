@@ -1967,9 +1967,10 @@
    says where the stage stands (filled passed, ring with a dot running, grey
    hollow ring never done yet, hollow ring in the line's colour done before and
    to be done again, warning triangle reached with a problem nobody has to
-   answer here, thick amber ring yours, red square broke). The rail is always
-   one continuous solid line: grey, and in the group's colour only between two
-   passed stations, so colour says "an unbroken stretch that is done" and
+   answer here, thick amber ring yours, red square broke, small grey tick
+   skipped). The rail is always one continuous solid line: grey, and in the
+   group's colour only between two passed stations (skipped ones between them
+   do not cut it), so colour says "an unbroken stretch that is done" and
    nothing else. The cells lose their boxes. The cells of a row share its width
    equally, so each one draws the segment from the middle of the cell before
    it to its station; a wrapped row starts its line at its edge (the list
@@ -2017,10 +2018,9 @@
   height: 4px;
   background: var(--rail);
 }
-/* Done from one station to the next: the stretch takes the line's colour. */
-[data-theme="tinto"]
-  .delivery-node[data-station="passed"]
-  + .delivery-node[data-station="passed"]::before {
+/* Done from one station to the next (passed at both ends, only skipped ones
+   between, as taskTrack says): the stretch takes the line's colour. */
+[data-theme="tinto"] .delivery-node[data-joined]::before {
   background: var(--line);
 }
 /* The merge landing: over its grey segment, the line draws itself to the
@@ -2050,10 +2050,7 @@
   transform-origin: left;
   transition: transform 300ms var(--ease-out);
 }
-[data-theme="tinto"]
-  .delivery-node[data-station="passed"]
-  + .delivery-node[data-rung="merge"][data-station="passed"]
-  > :is(div, button)::after {
+[data-theme="tinto"] .delivery-node[data-rung="merge"][data-joined] > :is(div, button)::after {
   transform: scaleX(1);
 }
 @media (prefers-reduced-motion: reduce) {
@@ -2064,10 +2061,7 @@
     /* A fade is not motion: it keeps its time over the global rule. */
     transition-duration: 300ms !important;
   }
-  [data-theme="tinto"]
-    .delivery-node[data-station="passed"]
-    + .delivery-node[data-rung="merge"][data-station="passed"]
-    > :is(div, button)::after {
+  [data-theme="tinto"] .delivery-node[data-rung="merge"][data-joined] > :is(div, button)::after {
     opacity: 1;
   }
 }
@@ -2125,6 +2119,41 @@
 [data-theme="tinto"] .delivery-node[data-station="broke"] > :is(div, button)::before {
   border-radius: 0;
 }
+/* Never run and not to run: a short tick on the rail, not a station to come. */
+[data-theme="tinto"] .delivery-node[data-station="skipped"] {
+  --edge: var(--fg-muted);
+  --fill: var(--fg-muted);
+  --ring: 0px;
+  --size: 6px;
+}
+[data-theme="tinto"] .delivery-node[data-station="skipped"] > :is(div, button)::before {
+  border-radius: 0;
+}
+/* What runs now and is no station (Tinto's checks, a setup): a small running
+   station on the stretch after the stage it follows, where the next cell's
+   segment has its middle (the last one keeps it inside the row). */
+.delivery-node__now {
+  display: none;
+}
+[data-theme="tinto"] .delivery-node__now {
+  display: block;
+  position: absolute;
+  z-index: 2;
+  top: calc(var(--station-top) + (var(--station) - 9px) / 2);
+  left: 100%;
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--line) 0 1.25px, var(--bg) 1.75px);
+  transform: translateX(-50%);
+}
+[data-theme="tinto"] .delivery-node:last-child > .delivery-node__now {
+  left: auto;
+  right: 0;
+  transform: none;
+}
 /* Reached, with a problem nobody has to answer here: the warning sign itself
    is the station, in ink, over a patch of the ground that hides the rail. */
 [data-theme="tinto"] .delivery-node[data-station="attention"] {
@@ -2159,7 +2188,8 @@
     .delivery-node--danger,
     .delivery-node--todo,
     [data-station="attention"],
-    [data-station="passed"]
+    [data-station="passed"],
+    [data-station="skipped"]
   )
   .delivery-node__name
   > :is(.delivery-icon, .delivery-dot) {
@@ -2293,6 +2323,13 @@
   border-radius: 0;
   background: var(--fg-soft);
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+[data-theme="tinto"] .delivery-mini-line [data-station="skipped"] {
+  width: 3px;
+  height: 3px;
+  border: 0;
+  border-radius: 0;
+  background: var(--fg-muted);
 }
 
 .delivery-request {

@@ -14,6 +14,8 @@ import {
   approveLabel,
   approvesInOneClick,
   brokenJobOf,
+  isOpen,
+  jobsOf,
   lower,
   phaseOf,
   stageLabel,
@@ -66,6 +68,12 @@ function broke(
   }
   const phase = phaseOf(overview, task.id);
   const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
+  // Something that broke is the user's only while nobody works on it: a job
+  // open for the task, or a phase that waits on an agent or the queue, is on it.
+  const attended =
+    jobsOf(overview, task.id).some(isOpen) ||
+    phase?.waits_on === "agent" ||
+    phase?.waits_on === "queue";
   const need =
     phase?.kind === "broken"
       ? `${phase.blocked ? "Bloqueada en" : "Falló"} ${lower(stageLabel(phase.role))} · intento ${phase.attempt}`
@@ -73,19 +81,19 @@ function broke(
         ? `Falló la preparación: ${phase.command}`
         : phase?.kind === "merged_failing_ci"
           ? `PR #${phase.number} fusionado con checks fallando`
-          : phase?.failing_checks?.length
+          : !attended && phase?.failing_checks?.length
             ? `Fallan las comprobaciones: ${phase.failing_checks.join(", ")}`
-            : pr?.state === "open" && pr.checks.failing > 0
+            : !attended && pr?.state === "open" && pr.checks.failing > 0
               ? `PR #${pr.number}: checks fallando`
               : null;
   return need ? { need, ask: null, inPlace: null } : null;
 }
 
-/** The PRs to review that belong to `repo`: by the GitHub name its tasks' PRs
- *  have, else by its folder's name. */
+/** The PRs to review that belong to the repo of `tasks`: only those of the
+ *  GitHub repository one of its tasks' PRs is in (a folder's name says nothing
+ *  of whose repository it is; the header's menu lists every request). */
 function reviewsOf(
   overview: DeliveryOverview,
-  repo: string,
   tasks: DeliveryTask[],
   reviews: DeliveryReviewRequest[],
 ): DeliveryReviewRequest[] {
@@ -93,19 +101,21 @@ function reviewsOf(
   const known = new Set(
     (overview.prs ?? []).filter((pr) => ids.has(pr.task_id)).map((pr) => pr.repo.toLowerCase()),
   );
-  const folder = repo.split(/[\\/]/).filter(Boolean).at(-1)?.toLowerCase();
-  return reviews.filter((review) => {
-    const name = review.repo.toLowerCase();
-    return known.size > 0 ? known.has(name) : name.split("/")[1] === folder;
-  });
+  return reviews.filter((review) => known.has(review.repo.toLowerCase()));
 }
 
-/** The queue of `repo`, given its tasks in the list's order and every PR
+/** A step approved from the queue itself: one approved in one click that
+ *  publishes no text of its own (a sync, a push). A commit's messages and a
+ *  Jira step's text are read in the task before they go out. */
+function approvesFromQueue(approval: DeliveryApproval, edited: boolean): boolean {
+  return ["sync", "push"].includes(approval.rung) && approvesInOneClick(approval, edited);
+}
+
+/** The queue of a repo, given its tasks in the list's order and every PR
  *  waiting for the user's review. `edited` says which approvals have a text
  *  the user edited in the task: those are approved there, never from here. */
 export function deliveryQueue(
   overview: DeliveryOverview,
-  repo: string,
   tasks: DeliveryTask[],
   reviews: DeliveryReviewRequest[],
   now: number,
@@ -121,7 +131,7 @@ export function deliveryQueue(
     );
     for (const ask of asks) {
       const approval = overview.approvals.find((candidate) => candidate.id === ask.id);
-      const oneClick = approval && approvesInOneClick(approval, edited(approval.id));
+      const oneClick = approval && approvesFromQueue(approval, edited(approval.id));
       holds.push({
         ...of,
         key: `${task.id}:${ask.id}`,
@@ -154,7 +164,7 @@ export function deliveryQueue(
       });
     }
   }
-  const toReview: QueueItem[] = reviewsOf(overview, repo, tasks, reviews).map((review) => ({
+  const toReview: QueueItem[] = reviewsOf(overview, tasks, reviews).map((review) => ({
     key: `review:${review.url}`,
     kind: "review",
     title: `PR #${review.number} · ${review.author}`,

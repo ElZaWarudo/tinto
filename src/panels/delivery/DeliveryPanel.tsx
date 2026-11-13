@@ -1823,7 +1823,6 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const queue = overview
     ? deliveryQueue(
         overview,
-        repo,
         entryTasks(
           taskListGroups(tasks, (task) => statuses.get(task.id)?.group ?? "idle").flatMap(
             (group) => group.entries,
@@ -2796,7 +2795,12 @@ function TaskDetail({
   // Tinto says whose turn it is; with no ask and not the user's, the task goes on alone.
   const waitsOn = phaseOf(overview, task.id)?.waits_on;
   const yours = waitsOn === "user";
-  const nothingYours = asks.length === 0 && !yours;
+  // The queue's answer for this task, so the two never disagree: in it, the
+  // task does not "need nothing"; held there for something with no card of
+  // its own here (failing checks…), the "Ahora" line opens with it.
+  const queued = deliveryQueue(overview, [task], [], now, () => false);
+  const queueNeed = queued.find((item) => item.kind === "broke" && item.ask === null)?.need;
+  const nothingYours = queued.length === 0 && asks.length === 0 && !yours;
   // It goes on alone only while someone is working on it: a task that waits
   // on another one or on something outside does not.
   const goesOn = waitsOn === "agent" || waitsOn === "queue" || waitsOn === "coordinator";
@@ -3385,9 +3389,11 @@ function TaskDetail({
         <p>
           <span className="delivery-task__now-label">Ahora</span>
           <span>
-            {nothingYours &&
-              !delivered &&
-              (goesOn ? "Nada que hacer: sigue solo · " : "Nada que hacer por tu parte · ")}
+            {queueNeed
+              ? `${queueNeed} · `
+              : nothingYours &&
+                !delivered &&
+                (goesOn ? "Nada que hacer: sigue solo · " : "Nada que hacer por tu parte · ")}
             {round && "↺ "}
             {nowLine(task, overview, now)}
           </span>
@@ -3859,6 +3865,7 @@ function StageTrack({
                 key={role}
                 className={`delivery-node delivery-node--${tone}`}
                 data-station={outcome.station}
+                data-joined={outcome.joined || undefined}
                 aria-current={role === next ? "step" : undefined}
               >
                 {job ? (
@@ -3882,6 +3889,16 @@ function StageTrack({
                 >
                   {() => <StageAgentEditor repo={repo} role={role} />}
                 </Menu>
+                {/* What runs now and is no station (Tinto's checks, a setup):
+                    a mark on the stretch after this stage. */}
+                {track.between?.after === role && (
+                  <span
+                    className="delivery-node__now"
+                    role="img"
+                    aria-label={track.between.label}
+                    title={track.between.label}
+                  />
+                )}
               </li>
             );
           })}
@@ -3911,6 +3928,7 @@ function StageTrack({
                 className={`delivery-node delivery-node--${step.tone}`}
                 data-rung={rung}
                 data-station={step.station}
+                data-joined={step.joined || undefined}
               >
                 {paused ? (
                   <button
