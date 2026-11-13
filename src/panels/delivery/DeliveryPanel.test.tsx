@@ -1350,6 +1350,81 @@ describe("DeliveryPanel", () => {
     expect(await screen.findByRole("heading", { name: /AGOS-580/ })).toBeInTheDocument();
   });
 
+  it("says only a row's state and whom it waits on until it is selected, then why", async () => {
+    const blocked = task({
+      blockers: [
+        {
+          id: "b1",
+          type: "task",
+          task_id: "t2",
+          key: "AGOS-580",
+          until: "merged",
+          status: "PR abierto",
+          cleared_at_ms: null,
+        },
+      ],
+    });
+    const other = task({ id: "t2", key: "AGOS-580", branch: "delivery/agos-580" });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [blocked, other],
+        phases: { t1: phase({ kind: "blocked", open: 1 }, "dependency"), t2: NEXT_IMPLEMENTATION },
+      }),
+    );
+    renderPanel();
+    const list = await screen.findByRole("navigation", { name: "Tareas de Delivery" });
+    const row = await within(list).findByRole("button", { name: /^AGOS-501/ });
+    await userEvent.click(within(list).getByRole("button", { name: /^AGOS-580/ }));
+    // Not selected: one line with the wait folded in, and no why.
+    expect(within(row).getByText("Bloqueada · espera a otra tarea")).toBeInTheDocument();
+    expect(within(row).queryByText(/Espera a AGOS-580/)).toBeNull();
+    await userEvent.click(row);
+    expect(within(row).getByText(/Espera a AGOS-580/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["folded while nothing in it waits on the user", false],
+    ["open while replies to its reviewers wait", true],
+  ])("shows the PR section %s", async (_, replying) => {
+    const pr = {
+      task_id: "t1",
+      url: "https://github.com/o/r/pull/5",
+      repo: "o/r",
+      number: 5,
+      state: "open",
+      draft: false,
+      conflicts: false,
+      review_decision: "changes_requested",
+      checks: { passing: 2, failing: 0, pending: 0 },
+      new_reviews: 0,
+      new_comments: 0,
+      new_authors: [],
+      latest_activity: null,
+      seen_until: null,
+      checked_at_ms: 1,
+      error: null,
+    };
+    const reply = {
+      id: "r1",
+      task_id: "t1",
+      rung: "pr_reply" as const,
+      title: "Respuesta a ana",
+      body: "Done.",
+      status: "pending" as const,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: null,
+      executed_at_ms: null,
+      outcome: null,
+    };
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ prs: [pr], approvals: replying ? [reply] : [] }),
+    );
+    renderPanel();
+    const section = await screen.findByRole("region", { name: "Pull request" });
+    expect(section.querySelector("details")!.open).toBe(replying);
+  });
+
   it("opens a task's actions on a right click: what applies now, and copying its key", async () => {
     const other = task({ id: "t2", key: "AGOS-580", branch: "delivery/agos-580" });
     const blocked = task({
@@ -3062,7 +3137,7 @@ describe("DeliveryPanel", () => {
     );
     expect(await navigator.clipboard.readText()).toContain("Bearer secret");
     expect(within(settings).getByText("Copiado, con el token.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "← Volver" }));
+    await user.click(screen.getByRole("button", { name: "Volver" }));
     expect(screen.queryByRole("region", { name: "Ajustes de Delivery" })).toBeNull();
 
     // New tasks go to the repo's most recent active batch by default.
@@ -3246,7 +3321,7 @@ describe("DeliveryPanel", () => {
     expect(screen.queryByRole("region", { name: "Ajustes de agentos" })).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Tinto" }));
     expect(screen.getByRole("combobox", { name: "Tema" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "← Volver" }));
+    await user.click(screen.getByRole("button", { name: "Volver" }));
     expect(screen.queryByRole("tablist", { name: "Ámbito de los ajustes" })).toBeNull();
   });
 

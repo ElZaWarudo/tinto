@@ -62,6 +62,39 @@
   outline: 2px solid var(--accent-fg);
   outline-offset: 1px;
 }
+/* Every link in the panel: the link buttons' colour, underlined when pointed
+   at. `:where` leaves links with a look of their own (the task's chips) as they are. */
+.delivery-panel :where(a) {
+  color: var(--accent-fg);
+  text-decoration: none;
+}
+.delivery-panel :where(a):hover {
+  text-decoration: underline;
+}
+/* Every disclosure in the panel: the drawn chevron of the icon set, pointing
+   down when open, instead of the browser's triangle. */
+.delivery-panel details > summary {
+  list-style: none;
+}
+.delivery-panel details > summary::-webkit-details-marker {
+  display: none;
+}
+.delivery-panel details > summary::before {
+  content: "";
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  vertical-align: -2px;
+  background: var(--fg-muted);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  transition: transform var(--ease);
+}
+.delivery-panel details[open] > summary::before {
+  transform: rotate(90deg);
+}
 /* Beside the repo tabs: as tall as a tab, with no box of its own. */
 .delivery-panel .delivery-add-repo {
   display: inline-grid;
@@ -332,6 +365,10 @@
   background: var(--active);
   border-left-color: var(--accent-fg);
 }
+/* In Tinto green is Entrega's line: the selection's edge is ink. */
+[data-theme="tinto"] .delivery-panel .delivery-task-row[aria-current="true"] {
+  border-left-color: var(--fg-strong);
+}
 /* A split issue's packages sit nested under its row, which folds them. */
 .delivery-panel .delivery-task-row--package {
   padding-left: 40px;
@@ -540,6 +577,23 @@
   /* Its elapsed time ticks without shifting the line. */
   font-variant-numeric: tabular-nums;
 }
+/* In a row the line spans it, so its elapsed time sits at the right edge. */
+.delivery-task-row .delivery-status-line {
+  width: 100%;
+  min-width: 0;
+}
+.delivery-status-line__time {
+  flex: none;
+  margin-left: auto;
+  padding-left: 6px;
+}
+/* A row that is not selected: one line, cut to fit. */
+.delivery-status-line--one .delivery-status-line__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .delivery-dot {
   width: 7px;
   height: 7px;
@@ -588,6 +642,11 @@
 .delivery-task__header h2 {
   margin: 0;
   font-size: 15px;
+  /* Two lines at most: a long title must not push the stage line out of sight. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 /* Where the task goes outside its card (Jira, its PR, QA's record and
    problems): one row of quiet, borderless links that light up on hover. The
@@ -654,6 +713,16 @@
   --chip: var(--success);
 }
 .delivery-panel .delivery-link-chip--pr-neutral {
+  --chip: var(--fg-muted);
+}
+/* Tinto: no bar on the PR, and its step colour is amber, kept for what waits
+   on the user; a merged PR and QA's record stay neutral. */
+[data-theme="tinto"] .delivery-panel .delivery-link-chip--pr {
+  border-left: 0;
+  padding-left: 7px;
+}
+[data-theme="tinto"] .delivery-panel .delivery-link-chip--pr-merged,
+[data-theme="tinto"] .delivery-panel .delivery-link-chip--qa {
   --chip: var(--fg-muted);
 }
 .delivery-panel .delivery-link-chip[aria-expanded="true"] {
@@ -1075,7 +1144,6 @@
   gap: 4px 12px;
 }
 .delivery-pr__head a {
-  color: var(--accent-fg);
   font-weight: 600;
 }
 .delivery-pr__facts {
@@ -1409,14 +1477,6 @@
 .delivery-thread:not([open]) > .delivery-thread__head {
   border-bottom: 0;
 }
-.delivery-thread__chevron {
-  color: var(--fg-muted);
-  font-size: 9px;
-  transition: transform var(--ease);
-}
-.delivery-thread[open] > .delivery-thread__head .delivery-thread__chevron {
-  transform: rotate(90deg);
-}
 .delivery-thread__path {
   color: color-mix(in srgb, var(--sky) 6%, var(--fg-strong));
 }
@@ -1433,8 +1493,6 @@
 }
 .delivery-thread__link {
   font-family: system-ui, sans-serif;
-  color: color-mix(in srgb, var(--info) 86%, var(--fg-strong));
-  text-decoration: none;
 }
 .delivery-thread__diff {
   width: 100%;
@@ -1607,18 +1665,8 @@
 .delivery-decision-log summary h3 {
   display: inline;
 }
-.delivery-decision-log summary {
-  list-style: none;
-}
-.delivery-decision-log summary::-webkit-details-marker {
-  display: none;
-}
 .delivery-decision-log summary::before {
-  content: "▸";
-  color: var(--fg-muted);
-}
-.delivery-decision-log[open] summary::before {
-  content: "▾";
+  align-self: center;
 }
 .delivery-decision-log[open] summary {
   margin-bottom: 4px;
@@ -1632,17 +1680,9 @@
   gap: 4px 10px;
   min-width: 0;
   cursor: pointer;
-  list-style: none;
-}
-.delivery-fold > summary::-webkit-details-marker {
-  display: none;
 }
 .delivery-fold > summary::before {
-  content: "▸";
-  color: var(--fg-muted);
-}
-.delivery-fold[open] > summary::before {
-  content: "▾";
+  align-self: center;
 }
 .delivery-fold[open] > summary {
   margin-bottom: 6px;
@@ -1702,9 +1742,6 @@
   flex-basis: 100%;
   margin: 0;
   font-size: 12px;
-}
-.delivery-decision-log .delivery-decision__detail summary::before {
-  content: none;
 }
 .delivery-decision-log__text {
   flex-basis: 100%;
@@ -3756,9 +3793,24 @@
 }
 .delivery-coordinator__pick {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: end;
   gap: 6px;
+}
+/* Its last row: the access box beside its label, the start button at the end. */
+.delivery-coordinator__go {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.delivery-coordinator__pick .delivery-coordinator__go label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
 }
 .delivery-coordinator__pick label {
   display: grid;
@@ -3776,15 +3828,6 @@
   padding: 4px 10px;
   font-size: 12px;
   white-space: nowrap;
-}
-@media (max-width: 520px) {
-  .delivery-coordinator__pick {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .delivery-panel .delivery-coordinator__pick .delivery-button--primary {
-    grid-column: 1 / -1;
-    justify-content: center;
-  }
 }
 .delivery-coordinator__error {
   margin: 0;

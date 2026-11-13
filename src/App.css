@@ -14597,3 +14597,14 @@ a:focus-visible {
 [data-theme="tinto"] ::-webkit-scrollbar-thumb {
   border-radius: 0 !important;
 }
+/* Tinto: thin scrollbars with no arrow buttons. Chromium ignores every
+   ::-webkit-scrollbar rule where scrollbar-width or scrollbar-color is set (its
+   own thin bar draws arrows), so this theme hands them back to the app's
+   8px bar above. */
+[data-theme="tinto"] * {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+[data-theme="tinto"] ::-webkit-scrollbar-button {
+  display: none;
+}

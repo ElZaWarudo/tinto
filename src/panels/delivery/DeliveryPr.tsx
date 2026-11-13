@@ -150,115 +150,143 @@ function PrReviewers({ pr }: { pr: DeliveryPr }) {
   );
 }
 
-/** `yours`: the task waits on the user; only then does what the PR needs read amber. */
-export function PrSection({ pr, yours = false }: { pr: DeliveryPr; yours?: boolean }) {
+/** `yours`: the task waits on the user; only then does what the PR needs read amber.
+ *  Folded to one line (its link, its state, what is unanswered) unless `open`. */
+export function PrSection({
+  id,
+  pr,
+  yours = false,
+  open = false,
+}: {
+  id?: string;
+  pr: DeliveryPr;
+  yours?: boolean;
+  open?: boolean;
+}) {
   const summary = prSummary(pr);
   const tone = summary.tone === "attention" && !yours ? "waiting" : summary.tone;
   const fresh = news(pr);
   const { passing, failing, pending } = pr.checks;
   const unanswered = pr.state === "open" ? (pr.unanswered_threads ?? []) : [];
+  const gist = [
+    `${pr.repo}#${pr.number}`,
+    summary.label,
+    unanswered.length > 0 && `${unanswered.length} sin respuesta`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <section className="delivery-section delivery-pr" aria-label="Pull request">
-      <h3>Pull request</h3>
-      <div className="delivery-pr__body">
-        <p className="delivery-pr__head">
-          <ExternalLink href={pr.url}>
-            {pr.repo}#{pr.number}
-          </ExternalLink>
-          <span className={`delivery-status-line delivery-tone--${tone}`}>{summary.label}</span>
-          {pr.draft && <span className="delivery-badge delivery-badge--muted">borrador</span>}
+    <section
+      id={id}
+      tabIndex={-1}
+      className="delivery-section delivery-pr"
+      aria-label="Pull request"
+    >
+      <details className="delivery-fold" open={open}>
+        <summary>
+          <h3>Pull request</h3>
+          <span className="delivery-fold__gist">{gist}</span>
+        </summary>
+        <div className="delivery-pr__body">
+          <p className="delivery-pr__head">
+            <ExternalLink href={pr.url}>
+              {pr.repo}#{pr.number}
+            </ExternalLink>
+            <span className={`delivery-status-line delivery-tone--${tone}`}>{summary.label}</span>
+            {pr.draft && <span className="delivery-badge delivery-badge--muted">borrador</span>}
+            {unanswered.length > 0 && (
+              <span
+                className={`delivery-badge delivery-badge--${yours ? "attention" : "muted"}`}
+                title="Hilos de revisión sin respuesta: el PR no vuelve a revisión hasta que cada uno tenga una."
+              >
+                {unanswered.length} sin respuesta
+              </span>
+            )}
+          </p>
           {unanswered.length > 0 && (
-            <span
-              className={`delivery-badge delivery-badge--${yours ? "attention" : "muted"}`}
-              title="Hilos de revisión sin respuesta: el PR no vuelve a revisión hasta que cada uno tenga una."
-            >
-              {unanswered.length} sin respuesta
-            </span>
+            <ul className="delivery-pr__facts" aria-label="Hilos sin respuesta">
+              {unanswered.map((thread) => (
+                <li key={thread.url}>
+                  <ExternalLink href={thread.url}>
+                    {thread.line ? `${thread.path}:${thread.line}` : thread.path}
+                  </ExternalLink>{" "}
+                  de {thread.author}, {waited(thread.waiting_minutes)} sin respuesta
+                </li>
+              ))}
+            </ul>
           )}
-        </p>
-        {unanswered.length > 0 && (
-          <ul className="delivery-pr__facts" aria-label="Hilos sin respuesta">
-            {unanswered.map((thread) => (
-              <li key={thread.url}>
-                <ExternalLink href={thread.url}>
-                  {thread.line ? `${thread.path}:${thread.line}` : thread.path}
-                </ExternalLink>{" "}
-                de {thread.author}, {waited(thread.waiting_minutes)} sin respuesta
-              </li>
-            ))}
-          </ul>
-        )}
-        {pr.state === "open" && (
-          <ul className="delivery-pr__facts">
-            {(pr.review_again?.length ?? 0) > 0 && (
-              <li role="status">
-                Revisión pedida de nuevo a {pr.review_again?.join(", ")} · espera
-                {pr.review_again_blocker
-                  ? `: ${pr.review_again_blocker}`
-                  : " a leer el PR en GitHub"}
-              </li>
-            )}
-            <li>
-              Revisión:{" "}
-              <strong>
-                {DECISION[pr.review_decision ?? ""] ??
-                  (pr.approved_by?.length ? "Aprobado" : "Sin revisión aprobada")}
-              </strong>
-              {pr.approved_by?.length ? ` por ${pr.approved_by.join(", ")}` : ""}
-            </li>
-            <li>
-              Checks:{" "}
-              {passing + failing + pending === 0 ? (
-                <strong>ninguno</strong>
-              ) : (
-                <>
-                  <strong className="delivery-tone--ok" title="Pasan">
-                    <Icon name="check" className="delivery-icon" /> {passing}
-                  </strong>
-                  {failing > 0 && (
-                    <strong className="delivery-tone--danger" title="Fallan">
-                      {" "}
-                      <Icon name="x" className="delivery-icon" /> {failing}
-                    </strong>
-                  )}
-                  {pending > 0 && (
-                    <strong className="delivery-tone--waiting" title="En curso">
-                      {" "}
-                      <Icon name="clock" className="delivery-icon" /> {pending}
-                    </strong>
-                  )}
-                </>
+          {pr.state === "open" && (
+            <ul className="delivery-pr__facts">
+              {(pr.review_again?.length ?? 0) > 0 && (
+                <li role="status">
+                  Revisión pedida de nuevo a {pr.review_again?.join(", ")} · espera
+                  {pr.review_again_blocker
+                    ? `: ${pr.review_again_blocker}`
+                    : " a leer el PR en GitHub"}
+                </li>
               )}
-            </li>
-            {pr.conflicts && (
-              <li className={yours ? "delivery-tone--attention" : undefined}>
-                Tiene conflictos con su rama base.
+              <li>
+                Revisión:{" "}
+                <strong>
+                  {DECISION[pr.review_decision ?? ""] ??
+                    (pr.approved_by?.length ? "Aprobado" : "Sin revisión aprobada")}
+                </strong>
+                {pr.approved_by?.length ? ` por ${pr.approved_by.join(", ")}` : ""}
               </li>
-            )}
-          </ul>
-        )}
-        {pr.state === "open" && <PrReviewers pr={pr} />}
-        {fresh && (
-          <div className="delivery-pr__news" role="status">
-            <span>
-              Nuevo desde que lo viste: <strong>{fresh}</strong>.
-            </span>
-            <ActionButton onAction={() => markDeliveryPrSeen(pr.task_id)}>
-              Marcar como visto
+              <li>
+                Checks:{" "}
+                {passing + failing + pending === 0 ? (
+                  <strong>ninguno</strong>
+                ) : (
+                  <>
+                    <strong className="delivery-tone--ok" title="Pasan">
+                      <Icon name="check" className="delivery-icon" /> {passing}
+                    </strong>
+                    {failing > 0 && (
+                      <strong className="delivery-tone--danger" title="Fallan">
+                        {" "}
+                        <Icon name="x" className="delivery-icon" /> {failing}
+                      </strong>
+                    )}
+                    {pending > 0 && (
+                      <strong className="delivery-tone--waiting" title="En curso">
+                        {" "}
+                        <Icon name="clock" className="delivery-icon" /> {pending}
+                      </strong>
+                    )}
+                  </>
+                )}
+              </li>
+              {pr.conflicts && (
+                <li className={yours ? "delivery-tone--attention" : undefined}>
+                  Tiene conflictos con su rama base.
+                </li>
+              )}
+            </ul>
+          )}
+          {pr.state === "open" && <PrReviewers pr={pr} />}
+          {fresh && (
+            <div className="delivery-pr__news" role="status">
+              <span>
+                Nuevo desde que lo viste: <strong>{fresh}</strong>.
+              </span>
+              <ActionButton onAction={() => markDeliveryPrSeen(pr.task_id)}>
+                Marcar como visto
+              </ActionButton>
+            </div>
+          )}
+          {pr.error && <p className="delivery-tone--danger">No se pudo leer GitHub: {pr.error}</p>}
+          <p className="delivery-muted delivery-pr__meta">
+            {checked(pr.checked_at_ms)} ·{" "}
+            <ActionButton
+              className="delivery-link-button"
+              onAction={() => refreshDeliveryPr(pr.task_id)}
+            >
+              Actualizar
             </ActionButton>
-          </div>
-        )}
-        {pr.error && <p className="delivery-tone--danger">No se pudo leer GitHub: {pr.error}</p>}
-        <p className="delivery-muted delivery-pr__meta">
-          {checked(pr.checked_at_ms)} ·{" "}
-          <ActionButton
-            className="delivery-link-button"
-            onAction={() => refreshDeliveryPr(pr.task_id)}
-          >
-            Actualizar
-          </ActionButton>
-        </p>
-      </div>
+          </p>
+        </div>
+      </details>
     </section>
   );
 }
