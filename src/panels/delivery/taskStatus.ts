@@ -965,9 +965,11 @@ export function rungStep(approval: DeliveryApproval | undefined): {
 }
 
 /** Where a stage stands on the task's line, said by the form of its station:
- *  passed, running, still to come, to run again in this round, waiting on the
- *  user, or broken. */
-export type Station = "passed" | "running" | "pending" | "repeats" | "yours" | "broke";
+ *  passed, running, never done yet, done before and to be done again in this
+ *  round, waiting on the user, broken, or reached with a problem nobody has to
+ *  answer here (conflicts, changes asked, findings still open). */
+export type Station =
+  "passed" | "running" | "pending" | "repeats" | "yours" | "broke" | "attention";
 
 /** A stage of the track (Agentes): its latest attempt and how it reads. */
 export interface AgentStop {
@@ -997,8 +999,8 @@ export interface TaskTrack {
   steps: StepStop[];
 }
 
-/** The station a tone draws. A neutral note (findings, news on the PR, a
- *  wait) says nothing of progress: `done` says whether its stage was reached. */
+/** The station a tone draws. A fine note (answered findings, a wait) says
+ *  nothing of progress: `done` says whether its stage was reached. */
 function stationOf(tone: Tone | "todo", done: boolean): Station {
   switch (tone) {
     case "ok":
@@ -1034,9 +1036,8 @@ export function taskTrack(overview: DeliveryOverview, task: DeliveryTask): TaskT
         (job
           ? attemptOutcome(job, jobs, verdicts)
           : { tone: "todo", label: role === next ? "Siguiente" : "—" }));
-    // Reached, under a neutral note: findings open or answered, Alcance skipped.
+    // Reached, under a fine note: findings answered, Alcance skipped.
     const done =
-      outcome.tone === "attention" ||
       (!!job && !!verdicts[job.id]?.answered) ||
       (role === SCOPE_ROLE && !!task.scope_skip && !(job && isOpen(job)));
     return {
@@ -1044,7 +1045,13 @@ export function taskTrack(overview: DeliveryOverview, task: DeliveryTask): TaskT
       job,
       inRound: !!inRound,
       ...outcome,
-      station: inRound?.tone === "todo" ? "repeats" : stationOf(outcome.tone, done),
+      station:
+        inRound?.tone === "todo"
+          ? "repeats"
+          : // Findings still open: reached, with a problem.
+            outcome.tone === "attention"
+            ? "attention"
+            : stationOf(outcome.tone, done),
     };
   });
   const steps = trackSteps(stepsOf(overview, task.id), approvals).map((step): StepStop => {
@@ -1072,13 +1079,25 @@ export function taskTrack(overview: DeliveryOverview, task: DeliveryTask): TaskT
               title: approval.outcome ?? undefined,
             }
           : before;
-    // The PR open, or done without a link, is a step taken; approved, the
-    // coordinator is taking it.
+    // A followed PR is a step taken: broken once closed or failing its checks,
+    // with a problem while it has conflicts, changes asked or a CI that did
+    // not run, fine otherwise (news to read included). Done without a link is
+    // a step taken too; executed with conflicts, taken with a problem;
+    // approved, the coordinator is taking it.
     const station: Station = repeats
       ? "repeats"
-      : !live && approval?.status === "approved"
-        ? "running"
-        : stationOf(shown.tone, !!live || unlinked || shown.tone === "attention");
+      : pr && live
+        ? pr.state === "closed" || pr.checks.failing > 0
+          ? "broke"
+          : pr.state !== "merged" &&
+              (pr.conflicts || pr.review_decision === "changes_requested" || pr.ci === "not_run")
+            ? "attention"
+            : "passed"
+        : approval?.status === "approved"
+          ? "running"
+          : shown.tone === "attention"
+            ? "attention"
+            : stationOf(shown.tone, unlinked);
     return { step, approval, ...shown, station };
   });
   return { agents, steps };

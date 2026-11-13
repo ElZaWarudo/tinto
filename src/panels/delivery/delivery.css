@@ -1963,14 +1963,17 @@
 }
 
 /* ---------- Tinto theme: the stage track as a line diagram ---------- */
-/* Each group is a line in its own colour and each stage a station on it: the
-   station's form says where the stage stands (filled passed, ring with a dot
-   running, hollow on a dashed grey line pending, double ring repeats, thick
-   amber ring yours, red square broke) and colour backs it up. The cells lose
-   their boxes. The cells of a row share its width equally, so each one draws
-   the segment that leads to its station from the middle of the cell before
-   it; a wrapped row starts its line at its edge (the list clips the
-   overhang), and nothing runs past a group's last station. */
+/* Each group is a line and each stage a station on it: the station's form
+   says where the stage stands (filled passed, ring with a dot running, grey
+   hollow ring never done yet, hollow ring in the line's colour done before and
+   to be done again, warning triangle reached with a problem nobody has to
+   answer here, thick amber ring yours, red square broke). The rail is always
+   one continuous solid line: grey, and in the group's colour only between two
+   passed stations, so colour says "an unbroken stretch that is done" and
+   nothing else. The cells lose their boxes. The cells of a row share its width
+   equally, so each one draws the segment from the middle of the cell before
+   it to its station; a wrapped row starts its line at its edge (the list
+   clips the overhang), and nothing runs past a group's last station. */
 [data-theme="tinto"] .delivery-track__part {
   --line: var(--line-agents, #1b5e8c);
 }
@@ -1994,6 +1997,7 @@
   --station-top: 5px;
   /* The segment's top: centred on the station. */
   --segment-top: calc(var(--station-top) + var(--station) / 2 - 2px);
+  --rail: color-mix(in srgb, var(--fg-muted) 50%, transparent);
   --edge: var(--line);
   --fill: var(--line);
   --ring: 2.5px;
@@ -2008,15 +2012,17 @@
   left: -50%;
   width: 100%;
   height: 4px;
+  background: var(--rail);
+}
+/* Done from one station to the next: the stretch takes the line's colour. */
+[data-theme="tinto"]
+  .delivery-node[data-station="passed"]
+  + .delivery-node[data-station="passed"]::before {
   background: var(--line);
 }
-/* Not reached yet: the segment that leads to it is dashed and grey. */
-[data-theme="tinto"] .delivery-node:is([data-station="pending"], [data-station="repeats"])::before {
-  background: repeating-linear-gradient(90deg, var(--fg-muted) 0 6px, transparent 6px 10px) center /
-    100% 2px no-repeat;
-}
-/* The merge landing: over its dashed segment, the line draws itself to the
-   Merge station as it fills. Being a transition, a merged task shows it at rest. */
+/* The merge landing: over its grey segment, the line draws itself to the
+   Merge station when the station before it is done too, and the disc fills.
+   Being a transition, a merged task shows it at rest. */
 [data-theme="tinto"] .delivery-node[data-rung="merge"]::before {
   content: "";
   top: var(--segment-top);
@@ -2024,8 +2030,7 @@
   right: auto;
   width: 100%;
   height: 4px;
-  background: repeating-linear-gradient(90deg, var(--fg-muted) 0 6px, transparent 6px 10px) center /
-    100% 2px no-repeat;
+  background: var(--rail);
   transform: none;
   opacity: 1;
   transition: none;
@@ -2043,7 +2048,8 @@
   transition: transform 300ms var(--ease-out);
 }
 [data-theme="tinto"]
-  .delivery-node[data-rung="merge"]:not([data-station="pending"], [data-station="repeats"])
+  .delivery-node[data-station="passed"]
+  + .delivery-node[data-rung="merge"][data-station="passed"]
   > :is(div, button)::after {
   transform: scaleX(1);
 }
@@ -2056,7 +2062,8 @@
     transition-duration: 300ms !important;
   }
   [data-theme="tinto"]
-    .delivery-node[data-rung="merge"]:not([data-station="pending"], [data-station="repeats"])
+    .delivery-node[data-station="passed"]
+    + .delivery-node[data-rung="merge"][data-station="passed"]
     > :is(div, button)::after {
     opacity: 1;
   }
@@ -2076,7 +2083,7 @@
 [data-theme="tinto"] .delivery-node > :is(div, button)::before {
   content: "";
   position: relative;
-  z-index: 1;
+  z-index: 2;
   box-sizing: border-box;
   width: var(--size);
   height: var(--size);
@@ -2084,7 +2091,6 @@
   border: var(--ring) solid var(--edge);
   border-radius: 50%;
   background: var(--fill);
-  box-shadow: var(--inner, none);
   transition:
     background-color 200ms ease,
     border-color 200ms ease;
@@ -2101,9 +2107,7 @@
   --fill: var(--bg);
 }
 [data-theme="tinto"] .delivery-node[data-station="repeats"] {
-  --ring: 2px;
   --fill: var(--bg);
-  --inner: inset 0 0 0 1.5px var(--bg), inset 0 0 0 3px var(--line);
 }
 [data-theme="tinto"] .delivery-node[data-station="yours"] {
   --edge: var(--warn);
@@ -2118,15 +2122,40 @@
 [data-theme="tinto"] .delivery-node[data-station="broke"] > :is(div, button)::before {
   border-radius: 0;
 }
-/* The station says the state; only a neutral note (findings, news on the PR,
-   a wait) keeps its icon, in grey. */
+/* Reached, with a problem nobody has to answer here: the warning sign itself
+   is the station, in ink, over a patch of the ground that hides the rail. */
+[data-theme="tinto"] .delivery-node[data-station="attention"] {
+  --size: 16px;
+}
+[data-theme="tinto"] .delivery-node[data-station="attention"] > :is(div, button)::before {
+  border: 0;
+  border-radius: 0;
+  background: var(--fg-soft);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+[data-theme="tinto"] .delivery-node[data-station="attention"]::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: calc(var(--station-top) + (var(--station) - var(--size)) / 2);
+  left: 50%;
+  width: var(--size);
+  height: var(--size);
+  background: var(--bg);
+  clip-path: polygon(50% 4%, 98% 92%, 2% 92%);
+  transform: translateX(-50%);
+}
+/* The station says the state; only a fine note (a wait, answered findings)
+   keeps its icon, in grey. */
 [data-theme="tinto"]
   .delivery-node:is(
     .delivery-node--ok,
     .delivery-node--live,
     .delivery-node--step,
     .delivery-node--danger,
-    .delivery-node--todo
+    .delivery-node--todo,
+    [data-station="attention"]
   )
   .delivery-node__name
   > :is(.delivery-icon, .delivery-dot) {
@@ -2189,6 +2218,14 @@
   border-color: var(--danger);
   border-radius: 0;
   background: var(--danger);
+}
+/* A solid ink triangle: at this size a drawn warning sign would not read. */
+[data-theme="tinto"] .delivery-mini-line [data-station="attention"] {
+  width: 7px;
+  border: 0;
+  border-radius: 0;
+  background: var(--fg-soft);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
 
 .delivery-request {
