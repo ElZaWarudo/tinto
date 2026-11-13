@@ -156,7 +156,6 @@ import {
   byCommand,
   costOf,
   dollars,
-  historyKey,
   isOpen,
   jobsOf,
   lastHandoff,
@@ -197,7 +196,6 @@ import {
   files,
   type DeliveryStep,
   nowLine,
-  roundHistory,
   roundOf,
   reviewerBlock,
   stageLabel,
@@ -225,6 +223,15 @@ import { deliveryQueue, type QueueItem } from "./queueItems";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
 import { GrowingTextarea } from "./GrowingTextarea";
 import { rememberOpencodeModels } from "./agentChoice";
+import {
+  CHECKS_ROW,
+  checksOutcome,
+  spanLabel,
+  taskHistory,
+  whenLabel,
+  type HistoryEntry,
+  type HistoryRow,
+} from "./taskHistory";
 
 type Dialog =
   | { kind: "new-task" }
@@ -467,8 +474,12 @@ function shortCommit(value: string | null | undefined): string {
 
 function duration(job: DeliveryJob, now: number): string {
   if (!job.started_at_ms) return "";
-  const end = job.ended_at_ms ?? now;
-  const seconds = Math.max(0, Math.round((end - job.started_at_ms) / 1000));
+  return clockSpan((job.ended_at_ms ?? now) - job.started_at_ms);
+}
+
+/** "36 s", "4 min 42 s": how long a stage ran. */
+function clockSpan(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
   if (seconds < 60) return `${seconds} s`;
   return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
 }
@@ -2662,7 +2673,15 @@ function TaskDetail({
   const next = nextStageOf(overview, task.id);
   const round = roundOf(overview, task.id);
   const track = useMemo(() => taskTrack(overview, task), [overview, task]);
-  const pastRounds = roundHistory(overview, task.id);
+  // The history by rounds, newest first: regrouped when the overview changes, not each second.
+  const history = useMemo(
+    () =>
+      taskHistory(
+        jobsOf(overview, task.id),
+        (overview.rounds ?? []).filter((candidate) => candidate.task_id === task.id),
+      ),
+    [overview, task.id],
+  );
   const handoff = lastHandoff(jobs);
   const broken = brokenJobOf(overview, task.id);
   // A merge Tinto still runs stays in sight while it cleans up after itself.
@@ -2814,14 +2833,20 @@ function TaskDetail({
     );
   };
 
-  // The history is folded; a stage picked on the track opens it.
+  // The history is folded; a stage picked on the track opens it on the
+  // stage's most recent row, and the round that holds it.
   const historyFold = useRef<HTMLDetailsElement>(null);
   const focusStage = (job: DeliveryJob) => {
-    setExpandedJobId(job.id);
+    const latest = history
+      .flatMap((entry) => entry.rows)
+      .find((row) => row.key !== CHECKS_ROW && row.job.role === job.role);
+    setExpandedJobId(latest?.job.id ?? job.id);
     if (historyFold.current) historyFold.current.open = true;
-    document
-      .getElementById(`delivery-stage-${task.id}-${job.role}`)
-      ?.scrollIntoView?.({ block: "nearest" });
+    const row = document.getElementById(`delivery-stage-${task.id}-${job.role}`);
+    for (let fold = row?.closest("details"); fold; fold = fold.parentElement?.closest("details")) {
+      fold.open = true;
+    }
+    row?.scrollIntoView?.({ block: "nearest" });
   };
 
   const undo = async (job: DeliveryJob) => {
@@ -2878,9 +2903,6 @@ function TaskDetail({
     if (!ok) return false;
     await updateDeliveryTask(task.id, { contractVersion: version });
   };
-
-  // Stages with the most recent activity first; older attempts fold under the latest.
-  const historyKeys = [...new Set(newestFirst.map(historyKey))];
 
   // The right-click menu: what the task can do now, what waits on the user first.
   const running = jobs.find((job) => job.status === "started" || job.status === "pending");
@@ -3380,16 +3402,6 @@ function TaskDetail({
             </ol>
           </details>
         )}
-        {pastRounds.length > 0 && (
-          <details className="delivery-task__fold">
-            <summary>Rondas anteriores</summary>
-            <ul>
-              {pastRounds.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-          </details>
-        )}
       </div>
 
       {!broken && <BlockedBar {...blockerProps} />}
@@ -3519,48 +3531,72 @@ function TaskDetail({
         )}
       />
 
-      {/* Folded: each stage on its latest attempt, the earlier ones folded under it. */}
+      {/* Folded: what happened, by rounds, newest first. */}
       <section className="delivery-section" aria-label="Historial">
         <details ref={historyFold} className="delivery-fold">
           <summary>
             <h3>Historial</h3>
+            <span className="delivery-fold__gist">{historyGist(history)}</span>
           </summary>
           {jobs.length === 0 && (
             <p className="delivery-panel__empty">Todavía no se ha lanzado ninguna etapa.</p>
           )}
-          <ul className="delivery-jobs">
-            {historyKeys.map((key, index) => {
-              const ofKey = jobs.filter((job) => historyKey(job) === key);
-              const current = latestOfRole(ofKey, ofKey[0].role)!;
-              const older = newestFirst.filter((job) => historyKey(job) === key && job !== current);
-              return (
-                <StageHistory
-                  key={key}
-                  // The stage track scrolls to a stage; a check has no node there.
-                  id={`delivery-stage-${task.id}-${key === current.role ? key : `check-${index}`}`}
-                  current={current}
-                  older={older}
-                  jobs={jobs}
-                  verdicts={verdicts}
-                  renderJob={(job) => (
-                    <JobRow
-                      key={job.id}
-                      job={job}
+          {jobs.length > 0 && (
+            <TaskHistory
+              taskId={task.id}
+              entries={history}
+              now={now}
+              renderRow={(row, id) => {
+                // Opened, or one of the row's attempts is: they show inside it.
+                const holdsOpen = row.attempts.some((attempt) => attempt.id === expandedJobId);
+                const renderJob = (job: DeliveryJob, main?: ReactNode) => (
+                  <JobRow
+                    key={job.id}
+                    id={main === undefined ? undefined : id}
+                    job={job}
+                    jobs={jobs}
+                    verdicts={verdicts}
+                    wait={overview.queued?.[job.id]}
+                    now={now}
+                    attempts={main === undefined ? undefined : row.attempts.length}
+                    expanded={expandedJobId === job.id || (main !== undefined && holdsOpen)}
+                    undoable={latestUndoable?.id === job.id && !hasOpenJob}
+                    onToggle={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
+                    onUndo={() => undo(job)}
+                    onContinue={() => onContinueJob(job)}
+                  >
+                    {main}
+                  </JobRow>
+                );
+                const older = row.attempts.filter((attempt) => attempt !== row.job).reverse();
+                if (row.key === CHECKS_ROW) {
+                  const key = `${CHECKS_ROW}:${row.attempts[0].id}`;
+                  return (
+                    <CheckRow
+                      key={key}
+                      checks={row.checks!}
                       jobs={jobs}
                       verdicts={verdicts}
-                      wait={overview.queued?.[job.id]}
                       now={now}
-                      expanded={expandedJobId === job.id}
-                      undoable={latestUndoable?.id === job.id && !hasOpenJob}
-                      onToggle={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
-                      onUndo={() => undo(job)}
-                      onContinue={() => onContinueJob(job)}
-                    />
-                  )}
-                />
-              );
-            })}
-          </ul>
+                      expanded={expandedJobId === key || holdsOpen}
+                      onToggle={() => setExpandedJobId(expandedJobId === key ? null : key)}
+                    >
+                      {[...row.attempts].reverse().map((job) => renderJob(job))}
+                    </CheckRow>
+                  );
+                }
+                return renderJob(
+                  row.job,
+                  older.length > 0 ? (
+                    <>
+                      <h4 className="delivery-job__subtitle">Intentos anteriores</h4>
+                      <ul className="delivery-jobs">{older.map((job) => renderJob(job))}</ul>
+                    </>
+                  ) : null,
+                );
+              }}
+            />
+          )}
         </details>
       </section>
     </article>
@@ -5232,56 +5268,206 @@ function DeliveryRequest({
   );
 }
 
-function StageHistory({
-  id,
-  current,
-  older,
+/** The history's line beside its title: how many rounds and the latest's cause. */
+function historyGist(entries: HistoryEntry[]): string {
+  const last = entries[0].round;
+  return last ? `${last.number} rondas · última: ${last.short}` : "Entrega inicial";
+}
+
+/** Rounds shown open, then as one line each, before the rest fold away. */
+const ROUNDS_OPEN = 2;
+const ROUNDS_LISTED = 4;
+
+/** The task's history by rounds, newest first: the current round and the one
+ *  before it open, the next two on a line each, older ones behind one
+ *  disclosure, the initial delivery last (open when it is all there is). */
+function TaskHistory({
+  taskId,
+  entries,
+  now,
+  renderRow,
+}: {
+  taskId: string;
+  /** Newest first, the initial delivery last. */
+  entries: HistoryEntry[];
+  now: number;
+  /** A row; `id` is the stage's anchor on its most recent row. */
+  renderRow: (row: HistoryRow, id: string | undefined) => ReactNode;
+}) {
+  const rounds = entries.slice(0, -1);
+  const initial = entries[entries.length - 1];
+  // The stage track scrolls to a stage's most recent row.
+  const anchored = new Set<HistoryRow>();
+  const seen = new Set<string>();
+  for (const row of entries.flatMap((entry) => entry.rows)) {
+    if (row.key === CHECKS_ROW || seen.has(row.job.role)) continue;
+    seen.add(row.job.role);
+    anchored.add(row);
+  }
+  const entry = (shown: HistoryEntry, open: boolean) => (
+    <HistoryRound
+      key={shown.round?.id ?? "initial"}
+      entry={shown}
+      open={open}
+      now={now}
+      rows={shown.rows.map((row) =>
+        renderRow(row, anchored.has(row) ? `delivery-stage-${taskId}-${row.job.role}` : undefined),
+      )}
+    />
+  );
+  const older = rounds.slice(ROUNDS_LISTED);
+  return (
+    <div className="delivery-rounds">
+      {rounds.slice(0, ROUNDS_LISTED).map((round, at) => entry(round, at < ROUNDS_OPEN))}
+      {older.length > 0 && (
+        <details className="delivery-fold delivery-round">
+          <summary>
+            {older.length === 1 ? "1 ronda anterior" : `${older.length} rondas anteriores`}
+          </summary>
+          <div className="delivery-rounds">{older.map((round) => entry(round, false))}</div>
+        </details>
+      )}
+      {entry(initial, rounds.length === 0)}
+    </div>
+  );
+}
+
+/** One round (or the initial delivery): its heading on one line, and when
+ *  open its cause, what it had to address, its stages and how it ended. */
+function HistoryRound({
+  entry,
+  open,
+  now,
+  rows,
+}: {
+  entry: HistoryEntry;
+  open: boolean;
+  now: number;
+  rows: ReactNode[];
+}) {
+  const { round, from, to } = entry;
+  const going = to === null;
+  let when: string | null = null;
+  if (from !== null) {
+    const at = whenLabel(from, now);
+    when = going
+      ? `en marcha · desde ${at.startsWith("hoy ") ? `las ${at.slice(4)}` : at}`
+      : `${at} · ${spanLabel(to - from)}`;
+  }
+  const meta = [round?.short, when].filter(Boolean).join(" · ");
+  return (
+    <details className="delivery-fold delivery-round" open={open}>
+      <summary>
+        <span className="delivery-round__title">
+          {round ? `Ronda ${round.number}` : "Entrega inicial"}
+        </span>
+        {meta && <span className="delivery-round__meta">{meta}</span>}
+      </summary>
+      <div className="delivery-round__body">
+        {round && round.cause !== round.short && (
+          <p className="delivery-round__cause">{round.cause}</p>
+        )}
+        {round && round.items.length > 0 && (
+          <details className="delivery-task__fold">
+            <summary>
+              {going ? "Qué atiende" : "Qué tenía que atender"} · {round.items.length}
+            </summary>
+            <ol>
+              {round.items.map((item, at) => (
+                <li key={at}>{item}</li>
+              ))}
+            </ol>
+          </details>
+        )}
+        {rows.length > 0 ? (
+          <ul className="delivery-jobs">{rows}</ul>
+        ) : (
+          <p className="delivery-muted">Todavía no ha corrido ninguna etapa.</p>
+        )}
+        {round?.outcome && <p className="delivery-round__outcome">→ {round.outcome}</p>}
+      </div>
+    </details>
+  );
+}
+
+/** The CSS tone of an outcome in the history: findings still open read in
+ *  the text's colour (the coordinator's to answer, not amber). */
+function historyTone(tone: Tone): string {
+  return tone === "attention" ? "open" : tone;
+}
+
+/** A round's checks on one line, "2 de 2 pasan", opening into each command. */
+function CheckRow({
+  checks,
   jobs,
   verdicts,
-  renderJob,
+  now,
+  expanded,
+  onToggle,
+  children,
 }: {
-  id: string;
-  current: DeliveryJob;
-  older: DeliveryJob[];
-  /** Every job of the task, oldest first. */
+  /** Each command's last run in the round. */
+  checks: DeliveryJob[];
   jobs: DeliveryJob[];
   verdicts: Record<string, DeliveryJobVerdict>;
-  renderJob: (job: DeliveryJob) => ReactNode;
+  now: number;
+  expanded: boolean;
+  onToggle: () => void;
+  /** Every run of the round's checks, as rows. */
+  children: ReactNode;
 }) {
-  const [showOlder, setShowOlder] = useState(false);
+  const outcome = checksOutcome(checks, jobs, verdicts);
+  const started = checks.flatMap((job) => (job.started_at_ms ? [job] : []));
+  const from = Math.min(...started.map((job) => job.started_at_ms!));
+  const to = Math.max(...started.map((job) => job.ended_at_ms ?? now));
+  const tone = historyTone(outcome.tone);
   return (
-    <>
-      <li id={id} className="delivery-stage">
-        <ul>{renderJob(current)}</ul>
-      </li>
-      {older.length > 0 && (
-        <li className="delivery-older">
-          <button type="button" aria-expanded={showOlder} onClick={() => setShowOlder(!showOlder)}>
-            <Icon name={showOlder ? "down" : "right"} />
-            {older.length === 1 ? "1 intento anterior" : `${older.length} intentos anteriores`}
-            <span className="delivery-muted">
-              · {older.map((job) => lower(attemptOutcome(job, jobs, verdicts).label)).join(", ")}
-            </span>
-          </button>
-          {showOlder && <ul>{older.map(renderJob)}</ul>}
-        </li>
+    <li className="delivery-job">
+      <button
+        type="button"
+        className="delivery-job__summary"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <Icon name={expanded ? "down" : "right"} />
+        <span className={`delivery-job__mark delivery-tone--${tone}`}>
+          <StatusMark icon={TONE_ICON[outcome.tone]} />
+        </span>
+        <span className="delivery-job__role">Comprobaciones</span>
+        <span className={`delivery-outcome delivery-tone--${tone}`}>{outcome.label}</span>
+        <span className="delivery-job__time">{started.length > 0 ? clockSpan(to - from) : ""}</span>
+      </button>
+      {expanded && (
+        <div className="delivery-job__detail">
+          <ul className="delivery-jobs">{children}</ul>
+        </div>
       )}
-    </>
+    </li>
   );
 }
 
 function JobRow({
+  id,
   job,
   jobs,
   verdicts,
   wait,
   now,
+  attempts,
   expanded,
   undoable,
   onToggle,
   onUndo,
   onContinue,
+  children,
 }: {
+  /** The stage's anchor, on its most recent row. */
+  id?: string;
+  /** A stage's row: how many attempts it had in the round. Without it, one
+   *  attempt among others, named by its number. */
+  attempts?: number;
+  /** Shown at the end of the opened row: its earlier attempts. */
+  children?: ReactNode;
   job: DeliveryJob;
   /** Every job of the task, oldest first. */
   jobs: DeliveryJob[];
@@ -5302,8 +5488,9 @@ function JobRow({
     (job.access === "full" ? " · acceso completo" : job.writes ? "" : " · solo lectura") +
     (job.qa_browser ? " · navegador" : "") +
     (job.ran_on ? ` · en ${job.ran_on}` : "");
+  const tone = historyTone(outcome.tone);
   return (
-    <li className="delivery-job">
+    <li id={id} className="delivery-job">
       <button
         type="button"
         className="delivery-job__summary"
@@ -5311,25 +5498,20 @@ function JobRow({
         aria-expanded={expanded}
       >
         <Icon name={expanded ? "down" : "right"} />
+        <span className={`delivery-job__mark delivery-tone--${tone}`}>
+          <StatusMark icon={TONE_ICON[outcome.tone]} />
+        </span>
         <span className="delivery-job__role">
           {stageLabel(job.role)} {byCommand(job) && <code>{job.prompt}</code>}{" "}
-          <small>· intento {job.attempt}</small>
+          <small>
+            {attempts === undefined
+              ? `· intento ${job.attempt}`
+              : attempts > 1
+                ? `· ${attempts} intentos`
+                : ""}
+          </small>
         </span>
-        <span className="delivery-job__agent">
-          {agentName(job.agent)}
-          {job.agent === "shell" ? "" : ` · ${runtimeLabel(job)}`}
-          {scope}
-        </span>
-        {/* Findings are the coordinator's to answer: neutral, not amber. */}
-        <span
-          className={`delivery-outcome delivery-tone--${outcome.tone === "attention" ? "waiting" : outcome.tone}`}
-        >
-          <StatusMark icon={TONE_ICON[outcome.tone]} />
-          {outcome.label}
-        </span>
-        <span className="delivery-job__changes">
-          {job.changes.length > 0 ? files(job.changes.length) : ""}
-        </span>
+        <span className={`delivery-outcome delivery-tone--${tone}`}>{outcome.label}</span>
         <span className="delivery-job__time">
           {duration(job, now)}
           {job.status === "started" && (
@@ -5367,17 +5549,21 @@ function JobRow({
           )}
         </p>
       )}
-      {job.timing && (job.timing.model_ms !== null || job.timing.commands_ms > 0) && (
-        <p
-          className="delivery-job__timing"
-          aria-label={`Tiempo de ${stageLabel(job.role)}`}
-          title={timingLabel(job.timing)}
-        >
-          {timingLabel(job.timing)}
-        </p>
-      )}
       {expanded && (
         <div className="delivery-job__detail">
+          {/* Who ran it, and where its time went. */}
+          <p className="delivery-job__who">
+            {agentName(job.agent)}
+            {job.agent === "shell" ? "" : ` · ${runtimeLabel(job)}`}
+            {scope}
+            {` · intento ${job.attempt}`}
+            {job.started_at_ms ? ` · empezó ${whenLabel(job.started_at_ms, now)}` : ""}
+          </p>
+          {job.timing && (job.timing.model_ms !== null || job.timing.commands_ms > 0) && (
+            <p className="delivery-job__timing" aria-label={`Tiempo de ${stageLabel(job.role)}`}>
+              {timingLabel(job.timing)}
+            </p>
+          )}
           {job.error && <p className="delivery-job__error">{job.error}</p>}
           {job.prepare && (
             <p className="delivery-job__note">
@@ -5595,6 +5781,7 @@ function JobRow({
               )}
             </div>
           </ActionGroup>
+          {children}
         </div>
       )}
     </li>
