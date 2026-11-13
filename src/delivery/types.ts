@@ -947,6 +947,8 @@ export type DeliveryTaskPhase = DeliveryPhase & {
   round?: DeliveryRound & { at: string };
   /** What one of its queued jobs waits for looks stuck. */
   warning?: string | null;
+  /** Tinto's checks that fail on its current code, by command. */
+  failing_checks?: string[];
   /** The first step of its ladder not done; absent once delivered. */
   next_step?: { rung: DeliveryRung; stage: string | null };
   /** What Tinto's rules say of its jobs, by job id; a job none applies to is left out. */

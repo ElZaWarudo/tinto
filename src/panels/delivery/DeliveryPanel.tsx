@@ -11,6 +11,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -191,7 +192,12 @@ import {
   type TaskListEntry,
   stepName,
   stepOf,
-  taskAsks,
+  taskAsksOf,
+  brokenJobOf,
+  approvalSummary,
+  approveLabel,
+  approvesInOneClick,
+  files,
   type DeliveryCurrentRound,
   type DeliveryStep,
   nowLine,
@@ -219,6 +225,8 @@ import { MAX_LOG_ENTRIES, useJobLog } from "./useJobLog";
 import { ScopeSection } from "./DeliveryScope";
 import { ExternalLink } from "./ExternalLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
+import { DeliveryQueue } from "./DeliveryQueue";
+import { deliveryQueue, type QueueItem } from "./queueItems";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
 import { GrowingTextarea } from "./GrowingTextarea";
 import { rememberOpencodeModels } from "./agentChoice";
@@ -546,10 +554,6 @@ function changeSymbol(kind: string): string {
   return "−";
 }
 
-function files(count: number): string {
-  return count === 1 ? "1 archivo" : `${count} archivos`;
-}
-
 function agentName(agent: string): string {
   return agent === "codex"
     ? "Codex"
@@ -612,11 +616,16 @@ interface DeliveryShared {
   /** What the user chose from «te necesita», until the view that holds it opens it. */
   asked: Asked | null;
   settleAsked: () => void;
+  /** Goes to what waits on the user, in this window's view that holds it. */
+  goToAsk: (what: Asked) => void;
+  /** The PRs that wait for the user's review, in any repo. */
+  reviewRequests: DeliveryReviewRequest[];
 }
 
 /** One thing that waits on the user, as «te necesita» goes to it. */
 type Asked =
-  | { kind: "task"; taskId: string }
+  /** `ask`: one of the task's asks (its card's id suffix); without it, the first. */
+  | { kind: "task"; taskId: string; ask?: string }
   | { kind: "stall"; runId: string }
   | { kind: "guides"; repo: string }
   /** The header's gear: the settings page, on its Delivery tab. */
@@ -1134,6 +1143,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     guides,
     asked,
     settleAsked,
+    goToAsk: setAsked,
+    reviewRequests,
   };
 
   return (
@@ -1743,8 +1754,9 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       ),
     [overview, tasks, now],
   );
-  // The rows that just came to need the user, tinted once: never on the first
-  // load, a filter or an unfolding, only on a task that changed group.
+  // The queue's rows of a task that just came to need the user, tinted once:
+  // never on the first load, a filter or an unfolding, only on a task that
+  // changed group.
   const lastGroups = useRef(new Map<string, StatusGroup>());
   const [arrived, setArrived] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
@@ -1777,8 +1789,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     (task) => (!lot || task.run_id === lot) && (!parent || task.parent?.key === parent.key),
   );
   const chooseParent = (next: string | null) => setListView((view) => ({ ...view, parent: next }));
-  // What needs the user is never folded.
-  const isFolded = (group: ListGroup) => group !== "attention" && listView.folded.includes(group);
+  const isFolded = (group: ListGroup) => listView.folded.includes(group);
   const needsYou = (task: DeliveryTask) => statuses.get(task.id)?.group === "attention";
   const issueFolded = (entry: Extract<TaskListEntry, { kind: "issue" }>) =>
     !listView.openIssues.includes(entry.id) && !entry.packages.some(needsYou);
@@ -1786,6 +1797,29 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const groups = taskListGroups(listed, (task) => statuses.get(task.id)?.group ?? "idle").map(
     (group) => ({ ...group, tasks: entryTasks(group.entries) }),
   );
+  // What needs the user in the whole repo, whatever the list is narrowed to,
+  // in the order its tasks have in the list.
+  const drafted = useSyncExternalStore(subscribeDrafts, draftedIds);
+  const queue = overview
+    ? deliveryQueue(
+        overview,
+        repo,
+        entryTasks(
+          taskListGroups(tasks, (task) => statuses.get(task.id)?.group ?? "idle").flatMap(
+            (group) => group.entries,
+          ),
+        ),
+        shared.reviewRequests,
+        now,
+        (id) => drafted.split("\n").includes(id),
+      )
+    : [];
+  // "Ver": the task, on what it asks.
+  const showAsk = (item: QueueItem) => {
+    if (!item.task) return;
+    reveal(item.task);
+    shared.goToAsk({ kind: "task", taskId: item.task.id, ask: item.ask ?? undefined });
+  };
   const ordered = groups.flatMap((group) => (isFolded(group.group) ? [] : group.tasks));
   // The search finds a task by its issue or its PR among all the repo's
   // tasks, whatever the list is narrowed to or has folded.
@@ -1959,12 +1993,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       <button
         key={task.id}
         type="button"
-        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${qaHere === "active" ? " delivery-task-row--qa" : ""}${arrived.has(task.id) ? " delivery-task-row--arrived" : ""}`}
+        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${qaHere === "active" ? " delivery-task-row--qa" : ""}`}
         data-task-id={task.id}
-        onAnimationEnd={(event) => {
-          if (event.animationName !== "delivery-arrive") return;
-          setArrived((current) => new Set([...current].filter((id) => id !== task.id)));
-        }}
         aria-current={selectedTask?.id === task.id ? "true" : undefined}
         onClick={() => select(repo, task.id)}
         onContextMenu={(event) => {
@@ -2360,6 +2390,16 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                 )}
               </div>
             )}
+            {(tasks.length > 0 || queue.length > 0) && (
+              <DeliveryQueue
+                items={queue}
+                arrived={arrived}
+                onArrived={(taskId) =>
+                  setArrived((current) => new Set([...current].filter((id) => id !== taskId)))
+                }
+                onShow={showAsk}
+              />
+            )}
             {activeRuns.length > 1 && (
               <label className="delivery-lot-filter">
                 <span>Lote</span>
@@ -2410,20 +2450,14 @@ function DeliveryRepoView({ repo }: { repo: string }) {
             {groups.map((group) => (
               <section key={group.group} className="delivery-task-group" aria-label={group.label}>
                 <h2>
-                  {group.group === "attention" ? (
-                    <>
-                      {group.label} <span>{group.tasks.length}</span>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      aria-expanded={!isFolded(group.group)}
-                      onClick={() => toggleGroup(group.group)}
-                    >
-                      <Icon name={isFolded(group.group) ? "right" : "down"} />
-                      {group.label} <span>{group.tasks.length}</span>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    aria-expanded={!isFolded(group.group)}
+                    onClick={() => toggleGroup(group.group)}
+                  >
+                    <Icon name={isFolded(group.group) ? "right" : "down"} />
+                    {group.label} <span>{group.tasks.length}</span>
+                  </button>
                   {group.group === "delivered" && (
                     <ActionButton
                       className="delivery-task-group__action"
@@ -2618,10 +2652,7 @@ function TaskDetail({
   const round = roundOf(overview, task.id);
   const pastRounds = roundHistory(overview, task.id);
   const handoff = lastHandoff(jobs);
-  const latest = newestFirst.find(
-    (job) => job.agent !== "shell" && job.result_state !== "stale" && !job.undone_at_ms,
-  );
-  const broken = latest && !hasOpenJob && verdicts[latest.id]?.broken ? latest : null;
+  const broken = brokenJobOf(overview, task.id);
   // A merge Tinto still runs stays in sight while it cleans up after itself.
   const openApprovals = approvals.filter(
     (approval) =>
@@ -2730,17 +2761,7 @@ function TaskDetail({
   // What «te necesita» goes to here, in the order the task's status names it:
   // the card that holds it, opened with its own control (`-open`) and focused.
   const askId = (what: string) => `delivery-ask-${task.id}-${what}`;
-  const asks = taskAsks({
-    decisions: pendingDecisions.length,
-    approvals: openApprovals.filter(
-      (approval) => approval.status === "pending" && approval.rung !== "pr_reply",
-    ),
-    replies: replies.length,
-    qaProblems: qaProblemsToDecide,
-    settingsProposals: settingsProposals.length,
-    broken: broken !== null,
-    pr,
-  });
+  const asks = taskAsksOf(overview, task);
   // The one thing to do first: the only primary button among the task's cards.
   const askTarget = asks[0]?.id ?? "now";
   // Tinto says whose turn it is; with no ask and not the user's, the task goes on alone.
@@ -2755,8 +2776,10 @@ function TaskDetail({
   useEffect(() => {
     if (!askedHere) return;
     settleAsked();
-    const opener = document.getElementById(`${askId(askTarget)}-open`);
-    const card = document.getElementById(askId(askTarget)) ?? opener;
+    // The ask chosen in the queue, while the task still asks it.
+    const target = asks.some((ask) => ask.id === askedHere.ask) ? askedHere.ask! : askTarget;
+    const opener = document.getElementById(`${askId(target)}-open`);
+    const card = document.getElementById(askId(target)) ?? opener;
     card?.scrollIntoView?.({ block: "nearest" });
     card?.focus();
     // Pressed as the user would; a card that opens on top takes the focus itself.
@@ -4397,26 +4420,14 @@ function ApprovalBar({
 }) {
   const name = stepName(stepOf(approval), pr);
   const pending = approval.status === "pending";
-  const commits = approval.commits ?? [];
   const running = approval.progress ? `Fusionando · ${lower(approval.progress.step)}` : null;
-  // A step with nothing to choose or to read first is approved from its line:
-  // the PR asks for reviewers, the merge shows its checks, and a text the user
-  // edited is approved where they edited it.
-  const direct =
-    pending &&
-    !open &&
-    ["commit", "sync", "push", "jira"].includes(approval.rung) &&
-    !approval.notice &&
-    !stepDrafts.has(approval.id);
-  const summary =
-    commits.length > 0
-      ? `${commits.length === 1 ? "1 commit" : `${commits.length} commits`} · ${files(commits.reduce((sum, commit) => sum + commit.paths.length, 0))}`
-      : approval.title;
+  // Opened, the step is approved from its card.
+  const direct = !open && approvesInOneClick(approval, stepDrafts.has(approval.id));
   return (
     <StepBar
       id={id}
       title={pending ? `Aprobar ${name}` : (running ?? `Esperando al coordinador: ${name}`)}
-      summary={summary}
+      summary={approvalSummary(approval)}
       button={pending ? "Revisar" : "Ver"}
       buttonLabel={`${pending ? "Revisar" : "Ver"} ${name}`}
       primary={primary && !direct}
@@ -4439,26 +4450,6 @@ function ApprovalBar({
       {children}
     </StepBar>
   );
-}
-
-/** What the button that approves a step says it does. */
-function approveLabel(approval: DeliveryApproval, pr: DeliveryPr | null | undefined): string {
-  switch (approval.rung) {
-    case "commit":
-      return "Aprobar y hacer commit";
-    case "sync":
-      return "Aprobar y sincronizar";
-    case "push":
-      return "Aprobar y publicar";
-    case "merge":
-      return "Aprobar y fusionar";
-    case "pr":
-      return pr?.state === "open"
-        ? `Aprobar y actualizar el PR #${pr.number}`
-        : "Aprobar y abrir el PR";
-    default:
-      return "Aprobar";
-  }
 }
 
 /** A step's line, which opens into its card below it; the chevron folds it. */
@@ -4791,6 +4782,26 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
 /** The commit, PR or merge texts the user edited and has not approved yet,
  *  by approval: hiding the step or opening another task does not lose them. */
 const stepDrafts = new Map<string, { title: string; body: string; messages?: string[] }>();
+/** Who shows a one-click approval, told when a step gains or loses its draft. */
+const draftListeners = new Set<() => void>();
+
+function setStepDraft(
+  id: string,
+  draft: { title: string; body: string; messages?: string[] } | null,
+) {
+  const had = stepDrafts.has(id);
+  if (draft) stepDrafts.set(id, draft);
+  else stepDrafts.delete(id);
+  if (had !== !!draft) draftListeners.forEach((listener) => listener());
+}
+
+function subscribeDrafts(listener: () => void) {
+  draftListeners.add(listener);
+  return () => void draftListeners.delete(listener);
+}
+
+/** The approvals with a draft, as a value that changes when they do. */
+const draftedIds = () => [...stepDrafts.keys()].sort().join("\n");
 
 function ApprovalBanner({
   task,
@@ -4871,8 +4882,7 @@ function ApprovalBanner({
         ? { title, body }
         : undefined;
   useEffect(() => {
-    if (edited) stepDrafts.set(approval.id, { title, body, messages });
-    else stepDrafts.delete(approval.id);
+    setStepDraft(approval.id, edited ? { title, body, messages } : null);
   });
   // The PR's description can show the task's QA screenshots.
   const [images, setImages] = useState<DeliveryReplyImage[]>(approval.images ?? []);

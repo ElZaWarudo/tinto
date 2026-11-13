@@ -365,8 +365,89 @@
 .delivery-panel .delivery-task-row--qa {
   background: color-mix(in srgb, var(--info) 8%, transparent);
 }
-/* A task that just came to need the user: its row tints once as it lands. */
-.delivery-panel .delivery-task-row--arrived {
+/* "Te necesita": what needs the user, above the list. Plain rows split by a
+   hairline; amber only in its heading, red only on what broke. */
+.delivery-queue {
+  margin: 6px 0 4px;
+}
+.delivery-queue h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+.delivery-queue h2 .delivery-icon,
+.delivery-queue h2 span {
+  color: var(--warn);
+}
+.delivery-queue h2 span {
+  font-weight: 400;
+}
+.delivery-queue ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.delivery-queue__none {
+  margin: 10px 12px 4px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.delivery-queue__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 7px;
+}
+.delivery-queue__row + .delivery-queue__row {
+  border-top: 1px solid var(--border);
+}
+.delivery-panel .delivery-queue__text {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.delivery-panel button.delivery-queue__text:hover:not(:disabled) {
+  background: transparent;
+}
+.delivery-panel button.delivery-queue__text:hover strong {
+  text-decoration: underline;
+}
+.delivery-queue__text strong {
+  font-weight: 600;
+}
+.delivery-queue__need {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delivery-queue__need--broke {
+  color: var(--danger);
+}
+.delivery-panel .delivery-queue__control {
+  flex: none;
+  white-space: nowrap;
+}
+.delivery-queue a.delivery-queue__control {
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--accent-fg);
+}
+/* A task that just came to need the user: its queue row tints once as it lands. */
+.delivery-panel .delivery-queue__row--arrived {
   animation: delivery-arrive 280ms ease;
 }
 @keyframes delivery-arrive {
