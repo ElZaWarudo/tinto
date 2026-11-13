@@ -285,7 +285,8 @@ export function deliveryQueue(
     }
     // Held by blockers nobody works on, and in the queue for nothing else:
     // lifting one is the user's, in the block that lists them.
-    const [blocker] = openBlockers(task);
+    // Only a note: another task or a PR it waits for clears by itself.
+    const blocker = openBlockers(task).find((one) => one.type === "note");
     if (blocker && holds.length === before && !listed.has(task.id) && !attended(overview, task)) {
       holds.push(
         item({

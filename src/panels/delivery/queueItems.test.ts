@@ -467,6 +467,30 @@ describe("deliveryQueue", () => {
       [{ key: "t1:blocked", kind: "holds", need: "Bloqueada: Espera a infra", ask: "broken" }],
     ],
     [
+      "a task that only waits for another task: nothing, it clears by itself",
+      {
+        tasks: [
+          {
+            ...task("t1"),
+            blockers: [
+              {
+                id: "b1",
+                type: "task",
+                task_id: "t0",
+                key: "AG-1",
+                until: "merged",
+                status: "",
+                cleared_at_ms: null,
+              },
+            ],
+          },
+        ],
+        phases: { t1: phase({ kind: "blocked", open: 1 }, "external") },
+      },
+      {},
+      [],
+    ],
+    [
       "a blocked task with a job running for it: nothing",
       {
         tasks: [
