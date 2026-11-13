@@ -65,8 +65,7 @@
 /* Every link in the panel: the link buttons' colour, underlined when pointed
    at. `:where` leaves links with a look of their own (the task's chips) as they are. */
 .delivery-panel :where(a) {
-  /* A theme may give links their own colour; the others use the accent. */
-  color: var(--link, var(--accent-fg));
+  color: var(--link);
   text-decoration: none;
 }
 .delivery-panel :where(a):hover {
@@ -1185,7 +1184,7 @@
   border: 0;
   background: transparent;
   /* The colour of the panel's links: it is one, drawn as a button. */
-  color: var(--link, var(--accent-fg));
+  color: var(--link);
   font-size: 11px;
 }
 .delivery-panel .delivery-link-button:hover:not(:disabled) {
@@ -1813,11 +1812,23 @@
   justify-self: start;
 }
 
-/* ---------- Stage track ---------- */
-/* Agentes and Entrega side by side only while every cell keeps its room
-   (144px for an agent, whose name and menu share a line; 96px for a step);
-   narrower, Entrega goes under Agentes, and a group whose cells still do not
-   fit wraps them into a second row instead of cutting their names. */
+/* ---------- Stage track: a line diagram ---------- */
+/* Each group is a line and each stage a station on it: the station's form
+   says where the stage stands (filled passed, ring with a dot running, grey
+   hollow ring never done yet, hollow ring in the line's colour done before and
+   to be done again, warning triangle reached with a problem nobody has to
+   answer here, thick amber ring yours, red square broke, small grey tick
+   skipped). The rail is always one continuous solid line: grey, and in the
+   group's colour only between two passed stations (skipped ones between them
+   do not cut it), so colour says "an unbroken stretch that is done" and
+   nothing else. The cells have no boxes. The cells of a row share its width
+   equally, so each one draws the segment from the middle of the cell before
+   it to its station; a wrapped row starts its line at its edge (the list
+   clips the overhang), and nothing runs past a group's last station.
+   Agentes and Entrega sit side by side only while every station keeps room
+   for its words; narrower, Entrega goes under Agentes, and a group whose
+   stations still do not fit wraps them into a second row instead of cutting
+   their names. */
 .delivery-track {
   display: flex;
   flex-wrap: wrap;
@@ -1825,6 +1836,7 @@
   min-width: 0;
 }
 .delivery-track__part {
+  --line: var(--line-agents);
   /* Side by side only when every station keeps room for its words: five
      agents of 200px. Narrower, the two groups are two rows. */
   flex: 1 1 1000px;
@@ -1834,10 +1846,10 @@
   align-content: start;
 }
 .delivery-track__part--rungs {
+  --line: var(--line-delivery);
   /* Seven steps of 160px. */
   flex: 1 1 1120px;
 }
-.delivery-track h3,
 .delivery-section h3 {
   margin: 0;
   font-size: 11px;
@@ -1846,76 +1858,103 @@
   letter-spacing: 0.05em;
   color: var(--fg-muted);
 }
-/* A row of equal steps; the 1px gaps over the list's background draw the
-   dividers, and a row's cells grow to fill it, so a wrapped row leaves no
-   empty slot. */
+/* A line's name, above its rail and in its colour. */
+.delivery-track h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--line);
+}
 .delivery-track ol {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 1px;
-  background: var(--border);
-  border: 1px solid var(--border);
+  /* Clipped sideways only (a wrapped row cuts its first segment at the edge):
+     a station's halo and its hint reach above the row. */
+  overflow: visible;
+  overflow-x: clip;
 }
 .delivery-node {
+  --station: 14px;
+  --station-top: 5px;
+  /* The segment's top: centred on the station. */
+  --segment-top: calc(var(--station-top) + var(--station) / 2 - 2px);
+  --rail: color-mix(in srgb, var(--fg-muted) 50%, transparent);
+  --edge: var(--line);
+  --fill: var(--line);
+  --ring: 2.5px;
+  --size: var(--station);
   position: relative;
   flex: 1 1 96px;
   min-width: 0;
-  background: var(--bg);
-  border-top: 2px solid var(--border);
-  /* A stage that changes tone on its own is seen changing. */
-  transition:
-    border-top-color 200ms ease,
-    background-color 200ms ease;
 }
-.delivery-node small,
-.delivery-node .delivery-icon {
-  transition: color 200ms ease;
-}
-/* The merge landing: the ok line draws itself across the rung. Being a
-   transition, an already merged task shows it at rest, over its border. */
-.delivery-node[data-rung="merge"]::before {
+.delivery-node + .delivery-node::before {
   content: "";
   position: absolute;
-  top: -2px;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--accent-fg);
+  top: var(--segment-top);
+  left: -50%;
+  width: 100%;
+  height: 4px;
+  background: var(--rail);
+}
+/* Done from one station to the next (passed at both ends, only skipped ones
+   between, as taskTrack says): the stretch takes the line's colour. */
+.delivery-node[data-joined]::before {
+  background: var(--line);
+}
+/* The merge landing: over its grey segment, the line draws itself to the
+   Merge station when the station before it is done too, and the disc fills.
+   Being a transition, a merged task shows it at rest. */
+.delivery-node[data-rung="merge"]::before {
+  background: var(--rail);
+}
+.delivery-node[data-rung="merge"] > :is(div, button)::after {
+  content: "";
+  position: absolute;
+  top: var(--segment-top);
+  left: -50%;
+  width: 100%;
+  height: 4px;
+  background: var(--line);
   transform: scaleX(0);
   transform-origin: left;
   transition: transform 300ms var(--ease-out);
 }
-.delivery-node--ok[data-rung="merge"]::before {
+.delivery-node[data-rung="merge"][data-joined] > :is(div, button)::after {
   transform: scaleX(1);
 }
 @media (prefers-reduced-motion: reduce) {
-  .delivery-node[data-rung="merge"]::before {
+  .delivery-node[data-rung="merge"] > :is(div, button)::after {
     transform: none;
     opacity: 0;
     transition: opacity 300ms ease;
     /* A fade is not motion: it keeps its time over the global rule. */
     transition-duration: 300ms !important;
   }
-  .delivery-node--ok[data-rung="merge"]::before {
+  .delivery-node[data-rung="merge"][data-joined] > :is(div, button)::after {
     opacity: 1;
   }
 }
+/* The station, centred over the stage's name and lines. Every name on one
+   line under its station: what a cell holds starts at its top and a longer
+   one grows downward. */
 .delivery-node > div,
 .delivery-panel .delivery-node > button {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1px;
+  align-content: start;
+  justify-items: center;
   box-sizing: border-box;
   width: 100%;
   height: 100%;
   min-width: 0;
-  padding: 6px 9px 7px;
+  padding: var(--station-top) 6px 6px;
   border: 0;
   background: transparent;
-  text-align: left;
+  text-align: center;
 }
 /* A name too long for its cell takes a second line, never an ellipsis. */
 .delivery-node__name {
@@ -1926,11 +1965,11 @@
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-/* Who runs the stage from now on: a small menu in the card's corner. */
+/* Who runs the stage from now on: a small menu by the name, off the line. */
 .delivery-node > .delivery-menu {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: calc(var(--station-top) + var(--station) + 1px);
+  right: 0;
 }
 .delivery-panel .delivery-node > .delivery-menu > button {
   padding: 2px 4px;
@@ -1944,7 +1983,8 @@
 }
 .delivery-node:has(> .delivery-menu) > div,
 .delivery-panel .delivery-node:has(> .delivery-menu) > button {
-  padding-right: 26px;
+  padding-right: 22px;
+  padding-left: 22px;
 }
 .delivery-stage-agent {
   display: grid;
@@ -1957,36 +1997,25 @@
 .delivery-stage-agent p {
   margin: 0;
 }
+/* A station has no box to keep to: its words take a second line before they
+   are cut. */
 .delivery-node small {
+  display: -webkit-box;
   max-width: 100%;
+  overflow: hidden;
   font-size: 12px;
   color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.delivery-node--ok,
-.delivery-node--live {
-  border-top-color: var(--accent-fg);
-}
-.delivery-node--ok .delivery-icon {
-  color: var(--accent-fg);
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  /* A stage that changes tone on its own is seen changing. */
+  transition: color 200ms ease;
 }
 /* Amber only where the step waits on the user (an approval to give, one to
-   give again); findings, conflicts or news the agents handle stay neutral,
-   their icon saying what they are. */
-.delivery-node--danger {
-  border-top-color: var(--danger);
-}
-.delivery-node--step {
-  border-top-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 8%, var(--bg));
-}
-.delivery-node--step .delivery-icon,
+   give again); findings, conflicts or news the agents handle stay neutral. */
 .delivery-node--step small {
   color: var(--warn);
 }
-.delivery-node--danger .delivery-icon,
 .delivery-node--danger small {
   color: var(--danger);
 }
@@ -1998,141 +2027,7 @@
   color: var(--fg-muted);
   font-weight: 500;
 }
-.delivery-node[aria-current="step"] {
-  border-top-color: var(--fg-muted);
-}
-
-/* ---------- Tinto theme: the stage track as a line diagram ---------- */
-/* Each group is a line and each stage a station on it: the station's form
-   says where the stage stands (filled passed, ring with a dot running, grey
-   hollow ring never done yet, hollow ring in the line's colour done before and
-   to be done again, warning triangle reached with a problem nobody has to
-   answer here, thick amber ring yours, red square broke, small grey tick
-   skipped). The rail is always one continuous solid line: grey, and in the
-   group's colour only between two passed stations (skipped ones between them
-   do not cut it), so colour says "an unbroken stretch that is done" and
-   nothing else. The cells lose their boxes. The cells of a row share its width
-   equally, so each one draws the segment from the middle of the cell before
-   it to its station; a wrapped row starts its line at its edge (the list
-   clips the overhang), and nothing runs past a group's last station. */
-[data-theme="tinto"] .delivery-track__part {
-  --line: var(--line-agents, #1b5e8c);
-}
-/* A station has no box to keep to: its words take a second line before they
-   are cut. */
-/* Every name on one line under its station: what a cell holds starts at its
-   top and a longer one grows downward. */
-[data-theme="tinto"] .delivery-node > div,
-[data-theme="tinto"] .delivery-panel .delivery-node > button {
-  align-content: start;
-}
-[data-theme="tinto"] .delivery-node small {
-  display: -webkit-box;
-  overflow: hidden;
-  white-space: normal;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-[data-theme="tinto"] .delivery-track__part--rungs {
-  --line: var(--line-delivery, #1f7a5a);
-}
-[data-theme="tinto"] .delivery-track h3 {
-  font-size: 12px;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--line);
-}
-[data-theme="tinto"] .delivery-track ol {
-  gap: 0;
-  background: none;
-  border: 0;
-  /* Clipped sideways only (a wrapped row cuts its first segment at the edge):
-     a station's halo and its hint reach above the row. */
-  overflow: visible;
-  overflow-x: clip;
-}
-[data-theme="tinto"] .delivery-node {
-  --station: 14px;
-  --station-top: 5px;
-  /* The segment's top: centred on the station. */
-  --segment-top: calc(var(--station-top) + var(--station) / 2 - 2px);
-  --rail: color-mix(in srgb, var(--fg-muted) 50%, transparent);
-  --edge: var(--line);
-  --fill: var(--line);
-  --ring: 2.5px;
-  --size: var(--station);
-  background: none;
-  border-top: 0;
-}
-[data-theme="tinto"] .delivery-node + .delivery-node::before {
-  content: "";
-  position: absolute;
-  top: var(--segment-top);
-  left: -50%;
-  width: 100%;
-  height: 4px;
-  background: var(--rail);
-}
-/* Done from one station to the next (passed at both ends, only skipped ones
-   between, as taskTrack says): the stretch takes the line's colour. */
-[data-theme="tinto"] .delivery-node[data-joined]::before {
-  background: var(--line);
-}
-/* The merge landing: over its grey segment, the line draws itself to the
-   Merge station when the station before it is done too, and the disc fills.
-   Being a transition, a merged task shows it at rest. */
-[data-theme="tinto"] .delivery-node[data-rung="merge"]::before {
-  content: "";
-  top: var(--segment-top);
-  left: -50%;
-  right: auto;
-  width: 100%;
-  height: 4px;
-  background: var(--rail);
-  transform: none;
-  opacity: 1;
-  transition: none;
-}
-[data-theme="tinto"] .delivery-node[data-rung="merge"] > :is(div, button)::after {
-  content: "";
-  position: absolute;
-  top: var(--segment-top);
-  left: -50%;
-  width: 100%;
-  height: 4px;
-  background: var(--line);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 300ms var(--ease-out);
-}
-[data-theme="tinto"] .delivery-node[data-rung="merge"][data-joined] > :is(div, button)::after {
-  transform: scaleX(1);
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-theme="tinto"] .delivery-node[data-rung="merge"] > :is(div, button)::after {
-    transform: none;
-    opacity: 0;
-    transition: opacity 300ms ease;
-    /* A fade is not motion: it keeps its time over the global rule. */
-    transition-duration: 300ms !important;
-  }
-  [data-theme="tinto"] .delivery-node[data-rung="merge"][data-joined] > :is(div, button)::after {
-    opacity: 1;
-  }
-}
-/* The station, centred over the stage's name and lines. */
-[data-theme="tinto"] .delivery-node > div,
-[data-theme="tinto"] .delivery-panel .delivery-node > button {
-  justify-items: center;
-  padding: var(--station-top) 6px 6px;
-  text-align: center;
-}
-[data-theme="tinto"] .delivery-node:has(> .delivery-menu) > div,
-[data-theme="tinto"] .delivery-panel .delivery-node:has(> .delivery-menu) > button {
-  padding-right: 22px;
-  padding-left: 22px;
-}
-[data-theme="tinto"] .delivery-node > :is(div, button)::before {
+.delivery-node > :is(div, button)::before {
   content: "";
   position: relative;
   z-index: 2;
@@ -2147,51 +2042,47 @@
     background-color 200ms ease,
     border-color 200ms ease;
 }
-[data-theme="tinto"] .delivery-node[data-rung="merge"] > :is(div, button)::before {
+.delivery-node[data-rung="merge"] > :is(div, button)::before {
   transition-duration: 300ms;
   transition-timing-function: var(--ease-out);
 }
-[data-theme="tinto"] .delivery-node[data-station="running"] {
+.delivery-node[data-station="running"] {
   --fill: radial-gradient(circle, var(--line) 0 2.5px, var(--bg) 3px);
 }
-[data-theme="tinto"] .delivery-node[data-station="pending"] {
+.delivery-node[data-station="pending"] {
   --edge: var(--fg-muted);
   --fill: var(--bg);
 }
-[data-theme="tinto"] .delivery-node[data-station="repeats"] {
+.delivery-node[data-station="repeats"] {
   --fill: var(--bg);
 }
-[data-theme="tinto"] .delivery-node[data-station="yours"] {
+.delivery-node[data-station="yours"] {
   --edge: var(--warn);
   --fill: var(--bg);
   --ring: 3.5px;
 }
-[data-theme="tinto"] .delivery-node[data-station="broke"] {
+.delivery-node[data-station="broke"] {
   --edge: var(--danger);
   --fill: var(--danger);
   --size: 12px;
 }
-[data-theme="tinto"] .delivery-node[data-station="broke"] > :is(div, button)::before {
+.delivery-node[data-station="broke"] > :is(div, button)::before {
   border-radius: 0;
 }
 /* Never run and not to run: a short tick on the rail, not a station to come. */
-[data-theme="tinto"] .delivery-node[data-station="skipped"] {
+.delivery-node[data-station="skipped"] {
   --edge: var(--fg-muted);
   --fill: var(--fg-muted);
   --ring: 0px;
   --size: 6px;
 }
-[data-theme="tinto"] .delivery-node[data-station="skipped"] > :is(div, button)::before {
+.delivery-node[data-station="skipped"] > :is(div, button)::before {
   border-radius: 0;
 }
 /* What runs now and is no station (Tinto's checks, a setup): a small running
    station on the stretch after the stage it follows, where the next cell's
    segment has its middle (the last one keeps it inside the row). */
 .delivery-node__now {
-  display: none;
-}
-[data-theme="tinto"] .delivery-node__now {
-  display: block;
   position: absolute;
   z-index: 2;
   top: calc(var(--station-top) + (var(--station) - 9px) / 2);
@@ -2204,24 +2095,25 @@
   background: radial-gradient(circle, var(--line) 0 1.25px, var(--bg) 1.75px);
   transform: translateX(-50%);
 }
-[data-theme="tinto"] .delivery-node:last-child > .delivery-node__now {
+.delivery-node:last-child > .delivery-node__now {
   left: auto;
   right: 0;
   transform: none;
 }
 /* Reached, with a problem nobody has to answer here: the warning sign itself
-   is the station, in ink, over a patch of the ground that hides the rail. */
-[data-theme="tinto"] .delivery-node[data-station="attention"] {
+   is the station, in the text colour, over a patch of the ground that hides
+   the rail. */
+.delivery-node[data-station="attention"] {
   --size: 16px;
 }
-[data-theme="tinto"] .delivery-node[data-station="attention"] > :is(div, button)::before {
+.delivery-node[data-station="attention"] > :is(div, button)::before {
   border: 0;
   border-radius: 0;
   background: var(--fg-soft);
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E")
     center / contain no-repeat;
 }
-[data-theme="tinto"] .delivery-node[data-station="attention"]::after {
+.delivery-node[data-station="attention"]::after {
   content: "";
   position: absolute;
   z-index: 1;
@@ -2235,8 +2127,7 @@
 }
 /* The station says the state; only a fine note (a wait, answered findings)
    keeps its icon, in grey. */
-[data-theme="tinto"]
-  .delivery-node:is(
+.delivery-node:is(
     .delivery-node--ok,
     .delivery-node--live,
     .delivery-node--step,
@@ -2250,45 +2141,42 @@
   > :is(.delivery-icon, .delivery-dot) {
   display: none;
 }
-/* Only the line diagram shows the hint of what a stage opens. */
-.delivery-node__hint {
-  display: none;
+.delivery-node .delivery-node__name .delivery-icon {
+  color: var(--fg-muted);
 }
 /* Pointing at a stage that opens its history: its station and its words
    answer, not a grey box behind them. */
-[data-theme="tinto"] .delivery-panel .delivery-node > button:hover:not(:disabled) {
+.delivery-panel .delivery-node > button:hover:not(:disabled) {
   background: transparent;
 }
-[data-theme="tinto"] .delivery-node > button::before {
+.delivery-node > button::before {
   transition:
     background-color 200ms ease,
     border-color 200ms ease,
     box-shadow 120ms var(--ease-out),
     transform 120ms var(--ease-out);
 }
-[data-theme="tinto"] .delivery-node > button:is(:hover, :focus-visible):not(:disabled)::before {
+.delivery-node > button:is(:hover, :focus-visible):not(:disabled)::before {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--edge) 24%, transparent);
   transform: scale(1.2);
 }
-[data-theme="tinto"] .delivery-node > button .delivery-node__name,
-[data-theme="tinto"] .delivery-node > button small {
+.delivery-node > button .delivery-node__name,
+.delivery-node > button small {
   transition: color 120ms ease;
 }
-[data-theme="tinto"]
-  .delivery-node
-  > button:is(:hover, :focus-visible):not(:disabled)
-  .delivery-node__name {
+.delivery-node > button:is(:hover, :focus-visible):not(:disabled) .delivery-node__name {
   color: var(--line);
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 4px;
 }
-[data-theme="tinto"] .delivery-node > button:is(:hover, :focus-visible):not(:disabled) small {
+.delivery-node > button:is(:hover, :focus-visible):not(:disabled) small {
   color: var(--fg-strong);
 }
-/* What pointing at a stage offers, said above its station. */
-[data-theme="tinto"] .delivery-node__hint {
-  display: block;
+/* What pointing at a stage offers, said above its station: the strong text
+   colour as ground and the panel's ground as text, so it inverts in every
+   theme. */
+.delivery-node__hint {
   position: absolute;
   z-index: 3;
   bottom: calc(100% - var(--station-top) + 7px);
@@ -2306,23 +2194,12 @@
     opacity 120ms var(--ease-out),
     transform 120ms var(--ease-out);
 }
-[data-theme="tinto"]
-  .delivery-node
-  > button:is(:hover, :focus-visible):not(:disabled)
-  > .delivery-node__hint {
+.delivery-node > button:is(:hover, :focus-visible):not(:disabled) > .delivery-node__hint {
   opacity: 1;
   transform: translate(-50%, 0);
 }
-[data-theme="tinto"] .delivery-node .delivery-node__name .delivery-icon {
-  color: var(--fg-muted);
-}
-/* The agent menu sits by the name, off the line. */
-[data-theme="tinto"] .delivery-node > .delivery-menu {
-  top: calc(var(--station-top) + var(--station) + 1px);
-  right: 0;
-}
 /* The list clips what overhangs a row: focus is drawn inside the cell. */
-[data-theme="tinto"] .delivery-panel .delivery-node button:focus-visible {
+.delivery-panel .delivery-node button:focus-visible {
   outline-offset: -2px;
 }
 
@@ -2362,15 +2239,15 @@
   border-color: var(--border-strong);
 }
 /* A task row's line: one small station per stage and step, in the same forms. */
-[data-theme="tinto"] .delivery-mini-line {
+.delivery-mini-line {
   display: inline-flex;
   flex: none;
   align-items: center;
   gap: 2px;
   margin-left: auto;
 }
-[data-theme="tinto"] .delivery-mini-line i {
-  --line: var(--line-agents, #1b5e8c);
+.delivery-mini-line i {
+  --line: var(--line-agents);
   box-sizing: border-box;
   width: 6px;
   height: 6px;
@@ -2378,43 +2255,41 @@
   border-radius: 50%;
   background: var(--line);
 }
-[data-theme="tinto"] .delivery-mini-line .delivery-mini-line__step {
-  --line: var(--line-delivery, #1f7a5a);
+.delivery-mini-line .delivery-mini-line__step {
+  --line: var(--line-delivery);
 }
-[data-theme="tinto"]
-  .delivery-mini-line
-  i:not(.delivery-mini-line__step)
-  + .delivery-mini-line__step {
+.delivery-mini-line i:not(.delivery-mini-line__step) + .delivery-mini-line__step {
   margin-left: 4px;
 }
-[data-theme="tinto"] .delivery-mini-line [data-station="running"] {
+.delivery-mini-line [data-station="running"] {
   background: radial-gradient(circle, var(--line) 0 0.75px, var(--bg) 1px);
 }
-[data-theme="tinto"] .delivery-mini-line [data-station="repeats"] {
+.delivery-mini-line [data-station="repeats"] {
   background: var(--bg);
 }
-[data-theme="tinto"] .delivery-mini-line [data-station="pending"] {
+.delivery-mini-line [data-station="pending"] {
   border-color: var(--fg-muted);
   background: var(--bg);
 }
-[data-theme="tinto"] .delivery-mini-line [data-station="yours"] {
+.delivery-mini-line [data-station="yours"] {
   border: 2px solid var(--warn);
   background: var(--bg);
 }
-[data-theme="tinto"] .delivery-mini-line [data-station="broke"] {
+.delivery-mini-line [data-station="broke"] {
   border-color: var(--danger);
   border-radius: 0;
   background: var(--danger);
 }
-/* A solid ink triangle: at this size a drawn warning sign would not read. */
-[data-theme="tinto"] .delivery-mini-line [data-station="attention"] {
+/* A solid triangle in the text colour: at this size a drawn warning sign
+   would not read. */
+.delivery-mini-line [data-station="attention"] {
   width: 7px;
   border: 0;
   border-radius: 0;
   background: var(--fg-soft);
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
-[data-theme="tinto"] .delivery-mini-line [data-station="skipped"] {
+.delivery-mini-line [data-station="skipped"] {
   width: 3px;
   height: 3px;
   border: 0;

@@ -38,7 +38,6 @@ import {
 import { armExternalTabDetach } from "../../workspace/externalTabDetach";
 import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
-import { useResolvedTheme } from "../../qol/theme";
 import { Icon as AppIcon, type IconName } from "../../workbench/Icon";
 import {
   codexReasoningLabel,
@@ -1781,15 +1780,12 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       ),
     [overview, tasks, now],
   );
-  // The Tinto theme ends each row with its stages as a small line: read once
-  // per overview, not on every tick of the clock.
-  const tinto = useResolvedTheme() === "tinto";
+  // Each row ends with its stages as a small line: read once per overview,
+  // not on every tick of the clock.
   const tracks = useMemo(
     () =>
-      new Map(
-        tinto && overview ? tasks.map((task) => [task.id, taskTrack(overview, task)] as const) : [],
-      ),
-    [tinto, overview, tasks],
+      new Map(overview ? tasks.map((task) => [task.id, taskTrack(overview, task)] as const) : []),
+    [overview, tasks],
   );
   // The queue's rows of a task that just came to need the user, tinted once:
   // never on the first load, a filter or an unfolding, only on a task that
@@ -3852,8 +3848,8 @@ function StageAgentEditor({ repo, role }: { repo: string; role: string }) {
   );
 }
 
-/** A task's stages and steps as small stations on its list row (the Tinto
- *  theme's): where it is, at a glance. The row's text already says it. */
+/** A task's stages and steps as small stations on its list row: where it
+ *  is, at a glance. The row's text already says it. */
 function MiniLine({ track }: { track: TaskTrack }) {
   return (
     <span className="delivery-mini-line" aria-hidden>
