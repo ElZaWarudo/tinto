@@ -1184,7 +1184,8 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--accent-fg);
+  /* The colour of the panel's links: it is one, drawn as a button. */
+  color: var(--link, var(--accent-fg));
   font-size: 11px;
 }
 .delivery-panel .delivery-link-button:hover:not(:disabled) {
@@ -2019,6 +2020,12 @@
 }
 /* A station has no box to keep to: its words take a second line before they
    are cut. */
+/* Every name on one line under its station: what a cell holds starts at its
+   top and a longer one grows downward. */
+[data-theme="tinto"] .delivery-node > div,
+[data-theme="tinto"] .delivery-panel .delivery-node > button {
+  align-content: start;
+}
 [data-theme="tinto"] .delivery-node small {
   display: -webkit-box;
   overflow: hidden;
