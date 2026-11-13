@@ -31,7 +31,6 @@ import {
   prSummary,
   waitsOnLabel,
   waitsOnPhrase,
-  roundHistory,
   roundRung,
   roundStage,
   scopeActivity,
@@ -702,7 +701,7 @@ describe("results left behind by later work", () => {
 
     const tests = job({ result: { ...job().result!, status: "findings", findings: ["a", "b"] } });
     expect(attemptOutcome(tests, [], { [tests.id]: { answered: true } })).toEqual({
-      tone: "idle",
+      tone: "ok",
       label: "2 hallazgos · atendidos",
     });
     expect(attemptOutcome(tests).tone).toBe("attention");
@@ -984,16 +983,6 @@ describe("a task in a round", () => {
     expect(roundRung(push, done, round({ after_push: true }))).toBe(true);
     expect(roundRung(commit, approval({ requested_at_ms: 120 }), round())).toBe(false);
     expect(roundRung(commit, done, null)).toBe(false);
-  });
-
-  it("folds the rounds that ended, newest first, down to the initial delivery", () => {
-    const ended = { ...round(), closed_at_ms: 200, outcome: "corregidos" };
-    const open = { ...round({ id: "r3", number: 3, cause: "Cambios pedidos en el PR #308" }) };
-    expect(roundHistory(overview({ rounds: [ended, open] }), "t1")).toEqual([
-      "Ronda 2 · 5 hallazgos de QA → corregidos",
-      "Ronda 1 · entrega inicial",
-    ]);
-    expect(roundHistory(overview(), "t1")).toEqual([]);
   });
 });
 

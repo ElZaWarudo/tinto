@@ -804,7 +804,7 @@ describe("DeliveryPanel", () => {
     );
   });
 
-  it("lists each of Tinto's checks by its command, with its own earlier runs", async () => {
+  it("gathers Tinto's checks in one row that lists each command and its earlier runs", async () => {
     const user = userEvent.setup();
     const check = (id: string, prompt: string, over: Partial<DeliveryJob> = {}) =>
       job({
@@ -836,12 +836,15 @@ describe("DeliveryPanel", () => {
     );
     renderPanel();
     const history = await screen.findByRole("region", { name: "Historial" });
+    // One row for the checks: each command's last run counts.
+    const checks = within(history).getByRole("button", { name: /^Comprobaciones\s*2 de 2 pasan/ });
+    // Opened (the newest job is one of them), it lists every run, the failed lint too.
+    expect(checks).toHaveAttribute("aria-expanded", "true");
     expect(within(history).getByText("npm test")).toBeInTheDocument();
-    // The earlier, failed lint run folds under the current one.
-    expect(within(history).getAllByText("npm run lint", { selector: "code" })).toHaveLength(1);
+    expect(within(history).getAllByText("npm run lint", { selector: "code" })).toHaveLength(2);
     expect(
-      within(history).getByRole("button", { name: /^1 intento anterior\s*· falló/ }),
-    ).toBeInTheDocument();
+      within(history).getByRole("button", { name: /^Comprobaciones npm run lint\s*· intento 1/ }),
+    ).toHaveTextContent("Falló");
     await user.click(within(history).getByRole("button", { name: /^Implementación/ }));
     expect(within(history).getByText("Comprobaciones de Tinto al empezar")).toBeInTheDocument();
   });
@@ -871,14 +874,15 @@ describe("DeliveryPanel", () => {
     });
     client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [job()] }));
     renderPanel();
-    const tests = await screen.findByRole("button", { name: /^Tests\s*· intento 1/ });
+    const history = await screen.findByRole("region", { name: "Historial" });
+    const tests = await within(history).findByRole("button", { name: /^Tests/ });
     await waitFor(() => expect(tests).toHaveAttribute("aria-expanded", "true"));
     const review = job({ id: "j2", role: "review", status: "started", result: null });
     client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [job(), review] }));
     act(() => changed());
-    const started = await screen.findByRole(
+    const started = await within(history).findByRole(
       "button",
-      { name: /^Revisión\s*· intento 1/ },
+      { name: /^Revisión/ },
       { timeout: 3000 },
     );
     expect(started).toHaveAttribute("aria-expanded", "true");
@@ -2132,7 +2136,8 @@ describe("DeliveryPanel", () => {
     renderPanel();
     await screen.findByRole("heading", { name: /AGOS-501/ });
     expect(screen.queryByRole("group", { name: "Etapa fallida" })).toBeNull();
-    const row = screen.getByRole("button", { name: /Implementación · intento/ });
+    const history = screen.getByRole("region", { name: "Historial" });
+    const row = within(history).getByRole("button", { name: /^Implementación/ });
     expect(row).toHaveTextContent("Resuelta aparte");
     if (row.getAttribute("aria-expanded") !== "true") await user.click(row);
     expect(
@@ -4902,8 +4907,28 @@ describe("DeliveryPanel", () => {
       "↺ Ronda 3 · Cambios pedidos en el PR #308 por ana (3 comentarios) · Implementación en cola",
     );
     expect(within(now).getByText("ana: Falta un test")).toBeInTheDocument();
-    expect(within(now).getByText("Ronda 2 · 5 hallazgos de QA → corregidos")).toBeInTheDocument();
-    expect(within(now).getByText("Ronda 1 · entrega inicial")).toBeInTheDocument();
+    // One history: the rounds that ended are told there, not under «Ahora».
+    expect(within(now).queryByText("Rondas anteriores")).toBeNull();
+    const history = screen.getByRole("region", { name: "Historial" });
+    const roundOf = (title: string) => within(history).getByText(title).closest("details")!;
+    // The current round: its cause, and the stage it runs.
+    const current = roundOf("Ronda 3");
+    expect(current).toHaveAttribute("open");
+    expect(current).toHaveTextContent("Cambios pedidos en el PR #308 por ana (3 comentarios)");
+    expect(
+      within(current).getByRole("button", { name: /^Implementación\s*En cola/ }),
+    ).toBeInTheDocument();
+    // The one before: open too, with its cause, its stages and how it ended.
+    const previous = roundOf("Ronda 2");
+    expect(previous).toHaveAttribute("open");
+    expect(previous).toHaveTextContent("5 hallazgos de QA");
+    expect(within(previous).getByRole("button", { name: /^Revisión/ })).toBeInTheDocument();
+    expect(within(previous).getByRole("button", { name: /^QA/ })).toBeInTheDocument();
+    expect(within(previous).getByText("→ corregidos")).toBeInTheDocument();
+    // Before any round: the initial delivery, on one line.
+    const initial = roundOf("Entrega inicial");
+    expect(initial).not.toHaveAttribute("open");
+    expect(within(initial).getByRole("button", { name: /^Tests/ })).toBeInTheDocument();
 
     // The track shows this round: what stands, what runs again.
     const agents = screen.getByRole("list", { name: "Agentes" });

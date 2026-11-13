@@ -2269,22 +2269,51 @@
 .delivery-jobs > li + li {
   border-top: 1px solid var(--border);
 }
-.delivery-older ul .delivery-job {
-  border-top: 1px dashed var(--border);
+/* The history by rounds: each a heading line that opens on its stages. */
+.delivery-rounds {
+  display: grid;
+  gap: 6px;
 }
-.delivery-panel .delivery-older > button {
-  width: 100%;
-  padding: 5px 10px 6px 30px;
-  border: 0;
-  background: transparent;
-  font-size: 12px;
+.delivery-round > summary {
+  font-size: 13px;
+}
+.delivery-round__title {
+  font-weight: 600;
+}
+.delivery-round__meta {
+  min-width: 0;
   color: var(--fg-muted);
-  text-align: left;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.delivery-round__body {
+  display: grid;
+  gap: 6px;
+  padding: 0 0 4px 14px;
+}
+.delivery-round__body > .delivery-task__fold {
+  margin: 0;
+}
+.delivery-round__cause,
+.delivery-round__outcome {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.delivery-round__outcome {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.delivery-rounds .delivery-rounds {
+  margin-top: 6px;
+}
+/* An earlier attempt, inside its stage's opened row. */
+.delivery-job__detail .delivery-jobs {
+  border-style: dashed;
 }
 .delivery-panel .delivery-job__summary {
   display: grid;
   /* The time fits its text: a running job reads "30 min 54 s de 45 min". */
-  grid-template-columns: 14px minmax(140px, auto) minmax(0, 1fr) auto auto minmax(64px, auto);
+  grid-template-columns: 14px 14px minmax(120px, auto) minmax(0, 1fr) minmax(64px, auto);
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -2297,6 +2326,9 @@
   color: var(--fg-muted);
 }
 .delivery-job__role {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -2305,19 +2337,18 @@
   font-size: 12px;
 }
 .delivery-job__role small,
-.delivery-job__agent,
-.delivery-job__changes,
+.delivery-job__who,
 .delivery-job__time {
   color: var(--fg-muted);
 }
-.delivery-job__agent {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.delivery-job__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
-.delivery-job__changes {
-  white-space: nowrap;
+/* Findings still open: the coordinator's to answer, so the text's colour, not amber. */
+.delivery-tone--open {
+  color: var(--fg);
 }
 .delivery-job__time {
   text-align: right;
@@ -2333,6 +2364,12 @@
   gap: 5px;
   font-size: 12px;
   white-space: nowrap;
+}
+.delivery-job__summary > .delivery-outcome {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .delivery-job__detail {
   display: grid;
@@ -2360,7 +2397,8 @@
   display: flex;
   gap: 8px;
   margin: 0;
-  padding: 0 10px 6px 30px;
+  /* Under the stage's name: past the fold and state marks. */
+  padding: 0 10px 6px 58px;
   font-size: 12px;
   color: var(--fg-muted);
 }
@@ -2375,12 +2413,8 @@
   flex: none;
   font-size: 11px;
 }
+.delivery-job__who,
 .delivery-job__timing {
-  margin: 0;
-  padding: 0 10px 6px 30px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 12px;
   color: var(--fg-muted);
 }
@@ -2620,11 +2654,7 @@
    window when the panel is docked beside others. */
 @container delivery-detail (max-width: 560px) {
   .delivery-panel .delivery-job__summary {
-    grid-template-columns: 14px minmax(0, 1fr) auto auto;
-  }
-  .delivery-job__agent,
-  .delivery-job__changes {
-    display: none;
+    grid-template-columns: 14px 14px minmax(0, auto) minmax(0, 1fr) auto;
   }
   .delivery-job__detail {
     padding-left: 12px;

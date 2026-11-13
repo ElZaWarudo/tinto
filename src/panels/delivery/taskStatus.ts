@@ -412,7 +412,8 @@ export function attemptOutcome(
   if (job.result_state === "invalid") return { tone: "danger", label: "Resultado inválido" };
   if (job.undone_at_ms) return { tone: "idle", label: "Deshecho" };
   const result = job.result;
-  if (!result) return { tone: "idle", label: "Terminado" };
+  // Tinto's commands end without a result: finished is passed (a failure is `failed`).
+  if (!result) return { tone: "ok", label: job.role === "checks" ? "Pasa" : "Terminado" };
   // Alcance's findings are its questions for the user: a normal outcome.
   if (job.role === SCOPE_ROLE && result.status !== "blocked") {
     const count = result.status === "findings" ? result.findings.length : 0;
@@ -432,9 +433,9 @@ export function attemptOutcome(
   if (result.status === "findings") {
     const count = result.findings.length;
     const label = count === 1 ? "1 hallazgo" : count > 1 ? `${count} hallazgos` : "Con hallazgos";
-    // Once a later stage answered them they are history, not a warning.
+    // Once a later stage answered them they are settled, not a warning.
     return verdict.answered
-      ? { tone: "idle", label: `${label} · atendidos` }
+      ? { tone: "ok", label: `${label} · atendidos` }
       : { tone: "attention", label };
   }
   return { tone: "idle", label: result.status };
@@ -864,21 +865,6 @@ export function nowLine(task: DeliveryTask, overview: DeliveryOverview, now: num
   const round = roundOf(overview, task.id);
   const doing = nowLabel(task, overview, now);
   return round ? `Ronda ${round.number} · ${round.cause} · ${doing}` : doing;
-}
-
-/** The task's rounds that ended, newest first, with round 1 (the initial
- *  delivery) last: "Ronda 2 · 5 hallazgos de QA → corregidos". Empty while
- *  the task never went back. */
-export function roundHistory(overview: DeliveryOverview, taskId: string): string[] {
-  const rounds = (overview.rounds ?? []).filter((round) => round.task_id === taskId);
-  if (rounds.length === 0) return [];
-  return [
-    ...rounds
-      .filter((round) => round.closed_at_ms)
-      .reverse()
-      .map((round) => `Ronda ${round.number} · ${round.cause} → ${round.outcome ?? "cerrada"}`),
-    "Ronda 1 · entrega inicial",
-  ];
 }
 
 /** How a stage reads in the track while the task is in a round, for an
