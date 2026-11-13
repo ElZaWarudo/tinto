@@ -2326,6 +2326,41 @@
   outline-offset: -2px;
 }
 
+/* In the Tinto theme green is Entrega, running and done, and nothing else:
+   what opens on top is edged and shaded in ink, focus is ink, a problem
+   already sent to the agents is neutral, and the queue's link is a link. */
+[data-theme="tinto"] .delivery-overlay,
+[data-theme="tinto"] .delivery-menu__list--context {
+  border-color: var(--fg-strong);
+  box-shadow: 0 12px 32px rgb(from var(--fg-strong) r g b / 0.18);
+}
+[data-theme="tinto"] .delivery-overlay--start::before,
+[data-theme="tinto"] .delivery-overlay--end::before {
+  border-top-color: var(--fg-strong);
+  border-left-color: var(--fg-strong);
+}
+[data-theme="tinto"] .delivery-overlay__dim {
+  background: rgb(from var(--fg-strong) r g b / 0.28);
+}
+[data-theme="tinto"] .delivery-coordinator {
+  box-shadow: 0 4px 16px rgb(from var(--fg-strong) r g b / 0.16);
+}
+[data-theme="tinto"] .delivery-panel button[aria-expanded="true"] {
+  border-color: var(--fg-strong);
+}
+[data-theme="tinto"] .delivery-step--open {
+  border-color: var(--fg-strong);
+}
+[data-theme="tinto"] .delivery-panel .delivery-button--quiet:focus-visible {
+  outline-color: var(--fg-strong);
+}
+[data-theme="tinto"] .delivery-queue a.delivery-queue__control {
+  color: var(--link);
+}
+[data-theme="tinto"] .delivery-qa-chip--sent {
+  color: var(--fg-muted);
+  border-color: var(--border-strong);
+}
 /* A task row's line: one small station per stage and step, in the same forms. */
 [data-theme="tinto"] .delivery-mini-line {
   display: inline-flex;
