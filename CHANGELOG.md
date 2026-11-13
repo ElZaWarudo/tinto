@@ -4,6 +4,19 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.4.1] - 2026-11-13
+
+### Features
+
+- **theme:** square corners and the stage line in every theme
+
+### Fixes
+
+- **delivery:** a row's status stays beside its icon
+- **delivery:** readable selected rows, no text under 11px, and a named mini line
+- **delivery:** four jumps and states the queue and the line got wrong
+- **delivery:** a job records the round it ran in, checks included
+
 ## [1.4.0] - 2026-11-13
 
 ### Features
