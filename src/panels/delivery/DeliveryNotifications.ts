@@ -52,10 +52,20 @@ export interface GuideProposalWait {
   at: number;
 }
 
+/** The same repo whatever Windows prefix (`\\?\`), slashes or case its path carries. */
+export function repoKey(path: string): string {
+  return path
+    .replace(/^\\\\\?\\/, "")
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
 /** The repos of the batches with guide rules waiting for the user: only a
  *  batch's coordinator proposes them. A repo whose guide cannot be read is left out. */
 export async function guideProposals(overview: DeliveryOverview): Promise<GuideProposalWait[]> {
-  const repos = [...new Set(overview.runs.map((run) => run.repo))];
+  // One per repo: batches name the same repo with and without the prefix.
+  const repos = [...new Map(overview.runs.map((run) => [repoKey(run.repo), run.repo])).values()];
   const found = await Promise.all(
     repos.map((repo) =>
       getDeliveryGuide(repo).then(

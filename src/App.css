@@ -1786,8 +1786,6 @@ select option:checked {
   );
   opacity: 0;
   transform: translateX(-120%);
-  animation: agent-activity-halo 1.8s linear infinite paused;
-  transition: opacity 240ms var(--ease-out);
 }
 
 .agent-panel__thought > summary > * {
@@ -1797,7 +1795,7 @@ select option:checked {
 
 .agent-panel__thought[data-active="true"] > summary::before {
   opacity: 1;
-  animation-play-state: running;
+  animation: agent-activity-halo 1.8s linear infinite;
 }
 
 .agent-panel__thought > summary::-webkit-details-marker {

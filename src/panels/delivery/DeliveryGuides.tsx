@@ -297,11 +297,28 @@ function ProposalReview({
   onDecide: (approve: boolean) => Promise<void>;
 }) {
   const card = useRef<HTMLDivElement>(null);
-  // Once, as it shows.
+  // As it shows, and again while what is above it is still arriving (the
+  // repo's settings, who guides) and would push it out of sight: until the
+  // user moves the page themself.
   useEffect(() => {
-    if (!focused) return;
-    card.current?.scrollIntoView?.({ block: "start" });
-    card.current?.focus();
+    const node = card.current;
+    if (!focused || !node) return;
+    const show = () => node.scrollIntoView?.({ block: "start" });
+    show();
+    node.focus();
+    const page = node.closest(".delivery-settings__page");
+    if (!page || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(show);
+    for (const part of page.children) watch.observe(part);
+    const theirs = new AbortController();
+    const stop = () => watch.disconnect();
+    for (const move of ["wheel", "pointerdown", "keydown"]) {
+      page.addEventListener(move, stop, { once: true, passive: true, signal: theirs.signal });
+    }
+    return () => {
+      stop();
+      theirs.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const before = new Map(current.map((rule) => [rule.id, rule]));

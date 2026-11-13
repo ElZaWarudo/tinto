@@ -139,6 +139,7 @@ import { useOneOverlay } from "./useOneOverlay";
 import {
   coordinatorStalls,
   guideProposals,
+  repoKey,
   type CoordinatorStall,
   type GuideProposalWait,
 } from "./DeliveryNotifications";
@@ -578,15 +579,6 @@ function runtimeLabel(job: DeliveryJob): string {
 function lastStageAgent(jobs: DeliveryJob[], taskId: string): DeliveryStageAgent | null {
   const last = [...jobs].reverse().find((job) => job.task_id === taskId && job.agent !== "shell");
   return last ? { agent: last.agent, model: last.model, reasoning: last.reasoning ?? null } : null;
-}
-
-/** The same repo whatever Windows prefix (`\\?\`), slashes or case its path carries. */
-function repoKey(path: string): string {
-  return path
-    .replace(/^\\\\\?\\/, "")
-    .replace(/\\/g, "/")
-    .replace(/\/+$/, "")
-    .toLowerCase();
 }
 
 const repoPanelId = (repo: string) => `delivery:${repoKey(repo)}`;

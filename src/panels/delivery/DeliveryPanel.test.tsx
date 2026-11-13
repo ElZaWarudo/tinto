@@ -2212,6 +2212,18 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
         runs: [
+          // An older batch that names the same repo with the Windows prefix:
+          // still one proposal, not one per spelling.
+          {
+            id: "r0",
+            repo: `\\\\?\\${REPO}`,
+            title: "Lote viejo",
+            status: "closed",
+            generation: 1,
+            owner: null,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+          },
           {
             id: "r1",
             repo: REPO,
