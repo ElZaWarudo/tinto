@@ -32,6 +32,8 @@ type State = "idle" | "working" | "done" | "failed";
 
 /** How long the check stays once the action worked. */
 const DONE_MS = 1200;
+/** How long the check is seen at least before a refresh may remove the button. */
+const CHECK_MS = 160;
 
 export function ActionButton({
   onAction,
@@ -70,7 +72,8 @@ export function ActionButton({
   const working = state === "working";
   const click = async (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
-    if (working) return;
+    // "done" too: its refresh may still be running.
+    if (working || state === "done") return;
     // A submit button still asks the form for its required fields first.
     const form = type === "submit" ? event.currentTarget.form : null;
     if (form && !form.reportValidity()) return;
@@ -79,8 +82,13 @@ export function ActionButton({
     group?.setWorking(true);
     try {
       const result = await onAction();
-      if (result !== false) await refresh();
-      if (mounted.current) setState(result === false ? "idle" : "done");
+      if (result === false) {
+        if (mounted.current) setState("idle");
+        return;
+      }
+      // The check shows before the refresh, which may remove this card.
+      if (mounted.current) setState("done");
+      await Promise.all([refresh(), new Promise((resolve) => setTimeout(resolve, CHECK_MS))]);
     } catch (cause) {
       if (mounted.current) {
         setError(errorText(cause));

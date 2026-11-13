@@ -148,6 +148,7 @@ import { PrSection } from "./DeliveryPr";
 import { GitHubLog, MergeChecks, MergeFailed, MergeRunning } from "./DeliveryMerge";
 import {
   STEPS,
+  arrivedInAttention,
   attemptOutcome,
   batchName,
   byCommand,
@@ -206,6 +207,7 @@ import {
   type ListGroup,
   listGroup,
   searchTasks,
+  type StatusGroup,
   type StatusIcon,
   type TaskStatus,
   type Tone,
@@ -1731,10 +1733,27 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     distro: null,
     label: busStore.displayName(repo),
   };
-  const tasks = (overview?.tasks ?? []).filter((task) => repoKey(task.repo) === key);
-  const statuses = new Map(
-    overview ? tasks.map((task) => [task.id, taskStatus(task, overview, now)] as const) : [],
+  const tasks = useMemo(
+    () => (overview?.tasks ?? []).filter((task) => repoKey(task.repo) === key),
+    [overview, key],
   );
+  const statuses = useMemo(
+    () =>
+      new Map(
+        overview ? tasks.map((task) => [task.id, taskStatus(task, overview, now)] as const) : [],
+      ),
+    [overview, tasks, now],
+  );
+  // The rows that just came to need the user, tinted once: never on the first
+  // load, a filter or an unfolding, only on a task that changed group.
+  const lastGroups = useRef(new Map<string, StatusGroup>());
+  const [arrived, setArrived] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const groups = new Map([...statuses].map(([id, status]) => [id, status.group]));
+    const fresh = arrivedInAttention(lastGroups.current, groups);
+    lastGroups.current = groups;
+    if (fresh.length > 0) setArrived((current) => new Set([...current, ...fresh]));
+  }, [statuses]);
   const activeRuns = (overview?.runs ?? []).filter(
     (candidate) => candidate.status === "active" && repoKey(candidate.repo) === key,
   );
@@ -1941,8 +1960,12 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       <button
         key={task.id}
         type="button"
-        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}${qaHere === "active" ? " delivery-task-row--qa" : qaHere === "quarantined" ? " delivery-task-row--qa-quarantined" : ""}`}
+        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}${qaHere === "active" ? " delivery-task-row--qa" : qaHere === "quarantined" ? " delivery-task-row--qa-quarantined" : ""}${arrived.has(task.id) ? " delivery-task-row--arrived" : ""}`}
         data-task-id={task.id}
+        onAnimationEnd={(event) => {
+          if (event.animationName !== "delivery-arrive") return;
+          setArrived((current) => new Set([...current].filter((id) => id !== task.id)));
+        }}
         aria-current={selectedTask?.id === task.id ? "true" : undefined}
         onClick={() => select(repo, task.id)}
         onContextMenu={(event) => {
@@ -2293,7 +2316,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       ) : (
         <div className="delivery-panel__body">
           <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery" ref={listRef}>
-            {tasks.length === 0 && (
+            {overview && tasks.length === 0 && (
               <p className="delivery-panel__empty">
                 Crea una tarea para trabajar un issue en su propio worktree y rama.
               </p>
@@ -2478,7 +2501,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                 onCloseContext={closeContext}
               />
             ) : (
-              <p className="delivery-panel__empty">Sin tareas.</p>
+              overview && <p className="delivery-panel__empty">Sin tareas.</p>
             )}
           </main>
         </div>
@@ -2647,6 +2670,12 @@ function TaskDetail({
   // The open step shown in full in its place: one approval or the replies.
   const [expanded, setExpanded] = useState<string | null>(null);
   const toggleStep = (id: string) => setExpanded(expanded === id ? null : id);
+  // Once the task is shown, what it asks for later fades in; not what it asks
+  // for already when it opens.
+  const article = useRef<HTMLElement>(null);
+  useEffect(() => {
+    article.current?.setAttribute("data-settled", "");
+  }, []);
   // Replies to reviewers are answered together, in one place.
   const replies = openApprovals.filter(
     (approval) => approval.rung === "pr_reply" && approval.status === "pending",
@@ -2961,7 +2990,7 @@ function TaskDetail({
   );
 
   return (
-    <article className="delivery-task" aria-label={`Tarea ${taskLabel(task)}`}>
+    <article ref={article} className="delivery-task" aria-label={`Tarea ${taskLabel(task)}`}>
       {contextAt && (
         <ContextMenu
           at={contextAt}
@@ -3809,7 +3838,11 @@ function StageTrack({
             const paused =
               rung === "sync" && !!approval && pausedRestack(approvals)?.id === approval.id;
             return (
-              <li key={stepKey(ladder)} className={`delivery-node delivery-node--${step.tone}`}>
+              <li
+                key={stepKey(ladder)}
+                className={`delivery-node delivery-node--${step.tone}`}
+                data-rung={rung}
+              >
                 {paused ? (
                   <button
                     type="button"

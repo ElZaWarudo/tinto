@@ -139,6 +139,9 @@
   font-size: 12px;
   white-space: nowrap;
 }
+.delivery-load {
+  font-variant-numeric: tabular-nums;
+}
 .delivery-meter {
   display: inline-flex;
   gap: 2px;
@@ -350,6 +353,15 @@
 .delivery-panel .delivery-task-row--qa-quarantined {
   border-left-color: var(--danger);
 }
+/* A task that just came to need the user: its row tints once as it lands. */
+.delivery-panel .delivery-task-row--arrived {
+  animation: delivery-arrive 280ms ease;
+}
+@keyframes delivery-arrive {
+  from {
+    background-color: color-mix(in srgb, var(--warn) 20%, transparent);
+  }
+}
 .delivery-qa-badge {
   font-size: 11px;
   font-weight: 600;
@@ -427,6 +439,8 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  /* Its elapsed time ticks without shifting the line. */
+  font-variant-numeric: tabular-nums;
 }
 .delivery-dot {
   width: 7px;
@@ -617,8 +631,16 @@
   inset: 0;
   z-index: 40;
   background: rgb(0 0 0 / 0.35);
+  transition: opacity 150ms var(--ease-out);
 }
-/* Raised above the page and edged in the accent, pointing at its button. */
+@starting-style {
+  .delivery-overlay__dim {
+    opacity: 0;
+  }
+}
+/* Raised above the page and edged in the accent, pointing at its button.
+   It always opens below its button (or in the panel's top right without
+   one), so it grows from its arrow at the top. */
 .delivery-overlay {
   position: absolute;
   z-index: 41;
@@ -627,6 +649,22 @@
   border: 1px solid var(--accent-fg);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   outline: none;
+  transform-origin: top right;
+  transition:
+    opacity 150ms var(--ease-out),
+    transform 150ms var(--ease-out);
+}
+.delivery-overlay--start {
+  transform-origin: var(--arrow) top;
+}
+.delivery-overlay--end {
+  transform-origin: calc(100% - var(--arrow)) top;
+}
+@starting-style {
+  .delivery-overlay {
+    opacity: 0;
+    transform: scale(0.97);
+  }
 }
 .delivery-overlay--start::before,
 .delivery-overlay--end::before {
@@ -758,6 +796,18 @@
   /* Room for the scrollbar from the start: opening a list that makes the
      card scroll must not shift and rewrap what is already there. */
   scrollbar-gutter: stable;
+}
+/* A new ask in a task already shown fades in, the bar of a step with its
+   step, not twice. A task just opened shows its asks at once. */
+.delivery-task[data-settled] :is(.delivery-step, .delivery-broken),
+.delivery-task[data-settled] .delivery-pending-bar:not(.delivery-step .delivery-pending-bar) {
+  transition: opacity 200ms var(--ease-out);
+}
+@starting-style {
+  .delivery-task[data-settled] :is(.delivery-step, .delivery-broken),
+  .delivery-task[data-settled] .delivery-pending-bar:not(.delivery-step .delivery-pending-bar) {
+    opacity: 0;
+  }
 }
 /* An open step: its line and its card in place, raised and edged in the accent. */
 .delivery-step--open {
@@ -1238,7 +1288,7 @@
 .delivery-thread__chevron {
   color: var(--fg-muted);
   font-size: 9px;
-  transition: transform 0.12s ease;
+  transition: transform var(--ease);
 }
 .delivery-thread[open] > .delivery-thread__head .delivery-thread__chevron {
   transform: rotate(90deg);
@@ -1611,6 +1661,43 @@
   min-width: 0;
   background: var(--bg);
   border-top: 2px solid var(--border);
+  /* A stage that changes tone on its own is seen changing. */
+  transition:
+    border-top-color 200ms ease,
+    background-color 200ms ease;
+}
+.delivery-node small,
+.delivery-node .delivery-icon {
+  transition: color 200ms ease;
+}
+/* The merge landing: the ok line draws itself across the rung. Being a
+   transition, an already merged task shows it at rest, over its border. */
+.delivery-node[data-rung="merge"]::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent-fg);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 300ms var(--ease-out);
+}
+.delivery-node--ok[data-rung="merge"]::before {
+  transform: scaleX(1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .delivery-node[data-rung="merge"]::before {
+    transform: none;
+    opacity: 0;
+    transition: opacity 300ms ease;
+    /* A fade is not motion: it keeps its time over the global rule. */
+    transition-duration: 300ms !important;
+  }
+  .delivery-node--ok[data-rung="merge"]::before {
+    opacity: 1;
+  }
 }
 .delivery-node > div,
 .delivery-panel .delivery-node > button {
@@ -2317,9 +2404,30 @@
   border-radius: 50%;
   animation: delivery-action-spin 0.7s linear infinite;
 }
+/* Without motion it would freeze into a still arc: it pulses instead, so the
+   button still says it is working. Beats the global reduced-motion rule. */
+@media (prefers-reduced-motion: reduce) {
+  .delivery-action__spinner {
+    animation-name: delivery-pulse !important;
+    animation-duration: 1s !important;
+    animation-timing-function: ease-in-out !important;
+    animation-iteration-count: infinite !important;
+  }
+}
 @keyframes delivery-action-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+.delivery-action--done .delivery-action__status > .delivery-icon {
+  transition:
+    opacity 160ms var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+@starting-style {
+  .delivery-action--done .delivery-action__status > .delivery-icon {
+    opacity: 0;
+    transform: scale(0.6);
   }
 }
 .delivery-action--failed {
@@ -2930,6 +3038,17 @@
   border: 1px solid var(--border);
   background: var(--bg);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  /* It grows from its button, below on the right. */
+  transform-origin: bottom right;
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
+}
+@starting-style {
+  .delivery-coordinator {
+    opacity: 0;
+    transform: scale(0.97);
+  }
 }
 /* With the conversation open, the sheet takes the height it needs. */
 .delivery-coordinator--chat {
