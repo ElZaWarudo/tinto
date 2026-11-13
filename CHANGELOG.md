@@ -4,6 +4,12 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.3.4] - 2026-11-13
+
+### Features
+
+- **delivery:** cut what the panel asks of you and add search and a review inbox
+
 ## [1.3.3] - 2026-11-12
 
 ### Features
