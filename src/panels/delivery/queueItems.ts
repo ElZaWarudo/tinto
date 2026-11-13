@@ -105,10 +105,10 @@ function reviewsOf(
 }
 
 /** A step approved from the queue itself: one approved in one click that
- *  publishes no text of its own (a sync, a push). A commit's messages and a
- *  Jira step's text are read in the task before they go out. */
+ *  publishes no text of its own, a push. A commit's messages, a sync's merge
+ *  message and a Jira step's text are read in the task before they go out. */
 function approvesFromQueue(approval: DeliveryApproval, edited: boolean): boolean {
-  return ["sync", "push"].includes(approval.rung) && approvesInOneClick(approval, edited);
+  return approval.rung === "push" && approvesInOneClick(approval, edited);
 }
 
 /** The queue of a repo, given its tasks in the list's order and every PR
@@ -150,10 +150,12 @@ export function deliveryQueue(
       continue;
     }
     // Waiting on the user for something without an ask of its own (a step
-    // that no longer matches, news on its PR…): as its row says it.
+    // that no longer matches, news on its PR, a paused stage…): as its row
+    // says it.
     const status = taskStatus(task, overview, now);
     const phase = phaseOf(overview, task.id);
-    if (asks.length === 0 && status.group === "attention" && !BATCH_PHASES.has(phase?.kind ?? "")) {
+    const waitsOnUser = status.group === "attention" || phase?.waits_on === "user";
+    if (asks.length === 0 && waitsOnUser && !BATCH_PHASES.has(phase?.kind ?? "")) {
       holds.push({
         ...of,
         key: `${task.id}:status`,
