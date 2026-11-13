@@ -2155,11 +2155,44 @@
     .delivery-node--step,
     .delivery-node--danger,
     .delivery-node--todo,
-    [data-station="attention"]
+    [data-station="attention"],
+    [data-station="passed"]
   )
   .delivery-node__name
   > :is(.delivery-icon, .delivery-dot) {
   display: none;
+}
+/* Pointing at a stage that opens its history: its station and its words
+   answer, not a grey box behind them. */
+[data-theme="tinto"] .delivery-panel .delivery-node > button:hover:not(:disabled) {
+  background: transparent;
+}
+[data-theme="tinto"] .delivery-node > button::before {
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    box-shadow 120ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+[data-theme="tinto"] .delivery-node > button:is(:hover, :focus-visible):not(:disabled)::before {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--edge) 24%, transparent);
+  transform: scale(1.2);
+}
+[data-theme="tinto"] .delivery-node > button .delivery-node__name,
+[data-theme="tinto"] .delivery-node > button small {
+  transition: color 120ms ease;
+}
+[data-theme="tinto"]
+  .delivery-node
+  > button:is(:hover, :focus-visible):not(:disabled)
+  .delivery-node__name {
+  color: var(--fg-strong);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+[data-theme="tinto"] .delivery-node > button:is(:hover, :focus-visible):not(:disabled) small {
+  color: var(--fg);
 }
 [data-theme="tinto"] .delivery-node .delivery-node__name .delivery-icon {
   color: var(--fg-muted);
