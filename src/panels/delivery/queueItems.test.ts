@@ -150,7 +150,7 @@ const queue = (
   of: DeliveryOverview,
   reviews: DeliveryReviewRequest[] = [],
   edited: string[] = [],
-) => deliveryQueue(of, REPO, of.tasks, reviews, 0, (id) => edited.includes(id));
+) => deliveryQueue(of, of.tasks, reviews, 0, (id) => edited.includes(id));
 
 const brief = (items: ReturnType<typeof queue>) =>
   items.map((item) => ({
@@ -161,29 +161,33 @@ const brief = (items: ReturnType<typeof queue>) =>
   }));
 
 describe("deliveryQueue", () => {
-  it("lists a task's decision and approval, approving in place only what its line would", () => {
+  it("lists a task's decision and approval, approving in place only a step with no text of its own", () => {
     const of = (step: DeliveryApproval) =>
       overview({
         phases: { t1: phase({ kind: "decisions", count: 1 }) },
         decisions: [decision("t1")],
         approvals: [step],
       });
-    expect(brief(queue(of(approval())))).toEqual([
+    const push = approval({ rung: "push", title: "Publicar delivery/t1" });
+    expect(brief(queue(of(push)))).toEqual([
       { key: "t1:decisions", kind: "holds", need: "1 decisión", inPlace: null },
       {
         key: "t1:a1",
         kind: "holds",
         // The line says what the click approves.
-        need: "Aprobar commit · AGOS-1: Fix",
+        need: "Aprobar push · Publicar delivery/t1",
         inPlace: "approve",
       },
     ]);
-    const [, approve] = queue(of(approval()));
-    expect(approve.inPlace).toMatchObject({ kind: "approve", label: "Aprobar y hacer commit" });
-    // Edited in the task, noticed by Tinto, or with something to choose: answered in the task.
+    const [, approve] = queue(of(push));
+    expect(approve.inPlace).toMatchObject({ kind: "approve", label: "Aprobar y publicar" });
+    // Edited in the task, noticed by Tinto, with text it publishes (commit
+    // messages, a Jira comment) or something to choose: answered in the task.
     for (const [step, edited] of [
-      [approval(), ["a1"]],
+      [push, ["a1"]],
       [approval({ rung: "push", notice: "La rama cambió" }), []],
+      [approval({ commits: [{ message: "fix: a\n\nbody", paths: ["a.ts"] }] }), []],
+      [approval({ rung: "jira" }), []],
       [approval({ rung: "pr" }), []],
       [approval({ rung: "merge" }), []],
     ] as const) {
@@ -240,13 +244,56 @@ describe("deliveryQueue", () => {
     expect(brief(queue(of))).toEqual([{ key: "t1:broke", kind: "broke", need, inPlace }]);
   });
 
-  it("lists the PRs to review of this repo only, by its PRs' GitHub name or else its folder", () => {
+  it.each<[string, Partial<DeliveryOverview>]>([
+    [
+      "a job open for it (its checks running)",
+      {
+        jobs: [
+          job({ id: "c1", role: "checks", agent: "shell", status: "started", ended_at_ms: null }),
+        ],
+        phases: {
+          t1: {
+            ...phase({ kind: "running", job_id: "c1", role: "checks" }, "coordinator"),
+            failing_checks: ["npm test"],
+          },
+        },
+      },
+    ],
+    [
+      "a phase that waits on an agent",
+      {
+        phases: {
+          t1: {
+            ...phase({ kind: "next_stage", role: "implementation" }, "agent"),
+            failing_checks: ["npm test"],
+          },
+        },
+      },
+    ],
+    [
+      "a phase that waits on the queue, its PR's checks failing",
+      {
+        prs: [pr({ checks: { passing: 0, failing: 2, pending: 0 } })],
+        phases: {
+          t1: phase(
+            { kind: "queued", job_id: "j9", role: "implementation", lease: null, position: 1 },
+            "queue",
+          ),
+        },
+      },
+    ],
+  ])("leaves out failing checks somebody is working on: %s", (_, over) => {
+    expect(queue(overview(over))).toEqual([]);
+  });
+
+  it("lists the PRs to review of this repo only: of the GitHub repository its tasks' PRs are in", () => {
     const named = overview({ prs: [pr()] });
     const reviews = [review("acme/api"), review("acme/web", 10), review("other/agentos", 11)];
     expect(queue(named, reviews).map((item) => [item.title, item.need, item.review?.url])).toEqual([
       ["PR #9 · ana", "Rate-limit the export", "https://github.com/acme/api/pull/9"],
     ]);
-    expect(queue(overview(), reviews).map((item) => item.review?.number)).toEqual([11]);
+    // A folder named like a repository says nothing of whose it is.
+    expect(queue(overview(), reviews)).toEqual([]);
   });
 
   it("leaves batch-level waits out: a settings proposal, a stopped coordinator, a paused batch", () => {
@@ -310,6 +357,7 @@ describe("deliveryQueue", () => {
         t3: phase({ kind: "drifted", rung: "push", stage: null }),
       },
       decisions: [decision("t2")],
+      prs: [pr({ repo: "other/agentos" })],
     });
     expect(queue(of, [review("other/agentos")]).map((item) => item.key)).toEqual([
       "t2:decisions",

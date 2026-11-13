@@ -1019,7 +1019,8 @@ describe("taskTrack", () => {
   });
   /** Each stage's and step's station, by role or step key. */
   const stations = (over: Partial<DeliveryOverview>): Record<string, Station> => {
-    const track = taskTrack(overview(over), task);
+    const of = overview(over);
+    const track = taskTrack(of, of.tasks[0]);
     return Object.fromEntries([
       ...track.agents.map((stop) => [stop.role, stop.station]),
       ...track.steps.map((stop) => [stepKey(stop.step), stop.station]),
@@ -1056,8 +1057,136 @@ describe("taskTrack", () => {
     ["attention", "commit", { approvals: [approval({ status: "executed", conflicts: ["a.ts"] })] }],
     ["attention", "pr", { prs: [followedPr({ conflicts: true })] }],
     ["passed", "pr", { prs: [followedPr({ new_comments: 2 })] }],
+    // A problem a later station got past is no longer one; one after it is.
+    [
+      "passed",
+      "commit",
+      {
+        approvals: [
+          approval({ status: "executed", conflicts: ["a.ts"], requested_at_ms: 1 }),
+          approval({ id: "a2", rung: "push", status: "executed", requested_at_ms: 2 }),
+        ],
+      },
+    ],
+    [
+      "attention",
+      "commit",
+      {
+        approvals: [
+          approval({ status: "executed", conflicts: ["a.ts"], requested_at_ms: 5 }),
+          approval({ id: "a2", rung: "push", status: "executed", requested_at_ms: 2 }),
+        ],
+      },
+    ],
+    [
+      "passed",
+      "review",
+      {
+        jobs: [
+          job({
+            role: "review",
+            created_at_ms: 1,
+            result: { ...job().result!, status: "findings" },
+          }),
+          job({ role: "qa", created_at_ms: 2 }),
+        ],
+      },
+    ],
+    // Delivered: whatever happened on the way, every station is passed.
+    [
+      "passed",
+      "commit",
+      {
+        approvals: [approval({ status: "failed" })],
+        phases: { t1: { kind: "delivered", waits_on: "nobody", next_stage: null } },
+      },
+    ],
+    // Never run and not to run: Alcance once the task is past it, or omitted.
+    ["skipped", "explore", { jobs: [job()] }],
+    [
+      "skipped",
+      "explore",
+      {
+        tasks: [{ ...task, scope_skip: { reason: "una línea", by: "user", at_ms: 1 } }],
+      },
+    ],
+    [
+      "pending",
+      "explore",
+      {
+        jobs: [job()],
+        phases: {
+          t1: { kind: "next_stage", role: "explore", waits_on: "agent", next_stage: "explore" },
+        },
+      },
+    ],
   ])("draws a %s station for %s", (station, at, over) => {
     expect(stations(over)[at]).toBe(station);
+  });
+
+  it("joins two passed stations with only skipped ones between them", () => {
+    const track = taskTrack(
+      overview({
+        approvals: [
+          approval({ status: "executed", requested_at_ms: 1 }),
+          approval({ id: "a2", rung: "merge", status: "executed", requested_at_ms: 2 }),
+        ],
+      }),
+      task,
+    );
+    expect(track.steps.map((stop) => [stepKey(stop.step), stop.station, stop.joined])).toEqual([
+      ["commit", "passed", false],
+      ["push", "skipped", true],
+      ["pr", "skipped", true],
+      ["jira-after_pr", "skipped", true],
+      ["merge", "passed", true],
+      ["jira-after_merge", "pending", false],
+    ]);
+  });
+
+  it("marks one place as now when Tinto's checks run: the stretch after the stage before them", () => {
+    const checks = job({
+      id: "c1",
+      role: "checks",
+      agent: "shell",
+      status: "started",
+      ended_at_ms: null,
+      result: null,
+      created_at_ms: 10,
+    });
+    const running = (jobs: DeliveryJob[]) =>
+      taskTrack(
+        overview({
+          jobs,
+          phases: {
+            t1: {
+              kind: "running",
+              job_id: "c1",
+              role: "checks",
+              waits_on: "agent",
+              next_stage: null,
+            },
+          },
+        }),
+        task,
+      );
+    const track = running([
+      job({ role: "tests", created_at_ms: 1 }),
+      job({ role: "implementation", created_at_ms: 5 }),
+      job({ role: "review", created_at_ms: 20 }),
+      checks,
+    ]);
+    expect(track.between).toEqual({ after: "implementation", label: "Comprobaciones en marcha" });
+    expect([...track.agents, ...track.steps].some((stop) => stop.station === "running")).toBe(
+      false,
+    );
+    // A stage running too is the one "now": no second mark.
+    const both = running([
+      job({ role: "tests", created_at_ms: 1 }),
+      job({ role: "implementation", status: "started", ended_at_ms: null, created_at_ms: 5 }),
+      checks,
+    ]);
+    expect(both.between).toBeNull();
   });
 });
 

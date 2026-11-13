@@ -668,8 +668,9 @@ describe("DeliveryPanel", () => {
       const marks = [...row.querySelectorAll(".delivery-mini-line i")].map((mark) =>
         mark.getAttribute("data-station"),
       );
-      // Alcance, tests (passed), implementation, review, QA, then the six steps.
-      expect(marks).toEqual(["pending", "passed", ...Array<string>(9).fill("pending")]);
+      // Alcance (skipped: the tests ran past it), tests (passed), implementation,
+      // review, QA, then the six steps.
+      expect(marks).toEqual(["skipped", "passed", ...Array<string>(9).fill("pending")]);
       act(() => themeStore.set("dark"));
       expect(row.querySelector(".delivery-mini-line")).toBeNull();
     } finally {
@@ -1578,14 +1579,16 @@ describe("DeliveryPanel", () => {
     expect(within(group).getByText(/No publica nada/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1 tarea te necesita" })).toBeInTheDocument();
     const queue = screen.getByRole("region", { name: "Te necesita" });
-    expect(within(queue).getByText("Aprobar commit · AGOS-501: Fix the thing")).toBeInTheDocument();
-    const inQueue = { name: "Aprobar y hacer commit: AGOS-501" };
-    expect(within(queue).getByRole("button", inQueue)).toBeInTheDocument();
+    // Its messages are read in the task before they go out: the queue only goes there.
+    expect(
+      within(queue).getByRole("button", { name: "Ver AGOS-501: Aprobar commit" }),
+    ).toBeInTheDocument();
+    expect(
+      within(queue).queryByRole("button", { name: "Aprobar y hacer commit: AGOS-501" }),
+    ).toBeNull();
     const title = within(group).getByRole("textbox", { name: "Título" });
     await user.clear(title);
     await user.type(title, "AGOS-501: Reject empty input");
-    // Edited, it is approved only where the user edited it, never from the queue.
-    expect(within(queue).queryByRole("button", inQueue)).toBeNull();
     // Hidden and opened again, the step keeps the edited text, and its line
     // no longer approves it without it.
     await user.click(screen.getByRole("button", { name: "Revisar commit" }));
@@ -2009,6 +2012,40 @@ describe("DeliveryPanel", () => {
     renderPanel();
     expect(await screen.findByRole("group", { name: "Ahora" })).toHaveTextContent(
       "Nada que hacer: sigue solo · Siguiente: implementación",
+    );
+  });
+
+  it("says a task whose failing checks are running again goes on alone, and leaves it out of the queue", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job(),
+          job({
+            id: "c1",
+            role: "checks",
+            agent: "shell",
+            prompt: "npm test",
+            status: "started",
+            created_at_ms: 2,
+            ended_at_ms: null,
+            result: null,
+          }),
+        ],
+        phases: {
+          t1: {
+            ...phase({ kind: "running", job_id: "c1", role: "checks" }, "agent"),
+            next_step: { rung: "commit", stage: null },
+            failing_checks: ["npm test"],
+          },
+        },
+      }),
+    );
+    renderPanel();
+    expect(await screen.findByRole("group", { name: "Ahora" })).toHaveTextContent(
+      "Nada que hacer: sigue solo · Comprobaciones en marcha",
+    );
+    expect(screen.getByRole("region", { name: "Te necesita" })).toHaveTextContent(
+      "Nada te necesita.",
     );
   });
 

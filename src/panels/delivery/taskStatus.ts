@@ -952,10 +952,11 @@ export function rungStep(approval: DeliveryApproval | undefined): {
 
 /** Where a stage stands on the task's line, said by the form of its station:
  *  passed, running, never done yet, done before and to be done again in this
- *  round, waiting on the user, broken, or reached with a problem nobody has to
- *  answer here (conflicts, changes asked, findings still open). */
+ *  round, waiting on the user, broken, reached with a problem nobody has to
+ *  answer here (conflicts, changes asked, findings still open), or skipped:
+ *  never run and not to run, the task being past it. */
 export type Station =
-  "passed" | "running" | "pending" | "repeats" | "yours" | "broke" | "attention";
+  "passed" | "running" | "pending" | "repeats" | "yours" | "broke" | "attention" | "skipped";
 
 /** A stage of the track (Agentes): its latest attempt and how it reads. */
 export interface AgentStop {
@@ -967,6 +968,8 @@ export interface AgentStop {
   label: string;
   title?: string;
   station: Station;
+  /** The rail from the station before to this one is done. */
+  joined: boolean;
 }
 
 /** A step of the track (Entrega): its latest approval and how it reads. */
@@ -978,11 +981,55 @@ export interface StepStop {
   label: string;
   title?: string;
   station: Station;
+  /** The rail from the station before to this one is done. */
+  joined: boolean;
 }
 
 export interface TaskTrack {
   agents: AgentStop[];
   steps: StepStop[];
+  /** Tinto's own command running between stages (its checks, a setup), as
+   *  the "Ahora" line names it: the stage it runs after. */
+  between: { after: string; label: string } | null;
+}
+
+/** A group's stations as its line reads them, given when each was reached
+ *  (`at`, null if never): a problem a later passed station got past, or any on
+ *  a delivered task, is passed; a station never reached, not the one due next,
+ *  that the task is past (or delivered) is skipped; and whether the rail into
+ *  each one is done: passed at both ends, skipped ones in between. */
+function settleLine<T extends { station: Station }>(
+  stops: T[],
+  at: (stop: T) => number | null,
+  isNext: (stop: T) => boolean,
+  delivered: boolean,
+): (T & { joined: boolean })[] {
+  const settled = stops.map((stop, index): T => {
+    if (stop.station === "skipped") return stop;
+    const reached = at(stop);
+    const later = stops.slice(index + 1);
+    const neverRan = stop.station === "pending" && reached === null;
+    if (neverRan && !isNext(stop) && (delivered || later.some((next) => at(next) !== null))) {
+      return { ...stop, station: "skipped" };
+    }
+    if (delivered) return { ...stop, station: "passed" };
+    const gotPast =
+      reached !== null &&
+      later.some((next) => next.station === "passed" && (at(next) ?? -Infinity) > reached);
+    return (stop.station === "attention" || stop.station === "broke") && gotPast
+      ? { ...stop, station: "passed" }
+      : stop;
+  });
+  const passedAround = (from: number, step: 1 | -1) => {
+    for (let index = from; index >= 0 && index < settled.length; index += step) {
+      if (settled[index].station !== "skipped") return settled[index].station === "passed";
+    }
+    return false;
+  };
+  return settled.map((stop, index) => ({
+    ...stop,
+    joined: index > 0 && passedAround(index - 1, -1) && passedAround(index, 1),
+  }));
 }
 
 /** The station a tone draws. A fine note (answered findings, a wait) says
@@ -1022,10 +1069,8 @@ export function taskTrack(overview: DeliveryOverview, task: DeliveryTask): TaskT
         (job
           ? attemptOutcome(job, jobs, verdicts)
           : { tone: "todo", label: role === next ? "Siguiente" : "—" }));
-    // Reached, under a fine note: findings answered, Alcance skipped.
-    const done =
-      (!!job && !!verdicts[job.id]?.answered) ||
-      (role === SCOPE_ROLE && !!task.scope_skip && !(job && isOpen(job)));
+    // Reached, under a fine note: findings answered.
+    const done = !!job && !!verdicts[job.id]?.answered;
     return {
       role,
       job,
@@ -1034,10 +1079,13 @@ export function taskTrack(overview: DeliveryOverview, task: DeliveryTask): TaskT
       station:
         inRound?.tone === "todo"
           ? "repeats"
-          : // Findings still open: reached, with a problem.
-            outcome.tone === "attention"
-            ? "attention"
-            : stationOf(outcome.tone, done),
+          : role === SCOPE_ROLE && task.scope_skip && !(job && isOpen(job))
+            ? "skipped"
+            : // Findings still open: reached, with a problem.
+              outcome.tone === "attention"
+              ? "attention"
+              : stationOf(outcome.tone, done),
+      joined: false,
     };
   });
   const steps = trackSteps(stepsOf(overview, task.id), approvals).map((step): StepStop => {
@@ -1084,9 +1132,52 @@ export function taskTrack(overview: DeliveryOverview, task: DeliveryTask): TaskT
           : shown.tone === "attention"
             ? "attention"
             : stationOf(shown.tone, unlinked);
-    return { step, approval, ...shown, station };
+    return { step, approval, ...shown, station, joined: false };
   });
-  return { agents, steps };
+  const phase = phaseOf(overview, task.id);
+  const delivered = phase?.kind === "delivered";
+  const nextStep = nextStepOf(overview, task.id);
+  // A followed PR's problem, or its merge, is now: nothing before gets past it.
+  const stepAt = (stop: StepStop) =>
+    stop.step.rung === "pr" && pr && (stop.station !== "passed" || pr.state === "merged")
+      ? Infinity
+      : (stop.approval?.requested_at_ms ?? null);
+  const line = {
+    agents: settleLine(
+      agents,
+      (stop) => stop.job?.created_at_ms ?? null,
+      (stop) => stop.role === next,
+      delivered,
+    ),
+    steps: settleLine(
+      steps,
+      stepAt,
+      (stop) => !!nextStep && stepKey(stop.step) === stepKey(nextStep),
+      delivered,
+    ),
+  };
+  // Tinto's own command running (its checks, a setup) is no station: it runs
+  // after the stage that ran last before it, unless a station is running.
+  const shell =
+    phase?.kind === "running"
+      ? jobs.find((candidate) => candidate.id === phase.job_id && candidate.agent === "shell")
+      : undefined;
+  const busy = [...line.agents, ...line.steps].some((stop) => stop.station === "running");
+  const after =
+    shell && !busy
+      ? line.agents
+          .filter((stop) => stop.job && stop.job.created_at_ms <= shell.created_at_ms)
+          .reduce<AgentStop | null>(
+            (last, stop) =>
+              !last || stop.job!.created_at_ms > last.job!.created_at_ms ? stop : last,
+            null,
+          )
+      : null;
+  return {
+    ...line,
+    between:
+      shell && after ? { after: after.role, label: `${stageLabel(shell.role)} en marcha` } : null,
+  };
 }
 
 function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number): TaskStatus {
