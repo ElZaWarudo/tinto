@@ -1,0 +1,656 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-13T15:43:00.517Z",
+  "title": "Design System: Tinto",
+  "extensions": {
+    "colorMeta": {
+      "ink": {
+        "role": "primary",
+        "displayName": "Coffee Ink",
+        "canonical": "#241a17",
+        "tonalRamp": [
+          "#0e0a09",
+          "#2e2421",
+          "#4e423f",
+          "#6f635f",
+          "#938682",
+          "#b8aaa6",
+          "#d6cfcd",
+          "#f3edeb"
+        ]
+      },
+      "on-ink": {
+        "role": "neutral",
+        "displayName": "Paper on Ink",
+        "canonical": "#fbfaf7",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#272624",
+          "#464543",
+          "#676663",
+          "#8a8986",
+          "#afaeab",
+          "#d1d1cf",
+          "#efeeed"
+        ]
+      },
+      "plan-paper": {
+        "role": "neutral",
+        "displayName": "Plan Paper",
+        "canonical": "#f5f5f1",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#272724",
+          "#454542",
+          "#666663",
+          "#898986",
+          "#aeaeaa",
+          "#d1d1cf",
+          "#eeeeed"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "White Surface",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#262626",
+          "#454545",
+          "#666666",
+          "#898989",
+          "#aeaeae",
+          "#d1d1d1",
+          "#eeeeee"
+        ]
+      },
+      "sunken": {
+        "role": "neutral",
+        "displayName": "Sunken Paper",
+        "canonical": "#fafaf7",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#272724",
+          "#454543",
+          "#666664",
+          "#898987",
+          "#aeaeab",
+          "#d1d1d0",
+          "#eeeeed"
+        ]
+      },
+      "strip": {
+        "role": "neutral",
+        "displayName": "Strip",
+        "canonical": "#ecebe5",
+        "tonalRamp": [
+          "#0b0b09",
+          "#272722",
+          "#464540",
+          "#676661",
+          "#8a8984",
+          "#afaea8",
+          "#d1d1ce",
+          "#efeeec"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#dcdad3",
+        "tonalRamp": [
+          "#0c0b09",
+          "#282621",
+          "#47453f",
+          "#686660",
+          "#8b8983",
+          "#b0aea7",
+          "#d2d1ce",
+          "#efeeeb"
+        ]
+      },
+      "hairline-strong": {
+        "role": "neutral",
+        "displayName": "Strong Hairline",
+        "canonical": "#c4c0b7",
+        "tonalRamp": [
+          "#0c0b08",
+          "#29261f",
+          "#48453d",
+          "#69665e",
+          "#8d8980",
+          "#b1aea5",
+          "#d3d1cd",
+          "#f0eeea"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Text",
+        "canonical": "#3a2f2b",
+        "tonalRamp": [
+          "#0e0a09",
+          "#2e2420",
+          "#4e423e",
+          "#6f635e",
+          "#938681",
+          "#b8aba6",
+          "#d6cfcd",
+          "#f3edea"
+        ]
+      },
+      "text-soft": {
+        "role": "neutral",
+        "displayName": "Soft Text",
+        "canonical": "#4f4541",
+        "tonalRamp": [
+          "#0e0a09",
+          "#2d2421",
+          "#4c433f",
+          "#6e635f",
+          "#928682",
+          "#b7aba6",
+          "#d5d0cd",
+          "#f3edeb"
+        ]
+      },
+      "text-muted": {
+        "role": "neutral",
+        "displayName": "Muted Text",
+        "canonical": "#6b625e",
+        "tonalRamp": [
+          "#0d0a09",
+          "#2c2521",
+          "#4b433f",
+          "#6d6460",
+          "#908783",
+          "#b6aca7",
+          "#d4d0ce",
+          "#f2edeb"
+        ]
+      },
+      "text-subtle": {
+        "role": "neutral",
+        "displayName": "Subtle Text",
+        "canonical": "#736a65",
+        "tonalRamp": [
+          "#0d0a09",
+          "#2c2520",
+          "#4b433e",
+          "#6d645f",
+          "#908782",
+          "#b6aca6",
+          "#d4d0cd",
+          "#f2edeb"
+        ]
+      },
+      "line-agentes": {
+        "role": "secondary",
+        "displayName": "Agentes Blue",
+        "canonical": "#1b5e8c",
+        "tonalRamp": [
+          "#000c1c",
+          "#002852",
+          "#004975",
+          "#2b6b9a",
+          "#5090c1",
+          "#75b5e8",
+          "#b9d5ed",
+          "#d6f3ff"
+        ]
+      },
+      "agentes-text": {
+        "role": "secondary",
+        "displayName": "Agentes Blue Text",
+        "canonical": "#174f77",
+        "tonalRamp": [
+          "#000c1a",
+          "#00284d",
+          "#0f4970",
+          "#356b95",
+          "#598fbb",
+          "#7db4e2",
+          "#bcd4ea",
+          "#d9f2ff"
+        ]
+      },
+      "line-entrega": {
+        "role": "tertiary",
+        "displayName": "Entrega Green",
+        "canonical": "#1f7a5a",
+        "tonalRamp": [
+          "#001107",
+          "#003419",
+          "#005537",
+          "#1b7758",
+          "#479c7a",
+          "#6ec29e",
+          "#b7dbca",
+          "#d4f8e7"
+        ]
+      },
+      "entrega-text": {
+        "role": "tertiary",
+        "displayName": "Entrega Green Text",
+        "canonical": "#1a6a4e",
+        "tonalRamp": [
+          "#001007",
+          "#00331b",
+          "#005339",
+          "#297659",
+          "#509a7c",
+          "#76c0a0",
+          "#badaca",
+          "#d7f8e8"
+        ]
+      },
+      "entrega-pale": {
+        "role": "tertiary",
+        "displayName": "Entrega Pale",
+        "canonical": "#a6d8c3",
+        "tonalRamp": [
+          "#010f09",
+          "#002f20",
+          "#204f3e",
+          "#42715f",
+          "#659582",
+          "#89bba6",
+          "#c1d7cd",
+          "#def5eb"
+        ]
+      },
+      "amber-yours": {
+        "role": "tertiary",
+        "displayName": "Amber, Yours",
+        "canonical": "#9a5c00",
+        "tonalRamp": [
+          "#190500",
+          "#4a1000",
+          "#6e3300",
+          "#935500",
+          "#b9792f",
+          "#e19e57",
+          "#eacbad",
+          "#ffe8c9"
+        ]
+      },
+      "amber-text": {
+        "role": "tertiary",
+        "displayName": "Amber Text",
+        "canonical": "#7d4a00",
+        "tonalRamp": [
+          "#170600",
+          "#451600",
+          "#683700",
+          "#8d5919",
+          "#b37c41",
+          "#daa166",
+          "#e6ccb2",
+          "#ffe9cf"
+        ]
+      },
+      "red-broke": {
+        "role": "tertiary",
+        "displayName": "Red, Broke",
+        "canonical": "#b3261e",
+        "tonalRamp": [
+          "#240000",
+          "#630000",
+          "#8c0000",
+          "#b62921",
+          "#e05446",
+          "#ff7b6a",
+          "#ffbeb3",
+          "#ffdbd0"
+        ]
+      },
+      "red-text": {
+        "role": "tertiary",
+        "displayName": "Red Text",
+        "canonical": "#a3221b",
+        "tonalRamp": [
+          "#220000",
+          "#600000",
+          "#880000",
+          "#b13228",
+          "#db594c",
+          "#ff806f",
+          "#febfb5",
+          "#ffdcd2"
+        ]
+      },
+      "red-pale": {
+        "role": "tertiary",
+        "displayName": "Red Pale",
+        "canonical": "#e8a19b",
+        "tonalRamp": [
+          "#190504",
+          "#480f10",
+          "#6c302d",
+          "#91514d",
+          "#b7746f",
+          "#df9993",
+          "#e9c8c5",
+          "#ffe5e2"
+        ]
+      },
+      "bar-raised": {
+        "role": "neutral",
+        "displayName": "Bar Raised",
+        "canonical": "#3a2f2b",
+        "tonalRamp": [
+          "#0e0a09",
+          "#2e2420",
+          "#4e423e",
+          "#6f635e",
+          "#938681",
+          "#b8aba6",
+          "#d6cfcd",
+          "#f3edea"
+        ]
+      },
+      "bar-hairline": {
+        "role": "neutral",
+        "displayName": "Bar Hairline",
+        "canonical": "#5a4e48",
+        "tonalRamp": [
+          "#0e0a08",
+          "#2e241e",
+          "#4e423c",
+          "#70635d",
+          "#93867f",
+          "#b9aba4",
+          "#d6cfcc",
+          "#f4edea"
+        ]
+      },
+      "bar-text-muted": {
+        "role": "neutral",
+        "displayName": "Bar Muted Text",
+        "canonical": "#cfc6c0",
+        "tonalRamp": [
+          "#0d0b09",
+          "#2c2520",
+          "#4b433e",
+          "#6c645f",
+          "#908782",
+          "#b5aca6",
+          "#d4d0cd",
+          "#f2edeb"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Title",
+        "purpose": "The open task's title, two lines at most."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The panel's name in its header."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Everything by default."
+      },
+      "body-strong": {
+        "displayName": "Body Strong",
+        "purpose": "A row's key, a station's name, a link chip."
+      },
+      "small": {
+        "displayName": "Small",
+        "purpose": "Second lines of rows, station details, metadata, gists."
+      },
+      "line-name": {
+        "displayName": "Line Name",
+        "purpose": "Agentes and Entrega above their rails, in the line's colour."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase heading of a list or of a folded section."
+      },
+      "hint": {
+        "displayName": "Hint",
+        "purpose": "The ink tooltip above a station."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Branches, commits, paths, code and logs."
+      }
+    },
+    "shadows": [
+      {
+        "name": "warm-float",
+        "value": "0 10px 28px rgba(36, 26, 23, 0.16), 0 1px 3px rgba(36, 26, 23, 0.12)",
+        "purpose": "Menus, the theme picker and modals that open on top."
+      },
+      {
+        "name": "station-halo",
+        "value": "0 0 0 4px color-mix(in srgb, currentColor 24%, transparent)",
+        "purpose": "A station under the pointer or with focus, in the station's own colour."
+      },
+      {
+        "name": "scrim",
+        "value": "rgba(36, 26, 23, 0.32)",
+        "purpose": "The ink wash behind a modal (a background, listed here with depth)."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "120ms ease",
+        "purpose": "Default state change of controls (--ease)."
+      },
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Curve of the station hover, the hint, overlays and the merge landing (--ease-out)."
+      },
+      {
+        "name": "station-hover",
+        "value": "120ms",
+        "purpose": "Halo, growth to 1.2, name colour and hint of a stage under the pointer."
+      },
+      {
+        "name": "station-state",
+        "value": "200ms ease",
+        "purpose": "A station changing fill and ring when its stage changes state."
+      },
+      {
+        "name": "merge-landing",
+        "value": "300ms",
+        "purpose": "The line draws itself to the Merge station; a fade with reduced motion."
+      },
+      {
+        "name": "queue-arrive",
+        "value": "280ms ease",
+        "purpose": "A row that just came to need the user tints amber once."
+      },
+      {
+        "name": "live-pulse",
+        "value": "1.4s ease-in-out infinite",
+        "purpose": "The live dot, only without reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "task-list",
+        "value": "230px to 290px column"
+      },
+      {
+        "name": "lines-side-by-side",
+        "value": "about 1000px for Agentes plus 1120px for Entrega; narrower, the two lines stack"
+      },
+      {
+        "name": "station-min",
+        "value": "96px per step, 144px per agent stage; narrower, the line wraps"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "The default control: white, hairline border, square.",
+      "html": "<button class=\"ds-btn\">Abrir en Agents</button>",
+      "css": ".ds-btn { font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; padding: 4px 10px; border-radius: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; color: #3a2f2b; background: #ffffff; border: 1px solid #dcdad3; } .ds-btn:hover { background: rgba(36, 26, 23, 0.08); } .ds-btn:focus-visible { outline: 2px solid #241a17; outline-offset: 1px; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one ink button of a view: the next thing the task needs.",
+      "html": "<button class=\"ds-btn-primary\">Nueva tarea</button>",
+      "css": ".ds-btn-primary { font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; padding: 4px 10px; border-radius: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; color: #fbfaf7; background: #241a17; border: 1px solid #241a17; } .ds-btn-primary:hover { filter: brightness(1.12); } .ds-btn-primary:focus-visible { outline: 2px solid #241a17; outline-offset: 1px; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "A secondary control: no box, muted until pointed at.",
+      "html": "<button class=\"ds-btn-quiet\">Archivadas…</button>",
+      "css": ".ds-btn-quiet { font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; padding: 4px 10px; border-radius: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; color: #6b625e; background: transparent; border: 1px solid transparent; } .ds-btn-quiet:hover { background: rgba(36, 26, 23, 0.05); color: #3a2f2b; } .ds-btn-quiet:focus-visible { outline: 2px solid #241a17; outline-offset: 1px; }"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A square white field with a hairline; the caret is Agentes blue.",
+      "html": "<input class=\"ds-input\" placeholder=\"Buscar issue o #PR\" />",
+      "css": ".ds-input { font: 400 12px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; width: 240px; padding: 4px 8px; color: #3a2f2b; background: #ffffff; border: 1px solid #dcdad3; border-radius: 0; caret-color: #1b5e8c; } .ds-input::placeholder { color: #6b625e; opacity: 1; } .ds-input:hover { border-color: #6b625e; } .ds-input:focus-visible { outline: 2px solid #241a17; outline-offset: 1px; }"
+    },
+    {
+      "name": "Window Bar",
+      "kind": "nav",
+      "refersTo": "window-bar",
+      "description": "The solid ink band at the top of the window, with paper text.",
+      "html": "<nav class=\"ds-bar\"><strong>tinto</strong><button>Workbench</button><button>Repos</button><button>Ver</button></nav>",
+      "css": ".ds-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #241a17; color: #f5f5f1; font: 600 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; } .ds-bar strong { margin-right: 10px; font-weight: 700; color: #ffffff; } .ds-bar button { font: inherit; padding: 2px 8px; color: #f5f5f1; background: transparent; border: 0; border-radius: 0; cursor: pointer; } .ds-bar button:hover { background: rgba(245, 245, 241, 0.12); } .ds-bar button:focus-visible { outline: 2px solid #f5f5f1; outline-offset: 1px; }"
+    },
+    {
+      "name": "Task Row",
+      "kind": "custom",
+      "refersTo": "task-row",
+      "description": "A selected row of the task list: ink edge, key, small line, muted title.",
+      "html": "<button class=\"ds-row\"><span class=\"ds-row-key\">AGOS-412 <span class=\"ds-mini\"><i></i><i></i><i class=\"ds-mini-run\"></i><i class=\"ds-mini-todo\"></i><i class=\"ds-mini-todo\"></i></span></span><span class=\"ds-row-title\">Resolver dependencias de conectores</span></button>",
+      "css": ".ds-row { display: grid; gap: 1px; width: 280px; padding: 7px 12px 8px; text-align: left; font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; color: #3a2f2b; background: rgba(36, 26, 23, 0.12); border: 0; border-left: 2px solid #241a17; border-radius: 0; cursor: pointer; } .ds-row:focus-visible { outline: 2px solid #241a17; outline-offset: -2px; } .ds-row-key { display: flex; justify-content: space-between; align-items: center; font-weight: 600; } .ds-row-title { color: #6b625e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-mini { display: inline-flex; align-items: center; gap: 2px; } .ds-mini i { box-sizing: border-box; width: 6px; height: 6px; border: 1.5px solid #1b5e8c; border-radius: 50%; background: #1b5e8c; } .ds-mini .ds-mini-run { background: radial-gradient(circle, #1b5e8c 0 0.75px, #f5f5f1 1px); } .ds-mini .ds-mini-todo { border-color: #6b625e; background: #f5f5f1; }"
+    },
+    {
+      "name": "Te necesita Row",
+      "kind": "custom",
+      "refersTo": "queue-row",
+      "description": "What needs the user: amber only in the heading, red only on what broke.",
+      "html": "<section class=\"ds-queue\"><h2><span class=\"ds-queue-flag\">&#9873;</span>Te necesita <span class=\"ds-queue-count\">1</span></h2><div class=\"ds-queue-row\"><span class=\"ds-queue-text\"><strong>AGOS-140 · 2/2</strong><span class=\"ds-queue-broke\">Bloqueada en QA · intento 2</span></span><button class=\"ds-queue-btn\">Reintentar</button></div></section>",
+      "css": ".ds-queue { width: 280px; font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; color: #3a2f2b; } .ds-queue h2 { display: flex; align-items: center; gap: 6px; margin: 0 12px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #6b625e; } .ds-queue-flag, .ds-queue-count { color: #9a5c00; font-weight: 400; } .ds-queue-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px 7px; } .ds-queue-text { display: grid; gap: 1px; flex: 1; } .ds-queue-text strong { font-weight: 600; } .ds-queue-broke { font-size: 12px; color: #b3261e; } .ds-queue-btn { font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; padding: 4px 10px; border-radius: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; color: #3a2f2b; background: #ffffff; border: 1px solid #dcdad3; } .ds-queue-btn:hover { background: rgba(36, 26, 23, 0.08); } .ds-queue-btn:focus-visible { outline: 2px solid #241a17; outline-offset: 1px; }"
+    },
+    {
+      "name": "Stage Line",
+      "kind": "custom",
+      "refersTo": "station",
+      "description": "The signature: stages as stations on a solid rail, coloured only between two passed stations.",
+      "html": "<div class=\"ds-line\"><h3>Agentes</h3><ol><li><button class=\"ds-st\"><span class=\"ds-hint\">Ver en el historial</span><b>Alcance</b><small>Listo</small></button></li><li class=\"ds-joined\"><button class=\"ds-st\"><span class=\"ds-hint\">Ver en el historial</span><b>Tests</b><small>Sin hallazgos</small></button></li><li><button class=\"ds-st ds-st-run\"><span class=\"ds-hint\">Ver en el historial</span><b>Implementación</b><small>En curso</small></button></li><li><button class=\"ds-st ds-st-yours\"><span class=\"ds-hint\">Ver en el historial</span><b>Revisión</b><small>Te necesita</small></button></li><li><button class=\"ds-st ds-st-broke\"><span class=\"ds-hint\">Ver en el historial</span><b>QA</b><small>Bloqueada</small></button></li></ol></div>",
+      "css": ".ds-line { width: 620px; font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; color: #3a2f2b; } .ds-line h3 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: #1b5e8c; } .ds-line ol { display: flex; margin: 0; padding: 22px 0 0; list-style: none; overflow-x: clip; } .ds-line li { position: relative; flex: 1 1 96px; min-width: 0; } .ds-line li + li::before { content: \"\"; position: absolute; top: 10px; left: -50%; width: 100%; height: 4px; background: rgba(107, 98, 94, 0.5); } .ds-line li.ds-joined::before { background: #1b5e8c; } .ds-st { position: relative; display: grid; justify-items: center; gap: 1px; width: 100%; padding: 5px 6px 6px; font: inherit; color: inherit; text-align: center; background: transparent; border: 0; border-radius: 0; cursor: pointer; } .ds-st::before { content: \"\"; position: relative; z-index: 1; box-sizing: border-box; width: 14px; height: 14px; margin-bottom: 3px; border: 2.5px solid #1b5e8c; border-radius: 50%; background: #1b5e8c; transition: box-shadow 120ms cubic-bezier(0.23, 1, 0.32, 1), transform 120ms cubic-bezier(0.23, 1, 0.32, 1);  } .ds-st-run::before { background: radial-gradient(circle, #1b5e8c 0 2.5px, #f5f5f1 3px); } .ds-st-yours::before { border: 3.5px solid #9a5c00; background: #f5f5f1; } .ds-st-broke::before { width: 12px; height: 12px; margin: 1px 0 4px; border-color: #b3261e; border-radius: 0; background: #b3261e; } .ds-st b { font-weight: 600; transition: color 120ms ease; } .ds-st small { font-size: 12px; color: #6b625e; transition: color 120ms ease; } .ds-st:is(:hover, :focus-visible)::before { box-shadow: 0 0 0 4px rgba(27, 94, 140, 0.24); transform: scale(1.2); } .ds-st-yours:is(:hover, :focus-visible)::before { box-shadow: 0 0 0 4px rgba(154, 92, 0, 0.24); } .ds-st-broke:is(:hover, :focus-visible)::before { box-shadow: 0 0 0 4px rgba(179, 38, 30, 0.24); } .ds-st:is(:hover, :focus-visible) b { color: #1b5e8c; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; } .ds-st:is(:hover, :focus-visible) small { color: #241a17; } .ds-st:focus-visible { outline: 2px solid #241a17; outline-offset: -2px; } .ds-hint { position: absolute; z-index: 3; bottom: calc(100% + 2px); left: 50%; padding: 2px 7px; background: #241a17; color: #f5f5f1; font-size: 11px; line-height: 16px; white-space: nowrap; pointer-events: none; opacity: 0; transform: translate(-50%, 3px); transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1), transform 120ms cubic-bezier(0.23, 1, 0.32, 1); } .ds-st:is(:hover, :focus-visible) .ds-hint { opacity: 1; transform: translate(-50%, 0); }"
+    },
+    {
+      "name": "Ask Bar",
+      "kind": "card",
+      "refersTo": "queue-row",
+      "description": "What waits on the user inside a task: amber edge and wash, text and buttons on one line.",
+      "html": "<div class=\"ds-ask\"><span>1 decisión pendiente</span><button class=\"ds-ask-btn\">Responder</button></div>",
+      "css": ".ds-ask { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 420px; padding: 6px 12px; font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; color: #3a2f2b; border: 1px solid #9a5c00; background: rgba(154, 92, 0, 0.08); } .ds-ask-btn { font: 400 13px \"Overpass\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif; padding: 4px 10px; border-radius: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; color: #fbfaf7; background: #241a17; border: 1px solid #241a17; } .ds-ask-btn:hover { filter: brightness(1.12); } .ds-ask-btn:focus-visible { outline: 2px solid #241a17; outline-offset: 1px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Línea Tinto",
+    "overview": "Each task is a line and its stages are stations, so where it is and where it stopped is read at a glance. The theme is a transit plan printed on paper: a warm off-white ground, white surfaces, thin warm hairlines, and one coffee-black ink that writes the text, fills the primary button and makes the window bar a solid band. Two flat line colours carry the diagram, blue for Agentes and green for Entrega, and nothing else on the screen is allowed to be decorative colour.\n\nIt is a working tool beside an editor, in daylight, read by someone coming back to see what moved. Rows are dense, rules are thin, secondary controls have no box, and state is said by the form of a mark before it is said by its colour. The coffee idea of the name lives in the ink and the warm neutrals only; there is no coffee-shop decoration.\n\nThis file records the Tinto theme, the system this build created, as it ships in the Delivery panel. Four older themes (dark, purple, plum, light) remain in the app and keep their own look; they read the same token names (`--bg`, `--fg`, `--accent`, `--warn`, `--danger` and the rest) with their own values, so a rule written against tokens holds in all five. Only Tinto defines the line colours, the ink window bar and the bundled typefaces.",
+    "keyCharacteristics": [
+      "A transit line diagram as the signature: stages are stations on a solid rail.",
+      "One ink for text, primary action, selection edge, focus ring and window bar.",
+      "One colour, one job: blue informs and links, green runs and is done, amber is the user's, red broke.",
+      "Square corners everywhere; the only round marks are stations and small status dots.",
+      "Dense rows, hairlines instead of boxes, borderless secondary controls.",
+      "Spanish interface, set in Overpass and Overpass Mono shipped with the app."
+    ],
+    "rules": [
+      {
+        "name": "The Amber Is Yours Rule",
+        "body": "Amber marks only what waits on the user. A warning nobody has to answer, a blocked task waiting on something else, a note: all neutral.",
+        "section": "colors"
+      },
+      {
+        "name": "The Red Broke Rule",
+        "body": "Red marks only what broke. Not emphasis, not a count, not a destructive-looking decoration.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Colour, One Job Rule",
+        "body": "Blue is the Agentes line, information and links. Green is the Entrega line, running and done. Ink is action, selection and focus. A colour never takes a second job, which is why the selected row's edge is ink and not green.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Time Rule",
+        "body": "Elapsed times, costs and counts use tabular figures and sit at the right edge of their row, so a ticking number never shifts the line.",
+        "section": "typography"
+      },
+      {
+        "name": "The Middle Dot Rule",
+        "body": "The interface separates facts on one line with a middle dot. Overpass sets it too tight, so that one character is excluded from the bundled face and falls back to the system font; keep it that way.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Surface Per Fact Rule",
+        "body": "A fact is shown in one place. If the line already says it, the row does not repeat it, the header does not restate it and no badge echoes it. Only the selected row shows secondary data; long sections stay folded under a heading with their gist on one line.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat At Rest Rule",
+        "body": "A surface lifts only when it opens on top of the page. Rows, bars, banners and stations never carry a resting shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Square Corner Rule",
+        "body": "No rounded corners on controls or containers, at any size. The stations of the stage line and small status dots are the only round marks.",
+        "section": "shapes"
+      },
+      {
+        "name": "The Solid Rail Rule",
+        "body": "The rail is always solid and continuous. It is coloured only between two passed stations; everything else is grey.",
+        "section": "components"
+      },
+      {
+        "name": "The Lit Station Rule",
+        "body": "A stage under the pointer lights its station and its words. It never gets a grey box.",
+        "section": "components"
+      },
+      {
+        "name": "The State By Form Rule",
+        "body": "Every state has its own shape, so the diagram still reads without colour.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do keep every control and container square (0 radius), including badges, tooltips, menus and modals.",
+      "Do use amber only for what waits on the user and red only for what broke; everything else that is merely noteworthy stays neutral with an icon.",
+      "Do show a fact on one surface and fold or remove whatever restates it.",
+      "Do draw the rail solid, 4px, coloured only between two passed stations.",
+      "Do answer the pointer on a stage by lighting its station and its words.",
+      "Do give each state a form of its own before giving it a colour.",
+      "Do use ink for the primary action, the selection edge and the focus ring, and keep one primary button per view.",
+      "Do separate with hairlines and space, and leave secondary controls without a box.",
+      "Do tint shadows and scrims from the ink, and only on surfaces that open on top.",
+      "Do write the interface in Spanish and set times, costs and counts in tabular figures."
+    ],
+    "donts": [
+      "Don't round a corner. The stations of the stage line and small status dots are the only round marks.",
+      "Don't use amber for a warning nobody has to answer, or for a task that is blocked by something else.",
+      "Don't use red for emphasis or for anything that did not break.",
+      "Don't dash, dot or fade the rail, or colour a stretch that is not between two passed stations.",
+      "Don't put a grey box behind a stage under the pointer.",
+      "Don't repeat in a badge, a header or a second row what the line already says.",
+      "Don't use green for selection, focus or links; green is the Entrega line, running and done.",
+      "Don't add coffee-shop decoration: no beans, cups, steam, textures or brown gradients.",
+      "Don't rest a shadow under a row, a bar or a banner, and never use a black shadow."
+    ]
+  }
+}
