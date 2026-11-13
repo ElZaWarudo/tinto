@@ -595,6 +595,8 @@
 /* A row's state is one line, cut to fit (its title holds it whole); the
    selected row says who it waits on in a line of its own under it. */
 .delivery-task-row .delivery-status-line__text {
+  /* Shrinks beside its icon instead of wrapping under it. */
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
