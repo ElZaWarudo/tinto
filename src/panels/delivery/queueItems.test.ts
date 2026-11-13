@@ -214,6 +214,28 @@ describe("deliveryQueue", () => {
       "retry",
     ],
     [
+      "its stage broke while a blocker holds it, seen in the task: a retry would be refused",
+      {
+        tasks: [
+          {
+            ...task("t1"),
+            blockers: [
+              { id: "b1", type: "note", text: "Espera a infra", status: "", cleared_at_ms: null },
+            ],
+          },
+        ],
+        jobs: [job()],
+        phases: {
+          t1: {
+            ...phase({ kind: "next_stage", role: "implementation" }, "coordinator"),
+            verdicts: { j1: { broken: true } },
+          },
+        },
+      },
+      "Falló implementación · intento 2",
+      null,
+    ],
+    [
       "Tinto's checks fail",
       {
         phases: {
@@ -245,17 +267,33 @@ describe("deliveryQueue", () => {
     expect(brief(queue(of))).toEqual([{ key: "t1:broke", kind: "broke", need, inPlace }]);
   });
 
-  it("lists a task that waits on the user without an ask of its own, as its row says it", () => {
-    const paused = overview({
-      jobs: [job({ id: "j1", role: "tests", status: "paused" })],
-      phases: { t1: phase({ kind: "paused", job_id: "j1", role: "tests" }) },
-    });
-    expect(brief(queue(paused))).toEqual([
-      { key: "t1:status", kind: "holds", need: "Tests en pausa", inPlace: null },
-    ]);
-    // Resumed on its job's row.
-    expect(queue(paused)[0].ask).toBe("job:j1");
-  });
+  it.each<[string, Partial<DeliveryOverview>, string, string]>([
+    [
+      "a paused stage, resumed on its job's row",
+      {
+        jobs: [job({ id: "j1", role: "tests", status: "paused" })],
+        phases: { t1: phase({ kind: "paused", job_id: "j1", role: "tests" }) },
+      },
+      "Tests en pausa",
+      "job:j1",
+    ],
+    [
+      "a PR nobody was asked to review, moved in its section",
+      {
+        prs: [pr()],
+        phases: { t1: phase({ kind: "pr", number: 5, wait: { kind: "nobody" } }) },
+      },
+      "PR: nadie tiene pedida la revisión",
+      "pr",
+    ],
+  ])(
+    "lists a task that waits on the user without an ask of its own, as its row says it: %s",
+    (_, over, need, ask) => {
+      const items = queue(overview(over));
+      expect(brief(items)).toEqual([{ key: "t1:status", kind: "holds", need, inPlace: null }]);
+      expect(items[0].ask).toBe(ask);
+    },
+  );
 
   it.each<[string, Partial<DeliveryOverview>]>([
     [

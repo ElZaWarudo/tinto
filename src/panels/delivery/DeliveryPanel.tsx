@@ -2817,6 +2817,8 @@ function TaskDetail({
   // Tinto says whose turn it is; with no ask and not the user's, the task goes on alone.
   const waitsOn = phaseOf(overview, task.id)?.waits_on;
   const yours = waitsOn === "user";
+  // The PR is what the user has to move (ask for its review…).
+  const prYours = yours && phaseOf(overview, task.id)?.kind === "pr";
   // The queue's answer for this task, so the two never disagree: in it, the
   // task does not "need nothing"; held there for something with no card of
   // its own here (failing checks…), the "Ahora" line opens with it.
@@ -2827,50 +2829,76 @@ function TaskDetail({
   // on another one or on something outside does not.
   const goesOn = waitsOn === "agent" || waitsOn === "queue" || waitsOn === "coordinator";
   // The history is folded; a stage picked on the track opens it on the
-  // stage's most recent row, and the round that holds it.
+  // stage's most recent row, and the round that holds it. `exact`: that very
+  // job opened, in the row and round that hold it (an earlier attempt too).
   const historyFold = useRef<HTMLDetailsElement>(null);
-  const focusStage = (job: DeliveryJob) => {
-    const latest = history
+  const focusStage = (job: DeliveryJob, exact = false) => {
+    const row = history
       .flatMap((entry) => entry.rows)
-      .find((row) => row.latest && row.job.role === job.role);
-    setExpandedJobId(latest?.job.id ?? job.id);
+      .find((candidate) =>
+        exact
+          ? candidate.attempts.some((attempt) => attempt.id === job.id)
+          : candidate.latest && candidate.job.role === job.role,
+      );
+    setExpandedJobId(exact ? job.id : (row?.job.id ?? job.id));
     if (historyFold.current) historyFold.current.open = true;
-    const row = document.getElementById(`delivery-stage-${task.id}-${job.role}`);
-    for (let fold = row?.closest("details"); fold; fold = fold.parentElement?.closest("details")) {
+    const shown = row && document.querySelector(`[data-job="${row.job.id}"]`);
+    for (
+      let fold = shown?.closest("details");
+      fold;
+      fold = fold.parentElement?.closest("details")
+    ) {
       fold.open = true;
     }
-    row?.scrollIntoView?.({ block: "nearest" });
+    shown?.scrollIntoView?.({ block: "nearest" });
   };
+  // The job a queue jump focuses once its row is drawn open.
+  const focusJob = useRef<string | null>(null);
+  useEffect(() => {
+    const toggle =
+      focusJob.current &&
+      document.querySelector<HTMLElement>(
+        `[data-job="${focusJob.current}"] > button[aria-expanded]`,
+      );
+    if (!toggle) return;
+    focusJob.current = null;
+    toggle.focus();
+  });
   const { asked, settleAsked } = useDelivery();
   const askedHere = asked?.kind === "task" && asked.taskId === task.id ? asked : null;
   useEffect(() => {
     if (!askedHere) return;
     settleAsked();
-    // A job's row (a paused stage): opened as a stage picked on the track
-    // opens it, its toggle focused so what it offers ("Reanudar") comes next.
+    // A job (a paused stage): that attempt opened, even with a newer one of
+    // its stage, its toggle focused so what it offers ("Reanudar") comes next.
     const jobAsked = askedHere.ask?.startsWith("job:")
       ? jobs.find((job) => job.id === askedHere.ask!.slice("job:".length))
       : undefined;
     if (jobAsked) {
-      // A one-shot jump the queue asked for (settled above), as a click on the track.
+      // A one-shot jump the queue asked for (settled above).
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      focusStage(jobAsked);
-      document
-        .getElementById(`delivery-stage-${task.id}-${jobAsked.role}`)
-        ?.querySelector<HTMLElement>("button[aria-expanded]")
-        ?.focus();
+      focusStage(jobAsked, true);
+      focusJob.current = jobAsked.id;
       return;
     }
-    // The ask chosen in the queue, while the task still asks it.
-    const target = asks.some((ask) => ask.id === askedHere.ask) ? askedHere.ask! : askTarget;
+    // The ask chosen in the queue, while the task still asks it (the PR: while
+    // it waits on the user).
+    const target =
+      asks.some((ask) => ask.id === askedHere.ask) || (askedHere.ask === "pr" && prYours)
+        ? askedHere.ask!
+        : askTarget;
     const opener = document.getElementById(`${askId(target)}-open`);
     const card = document.getElementById(askId(target)) ?? opener;
-    // A card inside a folded section opens it.
-    for (let fold = card?.closest("details"); fold; fold = fold.parentElement?.closest("details")) {
-      fold.open = true;
+    // A card, or its opener, inside a folded section opens it.
+    for (const at of [card, opener]) {
+      for (let fold = at?.closest("details"); fold; fold = fold.parentElement?.closest("details")) {
+        fold.open = true;
+      }
     }
     card?.scrollIntoView?.({ block: "nearest" });
     card?.focus();
+    // A fold's toggle (the PR's reviewers) is the control to go to, now open.
+    if (opener?.tagName === "SUMMARY") opener.focus();
     // Pressed as the user would; a card that opens on top takes the focus itself.
     if (opener?.getAttribute("aria-expanded") === "false") opener.click();
     // Once per choice; askId only depends on the task.
@@ -3542,13 +3570,14 @@ function TaskDetail({
       {qaRecord && <QaRecordNotice job={qaRecord} />}
 
       {/* Folded sections, one line each; the PR's opens by itself while it
-          waits on the user: replies to its reviewers, or what it needs. */}
+          waits on the user: replies to its reviewers, what it needs, or the
+          task waiting on the user for it. */}
       {pr && (
         <PrSection
           id={askId("pr")}
           pr={pr}
           yours={yours}
-          open={replies.length > 0 || (yours && prMood(pr) === "attention")}
+          open={replies.length > 0 || prYours || (yours && prMood(pr) === "attention")}
         />
       )}
 
@@ -5576,7 +5605,7 @@ function JobRow({
     (job.ran_on ? ` · en ${job.ran_on}` : "");
   const tone = historyTone(outcome.tone);
   return (
-    <li id={id} className="delivery-job">
+    <li id={id} data-job={job.id} className="delivery-job">
       <button
         type="button"
         className="delivery-job__summary"

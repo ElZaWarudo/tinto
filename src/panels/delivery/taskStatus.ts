@@ -982,8 +982,8 @@ export interface TaskTrack {
 }
 
 /** A group's stations as its line reads them, given when each was reached
- *  (`at`, null if never): a problem a later passed station got past, or any on
- *  a delivered task, is passed; a station never reached, not the one due next,
+ *  (`at`, null if never): a problem a later passed station got past (unless it
+ *  is the one due next), or any on a delivered task, is passed; a station never reached, not the one due next,
  *  that the task is past (or delivered) is skipped; and whether the rail into
  *  each one is done: passed at both ends, skipped ones in between. */
 function settleLine<
@@ -1022,7 +1022,10 @@ function settleLine<
       return { ...stop, station: "skipped" };
     }
     if (delivered) return past(stop);
+    // The stop due next is still owed, whatever passed after it: a stage
+    // Tinto counts as answered says so in its own outcome (findings answered).
     const gotPast =
+      !isNext(stop) &&
       reached !== null &&
       later.some((next) => next.station === "passed" && (at(next) ?? -Infinity) > reached);
     return (stop.station === "attention" || stop.station === "broke") && gotPast

@@ -53,8 +53,9 @@ const DECISION: Record<string, string> = {
 };
 
 /** Who reviews the open PR. The user ticks people and asks them for a
- *  review (again, when they already gave one) or takes their request back. */
-function PrReviewers({ pr }: { pr: DeliveryPr }) {
+ *  review (again, when they already gave one) or takes their request back.
+ *  `toggleId`: its fold's toggle, where a jump to the PR lands. */
+function PrReviewers({ pr, toggleId }: { pr: DeliveryPr; toggleId?: string }) {
   const requested = pr.requested_reviewers ?? [];
   const approved = pr.approved_by ?? [];
   const [open, setOpen] = useState(false);
@@ -94,7 +95,7 @@ function PrReviewers({ pr }: { pr: DeliveryPr }) {
       className="delivery-pr__reviewers"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary>
+      <summary id={toggleId}>
         Revisores:{" "}
         {(pr.review_states ?? []).length > 0
           ? (pr.review_states ?? [])
@@ -264,7 +265,7 @@ export function PrSection({
               )}
             </ul>
           )}
-          {pr.state === "open" && <PrReviewers pr={pr} />}
+          {pr.state === "open" && <PrReviewers pr={pr} toggleId={id && `${id}-open`} />}
           {fresh && (
             <div className="delivery-pr__news" role="status">
               <span>

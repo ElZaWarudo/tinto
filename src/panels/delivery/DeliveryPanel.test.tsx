@@ -2147,25 +2147,83 @@ describe("DeliveryPanel", () => {
     );
   });
 
-  it("goes from the queue to a paused stage's row, where it is resumed", async () => {
+  it.each([
+    { newer: false, name: "alone" },
+    { newer: true, name: "with a newer attempt queued" },
+  ])(
+    "goes from the queue to a paused stage's attempt, where it is resumed: $name",
+    async ({ newer }) => {
+      const user = userEvent.setup();
+      const paused = job({
+        id: "j2",
+        role: "implementation",
+        status: "paused",
+        created_at_ms: 2,
+        ended_at_ms: null,
+        result: null,
+      });
+      const queued = job({
+        id: "j3",
+        role: "implementation",
+        attempt: 2,
+        status: "queued",
+        created_at_ms: 3,
+        started_at_ms: null,
+        ended_at_ms: null,
+        result: null,
+      });
+      client.getDeliveryOverview.mockResolvedValue(
+        overview({
+          jobs: newer ? [job(), paused, queued] : [job(), paused],
+          phases: {
+            t1: {
+              ...phase({ kind: "paused", job_id: "j2", role: "implementation" }),
+              next_step: { rung: "commit", stage: null },
+            },
+          },
+        }),
+      );
+      renderPanel();
+      const queue = await screen.findByRole("region", { name: "Te necesita" });
+      await user.click(
+        within(queue).getByRole("button", { name: "Ver AGOS-501: Implementación en pausa" }),
+      );
+      expect(await screen.findByRole("button", { name: "Reanudar" })).toBeVisible();
+      await waitFor(() =>
+        expect(document.activeElement?.closest("li")?.getAttribute("data-job")).toBe("j2"),
+      );
+      expect(screen.getByRole("group", { name: "Ahora" })).not.toHaveTextContent("Nada que hacer");
+    },
+  );
+
+  it("goes from the queue to the PR nobody was asked to review, its reviewers open", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(
       overview({
-        jobs: [
-          job(),
-          job({
-            id: "j2",
-            role: "implementation",
-            status: "paused",
-            created_at_ms: 2,
-            ended_at_ms: null,
-            result: null,
-          }),
+        prs: [
+          {
+            task_id: "t1",
+            url: "https://github.com/o/r/pull/5",
+            repo: "o/r",
+            number: 5,
+            state: "open",
+            draft: false,
+            conflicts: false,
+            review_decision: null,
+            checks: { passing: 2, failing: 0, pending: 0 },
+            new_reviews: 0,
+            new_comments: 0,
+            new_authors: [],
+            latest_activity: null,
+            seen_until: null,
+            checked_at_ms: 1,
+            error: null,
+          },
         ],
         phases: {
           t1: {
-            ...phase({ kind: "paused", job_id: "j2", role: "implementation" }),
-            next_step: { rung: "commit", stage: null },
+            ...phase({ kind: "pr", number: 5, wait: { kind: "nobody" } }),
+            next_step: { rung: "merge", stage: null },
           },
         },
       }),
@@ -2173,11 +2231,12 @@ describe("DeliveryPanel", () => {
     renderPanel();
     const queue = await screen.findByRole("region", { name: "Te necesita" });
     await user.click(
-      within(queue).getByRole("button", { name: "Ver AGOS-501: Implementación en pausa" }),
+      within(queue).getByRole("button", {
+        name: "Ver AGOS-501: PR: nadie tiene pedida la revisión",
+      }),
     );
-    expect(screen.getByRole("button", { name: "Reanudar" })).toBeVisible();
-    expect(document.activeElement?.closest("li")?.id).toBe("delivery-stage-t1-implementation");
-    expect(screen.getByRole("group", { name: "Ahora" })).not.toHaveTextContent("Nada que hacer");
+    expect(screen.getByRole("button", { name: "Pedir revisión" })).toBeVisible();
+    expect(document.activeElement).toHaveTextContent("Revisores:");
   });
 
   it("gives a task that asks for several things one primary action, the first", async () => {
