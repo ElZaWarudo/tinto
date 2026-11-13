@@ -1089,6 +1089,20 @@ describe("taskTrack", () => {
         ],
       },
     ],
+    // Unless Tinto still has it due next: a later stage passing settles nothing.
+    [
+      "broke",
+      "tests",
+      {
+        jobs: [
+          job({ status: "failed", created_at_ms: 1 }),
+          job({ role: "implementation", created_at_ms: 2 }),
+        ],
+        phases: {
+          t1: { kind: "next_stage", role: "tests", waits_on: "agent", next_stage: "tests" },
+        },
+      },
+    ],
     // Delivered: whatever happened on the way, every station is passed.
     [
       "passed",

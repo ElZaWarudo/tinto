@@ -17,6 +17,7 @@ import {
   isOpen,
   jobsOf,
   lower,
+  openBlockers,
   phaseOf,
   stageLabel,
   taskAsksOf,
@@ -53,7 +54,8 @@ const BATCH_PHASES = new Set(["batch_paused", "settings_proposal"]);
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** What broke on the task, once: its broken stage (retried from the queue
- *  when its detail would offer it), else a failed setup, failing checks. */
+ *  when its detail would offer it, never while a blocker holds the task: the
+ *  retry would be refused), else a failed setup, failing checks. */
 function broke(
   overview: DeliveryOverview,
   task: DeliveryTask,
@@ -64,7 +66,7 @@ function broke(
     return {
       need: `${verb} ${lower(stageLabel(job.role))} · intento ${job.attempt}`,
       ask: "broken",
-      inPlace: { kind: "retry", jobId: job.id },
+      inPlace: openBlockers(task).length > 0 ? null : { kind: "retry", jobId: job.id },
     };
   }
   const phase = phaseOf(overview, task.id);
@@ -162,8 +164,8 @@ export function deliveryQueue(
         key: `${task.id}:status`,
         kind: "holds",
         need: status.label,
-        // A paused stage is resumed on its job's row.
-        ask: phase?.kind === "paused" ? `job:${phase.job_id}` : null,
+        // A paused stage is resumed on its job's row; a PR is moved in its section.
+        ask: phase?.kind === "paused" ? `job:${phase.job_id}` : phase?.kind === "pr" ? "pr" : null,
         inPlace: null,
       });
     }
