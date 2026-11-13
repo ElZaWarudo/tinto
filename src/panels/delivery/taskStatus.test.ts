@@ -1009,6 +1009,25 @@ describe("taskTrack", () => {
     opened_at_ms: 100,
     at: "implementation",
   };
+  const followedPr = (over: Partial<DeliveryPr>): DeliveryPr => ({
+    task_id: "t1",
+    url: "https://github.com/o/r/pull/5",
+    repo: "o/r",
+    number: 5,
+    state: "open",
+    draft: false,
+    conflicts: false,
+    review_decision: null,
+    checks: { passing: 2, failing: 0, pending: 0 },
+    new_reviews: 0,
+    new_comments: 0,
+    new_authors: [],
+    latest_activity: null,
+    seen_until: null,
+    checked_at_ms: 1,
+    error: null,
+    ...over,
+  });
   /** Each stage's and step's station, by role or step key. */
   const stations = (over: Partial<DeliveryOverview>): Record<string, Station> => {
     const track = taskTrack(overview(over), task);
@@ -1040,6 +1059,14 @@ describe("taskTrack", () => {
     ],
     ["yours", "commit", { approvals: [approval({ status: "pending" })] }],
     ["broke", "tests", { jobs: [job({ status: "failed" })] }],
+    [
+      "attention",
+      "review",
+      { jobs: [job({ role: "review", result: { ...job().result!, status: "findings" } })] },
+    ],
+    ["attention", "commit", { approvals: [approval({ status: "executed", conflicts: ["a.ts"] })] }],
+    ["attention", "pr", { prs: [followedPr({ conflicts: true })] }],
+    ["passed", "pr", { prs: [followedPr({ new_comments: 2 })] }],
   ])("draws a %s station for %s", (station, at, over) => {
     expect(stations(over)[at]).toBe(station);
   });
