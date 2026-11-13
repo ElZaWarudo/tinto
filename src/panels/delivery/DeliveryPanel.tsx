@@ -2744,8 +2744,12 @@ function TaskDetail({
   // The one thing to do first: the only primary button among the task's cards.
   const askTarget = asks[0]?.id ?? "now";
   // Tinto says whose turn it is; with no ask and not the user's, the task goes on alone.
-  const yours = phaseOf(overview, task.id)?.waits_on === "user";
+  const waitsOn = phaseOf(overview, task.id)?.waits_on;
+  const yours = waitsOn === "user";
   const nothingYours = asks.length === 0 && !yours;
+  // It goes on alone only while someone is working on it: a task that waits
+  // on another one or on something outside does not.
+  const goesOn = waitsOn === "agent" || waitsOn === "queue" || waitsOn === "coordinator";
   const { asked, settleAsked } = useDelivery();
   const askedHere = asked?.kind === "task" && asked.taskId === task.id ? asked : null;
   useEffect(() => {
@@ -3326,7 +3330,9 @@ function TaskDetail({
         <p>
           <span className="delivery-task__now-label">Ahora</span>
           <span>
-            {nothingYours && !delivered && "Nada que hacer: sigue solo · "}
+            {nothingYours &&
+              !delivered &&
+              (goesOn ? "Nada que hacer: sigue solo · " : "Nada que hacer por tu parte · ")}
             {round && "↺ "}
             {nowLine(task, overview, now)}
           </span>
