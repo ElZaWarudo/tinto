@@ -2685,6 +2685,11 @@ También se desharán los cambios hechos después en este repo, incluidos los de
         )}
         {recoveryAttempt?.sessionId === sessionId && (
           <div className="agent-panel__recovery-status" role="status">
+            <span className="agent-panel__process-signal" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
             Reconectando con la sesión · intento {recoveryAttempt.current} de{" "}
             {recoveryAttempt.total}
           </div>
@@ -4268,7 +4273,7 @@ function AgentContextRemaining({
         {remainingPercent}% · {remainingLabel}
       </strong>
       <i aria-hidden="true">
-        <span style={{ width: `${remainingPercent}%` }} />
+        <span style={{ transform: `scaleX(${remainingPercent / 100})` }} />
       </i>
     </div>
   );
@@ -4346,7 +4351,7 @@ function AgentGoalBar({
       <div className="agent-panel__goal-usage" aria-label={goalUsageLabel(goal)}>
         {progress !== null && (
           <span className="agent-panel__goal-progress" aria-hidden="true">
-            <i style={{ width: `${progress}%` }} />
+            <i style={{ transform: `scaleX(${progress / 100})` }} />
           </span>
         )}
         <span>{goalUsageLabel(goal)}</span>

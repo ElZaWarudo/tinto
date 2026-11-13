@@ -18,6 +18,7 @@ import {
   listAgentSessions,
   startAgentSession,
 } from "../../bus/client";
+import { sessionSignal, SIGNAL_LABEL } from "../../agent/sessionSignal";
 import { agentSessionStore, useAgentSessionState } from "../../agent/sessionStore";
 import { busStore, useBusState } from "../../bus/store";
 import type {
@@ -1024,10 +1025,11 @@ function AgentNavigator({
                     </span>
                     <span className="console-dock-panel__navigator-main">
                       <span>{title}</span>
-                      {active && (
+                      {session && active && (
                         <i
                           className="console-dock-panel__navigator-active-indicator"
                           aria-hidden="true"
+                          data-signal={sessionSignal(session) ?? undefined}
                         />
                       )}
                       <small>
@@ -1201,6 +1203,7 @@ function conversationTitle(text: string | null | undefined): string {
 
 function sessionStatusLabel(session: AgentSession | undefined): string {
   if (!session) return "abriendo";
+  if (sessionSignal(session) === "needs_you") return SIGNAL_LABEL.needs_you.toLowerCase();
   if (session.status === "running" && session.turn_status === "working") return "trabajando";
   if (session.status === "running") return "listo";
   return localizedSessionStatus(session.status);

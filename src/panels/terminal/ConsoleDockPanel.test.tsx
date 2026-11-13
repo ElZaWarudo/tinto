@@ -960,6 +960,51 @@ describe("ConsoleDockPanel detach drop", () => {
     unmount();
   });
 
+  it("marks a navigator session that waits on the user apart from one that works", async () => {
+    sessionStoreMocks.state = {
+      sessions: {
+        "sess-live": {
+          id: "sess-live",
+          repo: "/r/api",
+          agent_type: "codex",
+          status: "running",
+          pid: 1,
+          started_at_ms: 1,
+          exit_code: null,
+          error: null,
+          turn_status: "working",
+          active_sessions: 1,
+          age_ms: 4,
+          acp_permissions: [
+            {
+              id: "perm-1",
+              generation: 1,
+              provider_session_id: "p-1",
+              turn_id: "t-1",
+              tool_call_id: "c-1",
+              title: "Run tests",
+              options: [],
+              state: "pending",
+              expires_at_ms: 10,
+            },
+          ],
+        },
+      },
+      output: {},
+      outputTotal: {},
+      timeline: {},
+    };
+    consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
+
+    const { container, unmount } = render(<ConsoleDockPanel />);
+
+    expect(await screen.findByText(/codex · api · te necesita/i)).toBeInTheDocument();
+    expect(
+      container.querySelector(".console-dock-panel__navigator-active-indicator"),
+    ).toHaveAttribute("data-signal", "needs_you");
+    unmount();
+  });
+
   it("collapses the conversations navigator horizontally and remembers the choice", async () => {
     consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
     const { unmount } = render(<ConsoleDockPanel />);

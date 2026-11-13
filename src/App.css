@@ -1410,14 +1410,6 @@ select option:checked {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .agent-panel__message-edit,
-  .agent-panel__message-copy,
-  .agent-panel__inline-editor-actions button {
-    transition: none;
-  }
-}
-
 /* Conversation surface: lightweight bubbles and an ordered, readable work trace. */
 .agent-panel__chat {
   padding: 0 clamp(14px, 3vw, 44px);
@@ -1745,6 +1737,8 @@ select option:checked {
   );
   opacity: 0;
   transform: translateX(-120%);
+  animation: agent-activity-halo 1.8s linear infinite paused;
+  transition: opacity 240ms var(--ease-out);
 }
 
 .agent-panel__thought > summary > * {
@@ -1754,7 +1748,7 @@ select option:checked {
 
 .agent-panel__thought[data-active="true"] > summary::before {
   opacity: 1;
-  animation: agent-activity-halo 1.8s linear infinite;
+  animation-play-state: running;
 }
 
 .agent-panel__thought > summary::-webkit-details-marker {
@@ -1774,12 +1768,10 @@ select option:checked {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
-  animation: agent-activity-summary-update 160ms ease-out;
 }
 
-.agent-panel__thought[data-active="true"] .agent-panel__thought-label,
-.agent-panel__thought[data-active="true"] .agent-panel__thought-summary {
-  font-weight: 400;
+.agent-panel__thought[data-active="true"] > summary small {
+  animation: agent-activity-summary-update 160ms ease-out;
 }
 
 .agent-panel__thought-chevron {
@@ -1787,10 +1779,10 @@ select option:checked {
   font-size: 18px;
   line-height: 1;
   text-align: center;
-  transition: transform 140ms ease;
+  transition: transform 150ms var(--ease-out);
 }
 
-.agent-panel__thought[open] .agent-panel__thought-chevron {
+.agent-panel__thought[open] > summary .agent-panel__thought-chevron {
   transform: rotate(90deg);
 }
 
@@ -1926,6 +1918,14 @@ select option:checked {
   width: min(280px, calc(100% - 44px));
   max-width: none;
   box-shadow: 18px 0 36px rgba(0, 0, 0, 0.42);
+  animation: console-dock-navigator-drawer-in 200ms var(--ease-out);
+}
+
+@keyframes console-dock-navigator-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
 }
 
 @container agent-panel (max-width: 900px) {
@@ -1988,7 +1988,7 @@ select option:checked {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-panel__thought-chevron,
-  .agent-panel__thought > summary small,
+  .agent-panel__thought[data-active="true"] > summary small,
   .agent-panel__thought > summary::before {
     animation: none;
     transition: none;
@@ -4858,6 +4858,31 @@ select option:checked {
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent-mid) 52%, var(--fg));
   box-shadow: 0 0 0 3px rgb(from color-mix(in srgb, var(--accent-mid) 52%, var(--fg)) r g b / 0.14);
+  transition:
+    background-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+/* Waiting on the user: warn colour, and one ring as it switches into that state. */
+.console-dock-panel__navigator-active-indicator[data-signal="needs_you"] {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgb(from var(--warn) r g b / 0.14);
+  animation: console-dock-navigator-needs-you 240ms var(--ease-out);
+}
+
+@keyframes console-dock-navigator-needs-you {
+  from {
+    box-shadow: 0 0 0 0 rgb(from var(--warn) r g b / 0.5);
+  }
+  to {
+    box-shadow: 0 0 0 3px rgb(from var(--warn) r g b / 0.14);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-dock-panel__navigator-active-indicator[data-signal="needs_you"] {
+    animation: none;
+  }
 }
 
 .console-dock-panel__navigator-main em {
@@ -5784,6 +5809,10 @@ select option:checked {
   color: var(--info-text-strong);
   border-color: rgb(from var(--info) r g b / 0.4) !important;
   background: rgb(from var(--info-deep) r g b / 0.18) !important;
+  transition:
+    color 200ms ease,
+    background-color 200ms ease,
+    border-color 200ms ease;
 }
 .agent-panel__status--failed,
 .agent-panel__status--error {
@@ -5901,6 +5930,10 @@ select option:checked {
   background: rgb(from color-mix(in srgb, var(--info-deep) 80%, var(--bg-deep)) r g b / 0.1);
   color: var(--fg);
   font-size: 12px;
+  transition:
+    color 200ms ease,
+    background-color 200ms ease,
+    border-color 200ms ease;
 }
 .agent-panel__acp[data-state="authentication_required"],
 .agent-panel__acp[data-state="pty_compatibility"] {
@@ -6000,6 +6033,24 @@ select option:checked {
 }
 .agent-panel__acp-permission .agent-panel__acp-permission-reject {
   color: var(--danger);
+}
+.agent-panel__acp-permission[data-state="pending"] {
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
+}
+@starting-style {
+  .agent-panel__acp-permission[data-state="pending"] {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  @starting-style {
+    .agent-panel__acp-permission[data-state="pending"] {
+      transform: none;
+    }
+  }
 }
 .agent-panel__workspace {
   min-height: 0;
@@ -6662,9 +6713,14 @@ select option:checked {
 }
 .agent-panel__command-block summary::before {
   content: ">";
+  display: inline-block;
   color: var(--accent-bright);
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-weight: 800;
+  transition: transform 150ms var(--ease-out);
+}
+.agent-panel__command-block[open] > summary::before {
+  transform: rotate(90deg);
 }
 .agent-panel__command-block summary span {
   min-width: 0;
@@ -8270,6 +8326,27 @@ select option:checked {
   }
 }
 
+@keyframes agent-process-signal-fade {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Reduced motion keeps the bars pulsing, opacity only, so a live process still reads as live. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-panel__process-signal i {
+    /* Longhands, so the nth-child delays keep staggering the bars. */
+    animation-name: agent-process-signal-fade;
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
+    transform: none;
+  }
+}
+
 .agent-panel__message-role {
   letter-spacing: 0;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
@@ -8654,6 +8731,10 @@ select option:checked {
   color: var(--fg-muted);
   font-size: 9px;
   font-weight: 800;
+  transition:
+    color 200ms ease,
+    background-color 200ms ease,
+    border-color 200ms ease;
 }
 
 .agent-panel__subagent-status--running,
@@ -8968,8 +9049,13 @@ select option:checked {
 
 .agent-panel__goal-progress i {
   display: block;
+  width: 100%;
   height: 100%;
   background: var(--accent-mid);
+  transform-origin: left;
+  transition:
+    transform 200ms var(--ease-out),
+    background-color 200ms ease;
 }
 
 .agent-panel__goal-actions {
@@ -9168,6 +9254,10 @@ select option:checked {
 }
 
 .agent-panel__recovery-status {
+  --agent-process-color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 5px 10px;
   border-left: 2px solid var(--accent);
   color: var(--fg-muted);
@@ -11020,6 +11110,10 @@ select option:checked {
   line-height: 1.5;
   vertical-align: middle;
   white-space: nowrap;
+  transition:
+    color 200ms ease,
+    background-color 200ms ease,
+    border-color 200ms ease;
 }
 .agent-signal--needs_you {
   color: var(--warn-bright);
@@ -13647,8 +13741,13 @@ a:focus-visible {
 
 .agent-panel__context-remaining > i span {
   display: block;
+  width: 100%;
   height: 100%;
   background: var(--accent-mid);
+  transform-origin: left;
+  transition:
+    transform 200ms var(--ease-out),
+    background-color 200ms ease;
 }
 
 .agent-panel__context-remaining[data-pressure="low"] > i span {
