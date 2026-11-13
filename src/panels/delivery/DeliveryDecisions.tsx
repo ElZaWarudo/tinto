@@ -53,7 +53,8 @@ const BASIS: Record<DeliveryRecommendationBasis, { label: string; title: string;
   assumption: {
     label: "Suposición",
     title: "Es lo que el coordinador cree que quieres tú o tus usuarios: nada lo comprueba.",
-    tone: "delivery-badge--attention",
+    // A caution about the recommendation, not the user's turn: neutral.
+    tone: "delivery-badge--muted",
   },
 };
 

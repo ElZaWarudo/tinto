@@ -283,16 +283,18 @@ export function ScopeSection({
   // Before any other stage, it can still run or be skipped.
   const started = jobs.some((other) => other.agent !== "shell");
   const offer = !running && !plan && !task.scope_skip && !started;
-  return (
-    <section className="delivery-section delivery-scope" aria-label="Alcance">
-      <h3>
-        Alcance{" "}
-        {plan && (
-          <small className="delivery-muted">
-            v{plan.version} · {authorLine(plan)} · {when(plan.at_ms)}
-          </small>
-        )}
-      </h3>
+  const heading = (
+    <h3>
+      Alcance{" "}
+      {plan && (
+        <small className="delivery-muted">
+          v{plan.version} · {authorLine(plan)} · {when(plan.at_ms)}
+        </small>
+      )}
+    </h3>
+  );
+  const body = (
+    <>
       {task.scope_skip && !running && (
         <p className="delivery-scope__skipped">
           Omitido: {task.scope_skip.reason}{" "}
@@ -346,6 +348,27 @@ export function ScopeSection({
         </div>
       )}
       {offer && skipping && <SkipScope task={task} onDone={() => setSkipping(false)} />}
+    </>
+  );
+  // A written plan is long and already decided: folded under its heading and
+  // the first sentence of what it changes. Nothing marks the plan as waiting
+  // on the user (its questions are the task's decisions), so it opens closed.
+  return (
+    <section className="delivery-section delivery-scope" aria-label="Alcance">
+      {plan ? (
+        <details className="delivery-fold">
+          <summary>
+            {heading}
+            <span className="delivery-fold__gist">{plan.what.split(/(?<=[.!?])\s/)[0]}</span>
+          </summary>
+          {body}
+        </details>
+      ) : (
+        <>
+          {heading}
+          {body}
+        </>
+      )}
     </section>
   );
 }

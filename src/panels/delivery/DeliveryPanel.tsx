@@ -132,7 +132,7 @@ import {
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
 import { JiraIssue } from "./DeliveryIssue";
 import { QaProblems } from "./DeliveryQaProblems";
-import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
+import { AddBlocker, BlockedBar, BlockerActions, BlockerList } from "./DeliveryBlockers";
 import { CoordinatorDock } from "./DeliveryCoordinator";
 import { Overlay } from "./DeliveryOverlay";
 import { useOneOverlay } from "./useOneOverlay";
@@ -285,8 +285,11 @@ function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }
     status.group !== "attention" && status.group !== "running" && who
       ? waitsOnPhrase(who, status.label)
       : null;
+  // Amber says the task waits on the user; a PR in trouble the coordinator handles does not.
+  const tone =
+    status.tone === "attention" && status.group !== "attention" ? "waiting" : status.tone;
   return (
-    <span className={`delivery-status-line delivery-tone--${status.tone}`}>
+    <span className={`delivery-status-line delivery-tone--${tone}`}>
       <StatusMark icon={status.icon} />
       {status.label}
       {shown && <small className="delivery-status-line__who">{shown}</small>}
@@ -1952,7 +1955,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       <button
         key={task.id}
         type="button"
-        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}${qaHere === "active" ? " delivery-task-row--qa" : qaHere === "quarantined" ? " delivery-task-row--qa-quarantined" : ""}${arrived.has(task.id) ? " delivery-task-row--arrived" : ""}`}
+        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${qaHere === "active" ? " delivery-task-row--qa" : ""}${arrived.has(task.id) ? " delivery-task-row--arrived" : ""}`}
         data-task-id={task.id}
         onAnimationEnd={(event) => {
           if (event.animationName !== "delivery-arrive") return;
@@ -2760,6 +2763,9 @@ function TaskDetail({
   });
   // The one thing to do first: the only primary button among the task's cards.
   const askTarget = asks[0]?.id ?? "now";
+  // Tinto says whose turn it is; with no ask and not the user's, the task goes on alone.
+  const yours = phaseOf(overview, task.id)?.waits_on === "user";
+  const nothingYours = asks.length === 0 && !yours;
   const { asked, settleAsked } = useDelivery();
   const askedHere = asked?.kind === "task" && asked.taskId === task.id ? asked : null;
   useEffect(() => {
@@ -2791,8 +2797,11 @@ function TaskDetail({
     );
   };
 
+  // The history is folded; a stage picked on the track opens it.
+  const historyFold = useRef<HTMLDetailsElement>(null);
   const focusStage = (job: DeliveryJob) => {
     setExpandedJobId(job.id);
+    if (historyFold.current) historyFold.current.open = true;
     document
       .getElementById(`delivery-stage-${task.id}-${job.role}`)
       ?.scrollIntoView?.({ block: "nearest" });
@@ -2861,6 +2870,12 @@ function TaskDetail({
   const paused = pausedJob(jobs);
   const pendingStep = openApprovals.find((approval) => approval.status === "pending");
   const open = openBlockers(task);
+  const blockerProps = {
+    task,
+    tasks: overview.tasks,
+    onSelectTask,
+    onAdd: (at: Element) => setFloat("blocker", at),
+  };
   const copy = (text: string) => void navigator.clipboard?.writeText(text).catch(() => {});
   const menuEntries: (ContextItem | null | false | undefined)[] = [
     pendingStep && {
@@ -3022,7 +3037,8 @@ function TaskDetail({
               )}
               {pr && (
                 <ExternalLink
-                  className={`delivery-link-chip delivery-link-chip--pr delivery-link-chip--pr-${prMood(pr)}`}
+                  // Amber only while the PR waits on the user.
+                  className={`delivery-link-chip delivery-link-chip--pr delivery-link-chip--pr-${prMood(pr) === "attention" && !yours ? "neutral" : prMood(pr)}`}
                   href={pr.url}
                   label={`Abrir el PR #${pr.number} en GitHub`}
                 >
@@ -3087,42 +3103,6 @@ function TaskDetail({
               </ActionButton>
             )}
           </p>
-          {/* What happens now, and in which round: one line. */}
-          <div
-            className="delivery-task__now"
-            role="group"
-            aria-label="Ahora"
-            id={askId("now")}
-            tabIndex={-1}
-          >
-            <p>
-              <span className="delivery-task__now-label">Ahora</span>
-              <span>
-                {round && "↺ "}
-                {nowLine(task, overview, now)}
-              </span>
-            </p>
-            {round && round.items.length > 0 && (
-              <details className="delivery-task__fold">
-                <summary>Qué atiende la ronda {round.number}</summary>
-                <ol>
-                  {round.items.map((item, at) => (
-                    <li key={at}>{item}</li>
-                  ))}
-                </ol>
-              </details>
-            )}
-            {pastRounds.length > 0 && (
-              <details className="delivery-task__fold">
-                <summary>Rondas anteriores</summary>
-                <ul>
-                  {pastRounds.map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ul>
-              </details>
-            )}
-          </div>
         </div>
         <Menu label="Más acciones de la tarea" trigger={<Icon name="more" />}>
           {(close) => (
@@ -3243,12 +3223,6 @@ function TaskDetail({
           <PendingDecisions taskId={task.id} decisions={pendingDecisions} />
         </TaskFloat>
       )}
-      <BlockedBar
-        task={task}
-        tasks={overview.tasks}
-        onSelectTask={onSelectTask}
-        onAdd={(at) => setFloat("blocker", at)}
-      />
       {float === "blocker" && (
         <TaskFloat
           anchor={floatAt}
@@ -3347,10 +3321,59 @@ function TaskDetail({
           undoable={latestUndoable?.id === broken.id}
           onContinue={() => onContinueJob(broken)}
           onUndo={() => undo(broken)}
+          blockers={open.length > 0 && <BlockerList {...blockerProps} />}
+          blockerActions={
+            open.length > 0 && (
+              <BlockerActions
+                task={task}
+                onAdd={blockerProps.onAdd}
+                className="delivery-button--quiet"
+              />
+            )
+          }
         />
       )}
 
-      {qaRecord && <QaRecordNotice job={qaRecord} />}
+      {/* What happens now, and in which round: one line. With nothing for the
+          user, it opens by saying so. */}
+      <div
+        className="delivery-task__now"
+        role="group"
+        aria-label="Ahora"
+        id={askId("now")}
+        tabIndex={-1}
+      >
+        <p>
+          <span className="delivery-task__now-label">Ahora</span>
+          <span>
+            {nothingYours && !delivered && "Nada que hacer: sigue solo · "}
+            {round && "↺ "}
+            {nowLine(task, overview, now)}
+          </span>
+        </p>
+        {round && round.items.length > 0 && (
+          <details className="delivery-task__fold">
+            <summary>Qué atiende la ronda {round.number}</summary>
+            <ol>
+              {round.items.map((item, at) => (
+                <li key={at}>{item}</li>
+              ))}
+            </ol>
+          </details>
+        )}
+        {pastRounds.length > 0 && (
+          <details className="delivery-task__fold">
+            <summary>Rondas anteriores</summary>
+            <ul>
+              {pastRounds.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+
+      {!broken && <BlockedBar {...blockerProps} />}
 
       <StageTrack
         task={task}
@@ -3364,14 +3387,6 @@ function TaskDetail({
         next={next}
         round={round}
         onFocus={focusStage}
-      />
-
-      <ScopeSection
-        task={task}
-        jobs={jobs}
-        decisions={taskDecisions}
-        blocked={blocked}
-        onLaunch={() => dispatch(SCOPE_ROLE, false)}
       />
 
       <div className="delivery-actions">
@@ -3454,7 +3469,9 @@ function TaskDetail({
         />
       )}
 
-      {pr && <PrSection pr={pr} />}
+      {qaRecord && <QaRecordNotice job={qaRecord} />}
+
+      {pr && <PrSection pr={pr} yours={yours} />}
 
       <DeliveryResults approvals={approvals} onCorrect={setCorrecting} />
       {correcting && (
@@ -3469,6 +3486,14 @@ function TaskDetail({
         />
       )}
 
+      <ScopeSection
+        task={task}
+        jobs={jobs}
+        decisions={taskDecisions}
+        blocked={blocked}
+        onLaunch={() => dispatch(SCOPE_ROLE, false)}
+      />
+
       <CoordinatorDecisions
         decisions={taskDecisions.filter((decision) => decision.blocking === false)}
       />
@@ -3481,44 +3506,49 @@ function TaskDetail({
         )}
       />
 
+      {/* Folded: each stage on its latest attempt, the earlier ones folded under it. */}
       <section className="delivery-section" aria-label="Historial">
-        <h3>Historial</h3>
-        {jobs.length === 0 && (
-          <p className="delivery-panel__empty">Todavía no se ha lanzado ninguna etapa.</p>
-        )}
-        <ul className="delivery-jobs">
-          {historyKeys.map((key, index) => {
-            const ofKey = jobs.filter((job) => historyKey(job) === key);
-            const current = latestOfRole(ofKey, ofKey[0].role)!;
-            const older = newestFirst.filter((job) => historyKey(job) === key && job !== current);
-            return (
-              <StageHistory
-                key={key}
-                // The stage track scrolls to a stage; a check has no node there.
-                id={`delivery-stage-${task.id}-${key === current.role ? key : `check-${index}`}`}
-                current={current}
-                older={older}
-                jobs={jobs}
-                verdicts={verdicts}
-                renderJob={(job) => (
-                  <JobRow
-                    key={job.id}
-                    job={job}
-                    jobs={jobs}
-                    verdicts={verdicts}
-                    wait={overview.queued?.[job.id]}
-                    now={now}
-                    expanded={expandedJobId === job.id}
-                    undoable={latestUndoable?.id === job.id && !hasOpenJob}
-                    onToggle={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
-                    onUndo={() => undo(job)}
-                    onContinue={() => onContinueJob(job)}
-                  />
-                )}
-              />
-            );
-          })}
-        </ul>
+        <details ref={historyFold} className="delivery-fold">
+          <summary>
+            <h3>Historial</h3>
+          </summary>
+          {jobs.length === 0 && (
+            <p className="delivery-panel__empty">Todavía no se ha lanzado ninguna etapa.</p>
+          )}
+          <ul className="delivery-jobs">
+            {historyKeys.map((key, index) => {
+              const ofKey = jobs.filter((job) => historyKey(job) === key);
+              const current = latestOfRole(ofKey, ofKey[0].role)!;
+              const older = newestFirst.filter((job) => historyKey(job) === key && job !== current);
+              return (
+                <StageHistory
+                  key={key}
+                  // The stage track scrolls to a stage; a check has no node there.
+                  id={`delivery-stage-${task.id}-${key === current.role ? key : `check-${index}`}`}
+                  current={current}
+                  older={older}
+                  jobs={jobs}
+                  verdicts={verdicts}
+                  renderJob={(job) => (
+                    <JobRow
+                      key={job.id}
+                      job={job}
+                      jobs={jobs}
+                      verdicts={verdicts}
+                      wait={overview.queued?.[job.id]}
+                      now={now}
+                      expanded={expandedJobId === job.id}
+                      undoable={latestUndoable?.id === job.id && !hasOpenJob}
+                      onToggle={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
+                      onUndo={() => undo(job)}
+                      onContinue={() => onContinueJob(job)}
+                    />
+                  )}
+                />
+              );
+            })}
+          </ul>
+        </details>
       </section>
     </article>
   );
@@ -3529,7 +3559,8 @@ const BROKEN_WHY_CHARS = 240;
 
 /** The task's latest stage failed or was blocked: why, in a few lines, and
  *  what to do about it. When its work got done another way, the user settles
- *  it with a note instead of running it again. */
+ *  it with a note instead of running it again. A blocked task's blockers go
+ *  in the same block, under the stage's own reason: one fact, one surface. */
 function BrokenStage({
   id,
   job,
@@ -3537,6 +3568,8 @@ function BrokenStage({
   undoable,
   onContinue,
   onUndo,
+  blockers,
+  blockerActions,
 }: {
   id: string;
   job: DeliveryJob;
@@ -3545,6 +3578,10 @@ function BrokenStage({
   undoable: boolean;
   onContinue: () => Promise<unknown>;
   onUndo: () => Promise<unknown>;
+  /** The task's open blockers, when it has any. */
+  blockers?: ReactNode;
+  /** Their actions, after the stage's own. */
+  blockerActions?: ReactNode;
 }) {
   const [whole, setWhole] = useState(false);
   const [settling, setSettling] = useState(false);
@@ -3592,6 +3629,7 @@ function BrokenStage({
           {whole ? "Ver menos" : "Ver todo"}
         </button>
       )}
+      {blockers}
       {settling ? (
         <form className="delivery-broken__settle" onSubmit={(event) => event.preventDefault()}>
           <label className="delivery-request__field">
@@ -3640,6 +3678,7 @@ function BrokenStage({
             >
               Ya está resuelta…
             </button>
+            {blockerActions}
           </div>
         </ActionGroup>
       )}
@@ -4278,7 +4317,7 @@ function QaRecordNotice({ job }: { job: DeliveryJob }) {
       : "La QA escribió más de un registro";
   return (
     <div
-      className={missing ? "delivery-banner delivery-banner--danger" : "delivery-banner"}
+      className={`delivery-banner delivery-banner--${missing ? "danger" : "note"}`}
       role="group"
       aria-label="Registro visual de QA"
     >
@@ -4389,6 +4428,7 @@ function ApprovalBar({
       button={pending ? "Revisar" : "Ver"}
       buttonLabel={`${pending ? "Revisar" : "Ver"} ${name}`}
       primary={primary && !direct}
+      waiting={!pending}
       action={
         direct && (
           <ActionGroup>
@@ -4437,6 +4477,7 @@ function StepBar({
   button,
   buttonLabel,
   primary,
+  waiting,
   action,
   open,
   onToggle,
@@ -4449,6 +4490,8 @@ function StepBar({
   button: string;
   buttonLabel: string;
   primary?: boolean;
+  /** Approved, it waits on the coordinator: neutral, not the step's colour. */
+  waiting?: boolean;
   /** What the step can do without opening, beside the button that opens it. */
   action?: ReactNode;
   open: boolean;
@@ -4456,7 +4499,11 @@ function StepBar({
   children: ReactNode;
 }) {
   return (
-    <div id={id} tabIndex={-1} className={`delivery-step${open ? " delivery-step--open" : ""}`}>
+    <div
+      id={id}
+      tabIndex={-1}
+      className={`delivery-step${open ? " delivery-step--open" : ""}${waiting ? " delivery-step--waiting" : ""}`}
+    >
       <div className="delivery-pending-bar delivery-pending-bar--step" role="status">
         <span className="delivery-pending-bar__text">
           <strong>{title}</strong>
@@ -5340,7 +5387,10 @@ function JobRow({
           {job.agent === "shell" ? "" : ` · ${runtimeLabel(job)}`}
           {scope}
         </span>
-        <span className={`delivery-outcome delivery-tone--${outcome.tone}`}>
+        {/* Findings are the coordinator's to answer: neutral, not amber. */}
+        <span
+          className={`delivery-outcome delivery-tone--${outcome.tone === "attention" ? "waiting" : outcome.tone}`}
+        >
           <StatusMark icon={TONE_ICON[outcome.tone]} />
           {outcome.label}
         </span>
@@ -5367,9 +5417,7 @@ function JobRow({
           ) : (
             <>
               <span>{job.activity}</span>
-              <small className={quiet ? "delivery-tone--attention" : "delivery-muted"}>
-                {quiet ?? ago(job.activity_at_ms, now)}
-              </small>
+              <small className="delivery-muted">{quiet ?? ago(job.activity_at_ms, now)}</small>
             </>
           )}
         </p>
@@ -5381,7 +5429,7 @@ function JobRow({
           {wait.warning && (
             <>
               {" "}
-              <small className="delivery-tone--attention">· {wait.warning}</small>
+              <small className="delivery-muted">· {wait.warning}</small>
             </>
           )}
         </p>

@@ -150,8 +150,10 @@ function PrReviewers({ pr }: { pr: DeliveryPr }) {
   );
 }
 
-export function PrSection({ pr }: { pr: DeliveryPr }) {
+/** `yours`: the task waits on the user; only then does what the PR needs read amber. */
+export function PrSection({ pr, yours = false }: { pr: DeliveryPr; yours?: boolean }) {
   const summary = prSummary(pr);
+  const tone = summary.tone === "attention" && !yours ? "waiting" : summary.tone;
   const fresh = news(pr);
   const { passing, failing, pending } = pr.checks;
   const unanswered = pr.state === "open" ? (pr.unanswered_threads ?? []) : [];
@@ -163,13 +165,11 @@ export function PrSection({ pr }: { pr: DeliveryPr }) {
           <ExternalLink href={pr.url}>
             {pr.repo}#{pr.number}
           </ExternalLink>
-          <span className={`delivery-status-line delivery-tone--${summary.tone}`}>
-            {summary.label}
-          </span>
+          <span className={`delivery-status-line delivery-tone--${tone}`}>{summary.label}</span>
           {pr.draft && <span className="delivery-badge delivery-badge--muted">borrador</span>}
           {unanswered.length > 0 && (
             <span
-              className="delivery-badge delivery-badge--attention"
+              className={`delivery-badge delivery-badge--${yours ? "attention" : "muted"}`}
               title="Hilos de revisión sin respuesta: el PR no vuelve a revisión hasta que cada uno tenga una."
             >
               {unanswered.length} sin respuesta
@@ -231,7 +231,9 @@ export function PrSection({ pr }: { pr: DeliveryPr }) {
               )}
             </li>
             {pr.conflicts && (
-              <li className="delivery-tone--attention">Tiene conflictos con su rama base.</li>
+              <li className={yours ? "delivery-tone--attention" : undefined}>
+                Tiene conflictos con su rama base.
+              </li>
             )}
           </ul>
         )}

@@ -1860,6 +1860,59 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(client.retryDeliveryJob).toHaveBeenCalledWith("j2"));
   });
 
+  it("puts a broken stage and the task's blockers in one block", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [
+          task({
+            blockers: [
+              {
+                id: "b1",
+                type: "note",
+                text: "La pila sirve otra versión",
+                status: "",
+                cleared_at_ms: null,
+              },
+            ],
+          }),
+        ],
+        jobs: [
+          job(),
+          job({
+            id: "j2",
+            role: "implementation",
+            attempt: 2,
+            status: "failed",
+            error: "El proceso terminó con código 1 sin un resultado válido.",
+            result: null,
+            result_state: "invalid",
+            changes: [],
+          }),
+        ],
+        phases: { t1: { ...NEXT_IMPLEMENTATION, verdicts: { j2: { broken: true } } } },
+      }),
+    );
+    renderPanel();
+    const block = await screen.findByRole("group", { name: "Etapa fallida" });
+    expect(within(block).getByText("La pila sirve otra versión")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Bloqueos de la tarea" })).toBeNull();
+    // Retrying stays the primary action; the blockers' own come quiet after it.
+    expect(within(block).getByRole("button", { name: "Reintentar" })).toHaveClass(
+      "delivery-button--primary",
+    );
+    expect(within(block).getByRole("button", { name: "Desbloquear" })).toHaveClass(
+      "delivery-button--quiet",
+    );
+  });
+
+  it("opens a task that needs nothing from the user by saying it goes on alone", async () => {
+    client.getDeliveryOverview.mockResolvedValue(overview({ phases: { t1: NEXT_IMPLEMENTATION } }));
+    renderPanel();
+    expect(await screen.findByRole("group", { name: "Ahora" })).toHaveTextContent(
+      "Nada que hacer: sigue solo · Siguiente: implementación",
+    );
+  });
+
   it("gives a task that asks for several things one primary action, the first", async () => {
     const asked = {
       id: "d1",

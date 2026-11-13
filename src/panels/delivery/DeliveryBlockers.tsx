@@ -46,20 +46,45 @@ function BlockerName({
   return <span>{label}</span>;
 }
 
-/** The line on a blocked task: each open blocker, and the user's ways out. */
-export function BlockedBar({
-  task,
-  tasks,
-  onSelectTask,
-  onAdd,
-}: {
+interface BlockersProps {
   task: DeliveryTask;
   tasks: DeliveryTask[];
   onSelectTask: (task: DeliveryTask) => void;
   onAdd: (from: Element) => void;
-}) {
+}
+
+/** Each open blocker under its label, with the way to remove it. */
+export function BlockerList({ task, tasks, onSelectTask }: Omit<BlockersProps, "onAdd">) {
+  return (
+    <div className="delivery-blocked__list">
+      <strong>Bloqueada por</strong>
+      <ul>
+        {openBlockers(task).map((blocker) => (
+          <li key={blocker.id}>
+            <BlockerName blocker={blocker} tasks={tasks} onSelectTask={onSelectTask} />
+            {blocker.status && <span className="delivery-muted"> · {blocker.status}</span>}
+            <ActionButton
+              className="delivery-link-button"
+              aria-label={`Quitar el bloqueo ${blockerLabel(blocker)}`}
+              onAction={() => clearDeliveryBlockers(task.id, [blocker.id])}
+            >
+              Quitar
+            </ActionButton>
+          </li>
+        ))}
+      </ul>
+      {task.blocked_reason && <p className="delivery-muted">{task.blocked_reason}</p>}
+    </div>
+  );
+}
+
+/** The user's ways out of the blockers: add one, or override them all. */
+export function BlockerActions({
+  task,
+  onAdd,
+  className,
+}: Pick<BlockersProps, "task" | "onAdd"> & { className?: string }) {
   const open = openBlockers(task);
-  if (open.length === 0) return null;
   const override = async () => {
     const ok = await confirm(
       `${task.key} deja de esperar ${open.length === 1 ? "su bloqueo" : `sus ${open.length} bloqueos`} y vuelve a donde estaba. Se avisa al coordinador.`,
@@ -69,35 +94,30 @@ export function BlockedBar({
     await clearDeliveryBlockers(task.id);
   };
   return (
+    <>
+      <button type="button" className={className} onClick={(event) => onAdd(event.currentTarget)}>
+        Añadir bloqueo
+      </button>
+      <ActionButton className={className} onAction={override}>
+        Desbloquear
+      </ActionButton>
+    </>
+  );
+}
+
+/** A blocked task's blockers on their own (no stage broke): what it waits
+ *  for is never the user's, so it reads neutral. */
+export function BlockedBar(props: BlockersProps) {
+  if (openBlockers(props.task).length === 0) return null;
+  return (
     <div
       className="delivery-pending-bar delivery-blocked"
       role="group"
       aria-label="Bloqueos de la tarea"
     >
-      <div className="delivery-blocked__list">
-        <strong>Bloqueada por</strong>
-        <ul>
-          {open.map((blocker) => (
-            <li key={blocker.id}>
-              <BlockerName blocker={blocker} tasks={tasks} onSelectTask={onSelectTask} />
-              {blocker.status && <span className="delivery-muted"> · {blocker.status}</span>}
-              <ActionButton
-                className="delivery-link-button"
-                aria-label={`Quitar el bloqueo ${blockerLabel(blocker)}`}
-                onAction={() => clearDeliveryBlockers(task.id, [blocker.id])}
-              >
-                Quitar
-              </ActionButton>
-            </li>
-          ))}
-        </ul>
-        {task.blocked_reason && <p className="delivery-muted">{task.blocked_reason}</p>}
-      </div>
+      <BlockerList {...props} />
       <div className="delivery-actions">
-        <button type="button" onClick={(event) => onAdd(event.currentTarget)}>
-          Añadir bloqueo
-        </button>
-        <ActionButton onAction={override}>Desbloquear</ActionButton>
+        <BlockerActions task={props.task} onAdd={props.onAdd} />
       </div>
     </div>
   );
